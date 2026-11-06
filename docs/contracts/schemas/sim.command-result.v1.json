@@ -54,7 +54,8 @@
                 "INVALID_AMOUNT",
                 "PROVIDER_EVENT_UNMAPPED",
                 "PROVIDER_AMOUNT_MISMATCH",
-                "PROVIDER_EVENT_NOT_SETTLING"
+                "PROVIDER_EVENT_NOT_SETTLING",
+                "IDEMPOTENCY_CONFLICT"
               ]
             },
             "message": {

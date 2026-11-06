@@ -21,6 +21,8 @@ export const CommandErrorCodeSchema = z.enum([
   "PROVIDER_EVENT_UNMAPPED",
   "PROVIDER_AMOUNT_MISMATCH",
   "PROVIDER_EVENT_NOT_SETTLING",
+  /** Same commandId re-sent with a different intent (kind, payload, origin or actor). */
+  "IDEMPOTENCY_CONFLICT",
 ]);
 export type CommandErrorCode = z.infer<typeof CommandErrorCodeSchema>;
 

@@ -10,7 +10,7 @@ import {
   WorldIdSchema,
   WorldVersionSchema,
 } from "./ids.js";
-import { MoneySchema } from "./money.js";
+import { PositiveMoneySchema } from "./money.js";
 import { VerifiedProviderEventSchema } from "./provider.js";
 import type { Origin } from "./world.js";
 
@@ -46,7 +46,7 @@ export const CommandEnvelopeSchema = z.discriminatedUnion("kind", [
       .object({
         entityId: EntityIdSchema,
         label: z.string().min(1).max(120),
-        cost: MoneySchema,
+        cost: PositiveMoneySchema,
       })
       .strict(),
   ),
@@ -56,6 +56,20 @@ export const CommandEnvelopeSchema = z.discriminatedUnion("kind", [
   ),
 ]);
 export type CommandEnvelope = z.infer<typeof CommandEnvelopeSchema>;
+
+/**
+ * What the public HTTP API accepts from browsers: every kind EXCEPT
+ * APPLY_VERIFIED_PROVIDER_EVENT, which only trusted server code constructs.
+ */
+export const PlayerCommandEnvelopeSchema = z.discriminatedUnion(
+  "kind",
+  CommandEnvelopeSchema.options.filter(
+    (o) => o.shape.kind.value !== "APPLY_VERIFIED_PROVIDER_EVENT",
+  ) as unknown as [
+    (typeof CommandEnvelopeSchema.options)[number],
+    ...(typeof CommandEnvelopeSchema.options)[number][],
+  ],
+);
 export type CommandKind = CommandEnvelope["kind"];
 
 /** Envelope after server-side authentication. Only trusted server code constructs this. */

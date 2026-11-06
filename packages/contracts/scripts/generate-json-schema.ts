@@ -3,7 +3,7 @@
  * agents and reviewers can read the exact wire shapes. With --check it fails if
  * the committed files are stale (CI drift guard).
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PUBLISHED_SCHEMAS, toJsonSchema } from "../src/index.js";
@@ -30,6 +30,13 @@ for (const name of Object.keys(PUBLISHED_SCHEMAS) as (keyof typeof PUBLISHED_SCH
   } else {
     writeFileSync(file, next);
     console.log(`wrote docs/contracts/schemas/${name}.json`);
+  }
+}
+const published = new Set(Object.keys(PUBLISHED_SCHEMAS).map((n) => `${n}.json`));
+for (const f of readdirSync(outDir)) {
+  if (f.endsWith(".json") && !published.has(f)) {
+    stale += 1;
+    console.error(`orphan: docs/contracts/schemas/${f} has no source schema (delete it)`);
   }
 }
 if (check && stale > 0) {

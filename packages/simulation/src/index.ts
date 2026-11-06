@@ -11,4 +11,10 @@ export * from "./fixtures.js";
 export { replay } from "./replay.js";
 export { createRng, type Rng } from "./rng.js";
 export type * from "./state.js";
-export { createWorld, snapshot, type WorldConfig } from "./world.js";
+export {
+  createWorld,
+  snapshot,
+  validateWorldConfig,
+  type WorldConfig,
+  WorldConfigError,
+} from "./world.js";

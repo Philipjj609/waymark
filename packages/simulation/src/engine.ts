@@ -3,6 +3,7 @@ import {
   type AssetId,
   type AuthorizedCommand,
   type BlockingDecision,
+  CommandEnvelopeSchema,
   type CommandError,
   type CommandErrorCode,
   type CommandId,
@@ -17,10 +18,11 @@ import {
   type Money,
   type Obligation,
   type ObligationId,
+  OriginSchema,
   type WorldDay,
 } from "@fle/contracts";
-import { PostingError } from "@fle/domain";
-import { chainHash, compareCodeUnits } from "./canonical.js";
+import { deepFreeze, PostingError } from "@fle/domain";
+import { canonicalJson, chainHash, compareCodeUnits, sha256Hex } from "./canonical.js";
 import type { AssetState, EntityState, ScheduledItem, WorldState } from "./state.js";
 
 /** Internal rejection signal. Never escapes `execute`; converted to a CommandResult. */
@@ -50,8 +52,10 @@ export class Tx {
     private readonly causation: CommandId | null,
     private readonly actorId: AuthorizedCommand["actorId"] | null,
   ) {
-    const { ledger, ...rest } = base;
-    this.s = { ...structuredClone(rest), ledger };
+    // Ledger and events are deeply frozen and append-only: share them by reference
+    // (cheap, and it keeps them frozen). Everything else is cloned for the draft.
+    const { ledger, events, ...rest } = base;
+    this.s = { ...structuredClone(rest), ledger, events };
   }
 
   emit(eventType: DomainEventType, payload: Record<string, unknown>): EventId {
@@ -74,6 +78,7 @@ export class Tx {
         `more than ${this.s.limits.maxEventsPerCommand} events in one command`,
       );
     }
+    deepFreeze(event); // payloads shared across state versions must never be mutated
     this.s.events = [...this.s.events, event];
     this.s.headHash = chainHash(this.s.headHash, event);
     this.emitted.push(event);
@@ -165,6 +170,12 @@ function settle(
 ): void {
   const due = remaining(o);
   const cash = tx.cash(o.debtorEntityId);
+  if (due.currency !== tx.s.currency || due.amountMinor <= 0) {
+    throw new Reject(
+      "INVALID_AMOUNT",
+      `obligation ${o.obligationId} has no payable amount in ${tx.s.currency}`,
+    );
+  }
   if (cash.amountMinor < due.amountMinor) {
     throw new Reject("INSUFFICIENT_FUNDS", `cash ${cash.amountMinor} < due ${due.amountMinor}`, {
       cashMinor: cash.amountMinor,
@@ -346,13 +357,22 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
   APPLY_VERIFIED_PROVIDER_EVENT(tx, cmd) {
     if (cmd.kind !== "APPLY_VERIFIED_PROVIDER_EVENT") return;
     const ev = cmd.payload.event;
-    if (tx.s.appliedProviderEvents.includes(ev.providerEventId)) return; // duplicate: one effect only (T02)
+    // Type first: a refund/denial for an already-applied capture must NOT be swallowed by the
+    // dedup below. Non-settling events are rejected visibly (reconciliation handles them, #22).
+    if (ev.eventType !== "CAPTURE_COMPLETED") {
+      throw new Reject("PROVIDER_EVENT_NOT_SETTLING", `${ev.eventType} does not settle anything`);
+    }
+    if (tx.s.appliedProviderEvents.includes(ev.providerEventId)) return; // duplicate capture: one effect only (T02)
     if (ev.mapping.worldId !== tx.s.worldId)
       throw new Reject("PROVIDER_EVENT_UNMAPPED", "event maps to another world");
     const o = tx.s.obligations[ev.mapping.obligationId];
     if (!o) throw new Reject("PROVIDER_EVENT_UNMAPPED", `no obligation ${ev.mapping.obligationId}`);
-    if (ev.eventType !== "CAPTURE_COMPLETED") {
-      throw new Reject("PROVIDER_EVENT_NOT_SETTLING", `${ev.eventType} does not settle anything`);
+    // State before amount, so an already-settled obligation reports the real reason.
+    if (o.state !== "DUE" && o.state !== "OVERDUE") {
+      throw new Reject(
+        "OBLIGATION_NOT_PAYABLE",
+        `obligation ${o.obligationId} is ${o.state}; needs reconciliation`,
+      );
     }
     const due = remaining(o);
     if (ev.amount.currency !== due.currency || ev.amount.amountMinor !== due.amountMinor) {
@@ -363,12 +383,6 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
           capturedMinor: ev.amount.amountMinor,
           dueMinor: due.amountMinor,
         },
-      );
-    }
-    if (o.state !== "DUE" && o.state !== "OVERDUE") {
-      throw new Reject(
-        "OBLIGATION_NOT_PAYABLE",
-        `obligation ${o.obligationId} is ${o.state}; needs reconciliation`,
       );
     }
     tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, ev.providerEventId];
@@ -403,8 +417,45 @@ function originAllowed(cmd: AuthorizedCommand): boolean {
  * (plus the recorded rejection) when the command is refused.
  */
 export function execute(state: WorldState, cmd: AuthorizedCommand): ExecuteOutcome {
+  // Re-validate at the engine boundary: never trust the caller's typing (L7).
+  const { actorId, origin, ...envelope } = cmd;
+  const parsed = CommandEnvelopeSchema.safeParse(envelope);
+  const originOk = OriginSchema.safeParse(origin).success && typeof actorId === "string";
+  if (!parsed.success || !originOk) {
+    const result: CommandResult = {
+      commandId: cmd.commandId,
+      status: "REJECTED",
+      worldVersion: state.version,
+      eventIds: [],
+      error: {
+        code: "SCHEMA_INVALID",
+        message: parsed.success ? "invalid actor or origin" : parsed.error.message.slice(0, 500),
+      },
+    };
+    return { state, result, duplicate: false, events: [] }; // not recorded: the id may be garbage
+  }
+
+  // Idempotency is bound to the command's intent, not just its id (M1).
+  const fingerprint = sha256Hex(
+    canonicalJson({ kind: cmd.kind, payload: cmd.payload, origin, actorId, worldId: cmd.worldId }),
+  );
   const prior = state.results[cmd.commandId];
-  if (prior) return { state, result: prior, duplicate: true, events: [] };
+  if (prior) {
+    if (state.fingerprints[cmd.commandId] !== fingerprint) {
+      const result: CommandResult = {
+        commandId: cmd.commandId,
+        status: "REJECTED",
+        worldVersion: state.version,
+        eventIds: [],
+        error: {
+          code: "IDEMPOTENCY_CONFLICT",
+          message: "commandId was already used for a different command; use a fresh id",
+        },
+      };
+      return { state, result, duplicate: false, events: [] };
+    }
+    return { state, result: prior, duplicate: true, events: [] };
+  }
 
   const reject = (
     code: CommandErrorCode,
@@ -420,7 +471,11 @@ export function execute(state: WorldState, cmd: AuthorizedCommand): ExecuteOutco
       error,
     };
     return {
-      state: { ...state, results: { ...state.results, [cmd.commandId]: result } },
+      state: {
+        ...state,
+        results: { ...state.results, [cmd.commandId]: result },
+        fingerprints: { ...state.fingerprints, [cmd.commandId]: fingerprint },
+      },
       result,
       duplicate: false,
       events: [],
@@ -464,6 +519,7 @@ export function execute(state: WorldState, cmd: AuthorizedCommand): ExecuteOutco
     ...tx.s,
     version,
     results: { ...tx.s.results, [cmd.commandId]: result },
+    fingerprints: { ...tx.s.fingerprints, [cmd.commandId]: fingerprint },
   };
   return { state: next, result, duplicate: false, events: tx.emitted };
 }

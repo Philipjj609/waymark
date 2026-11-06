@@ -14,7 +14,12 @@ import { add, money, subtract, zero } from "./money.js";
 export class PostingError extends Error {
   override readonly name = "PostingError";
   constructor(
-    readonly code: "UNBALANCED" | "INVALID_ENTRY" | "DUPLICATE_JOURNAL" | "UNKNOWN_REVERSAL",
+    readonly code:
+      | "UNBALANCED"
+      | "INVALID_ENTRY"
+      | "DUPLICATE_JOURNAL"
+      | "UNKNOWN_REVERSAL"
+      | "INVALID_REVERSAL",
     message: string,
   ) {
     super(message);
@@ -38,14 +43,32 @@ function signedForAccount(line: JournalLine): number {
  * Invariant I-001: debits equal credits per currency. Returns the per-currency
  * imbalance (empty when balanced).
  */
-export function imbalance(lines: readonly JournalLine[]): Map<CurrencyCode, number> {
-  const totals = new Map<CurrencyCode, number>();
+export function imbalance(lines: readonly JournalLine[]): Map<CurrencyCode, bigint> {
+  // BigInt: summing many near-max safe integers in float could round an imbalance away.
+  const totals = new Map<CurrencyCode, bigint>();
   for (const l of lines) {
-    const delta = l.direction === "DEBIT" ? l.amount.amountMinor : -l.amount.amountMinor;
-    totals.set(l.amount.currency, (totals.get(l.amount.currency) ?? 0) + delta);
+    const v = BigInt(l.amount.amountMinor);
+    const delta = l.direction === "DEBIT" ? v : -v;
+    totals.set(l.amount.currency, (totals.get(l.amount.currency) ?? 0n) + delta);
   }
-  for (const [ccy, v] of totals) if (v === 0) totals.delete(ccy);
+  for (const [ccy, v] of totals) if (v === 0n) totals.delete(ccy);
   return totals;
+}
+
+/** Recursively freeze plain data so posted entries cannot be mutated through any reference. */
+export function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const v of Object.values(value)) deepFreeze(v);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function canonicalLines(lines: readonly JournalLine[]): string {
+  return lines
+    .map((l) => `${l.account}|${l.direction}|${l.amount.currency}|${l.amount.amountMinor}`)
+    .sort()
+    .join(";");
 }
 
 /** Mirror image of an entry's lines; used for compensating reversals. */
@@ -62,6 +85,7 @@ export class Ledger {
   private constructor(
     private readonly entries: readonly JournalEntry[],
     private readonly ids: ReadonlySet<string>,
+    private readonly reversed: ReadonlySet<string> = new Set(),
   ) {}
 
   static empty(): Ledger {
@@ -85,17 +109,37 @@ export class Ledger {
       const detail = [...off].map(([c, v]) => `${c} ${v}`).join(", ");
       throw new PostingError("UNBALANCED", `journal ${entry.journalId} unbalanced: ${detail}`);
     }
-    if (entry.reversesJournalId !== null && !this.ids.has(entry.reversesJournalId)) {
-      throw new PostingError(
-        "UNKNOWN_REVERSAL",
-        `journal ${entry.journalId} reverses unknown ${entry.reversesJournalId}`,
-      );
+    const reversed = new Set(this.reversed);
+    if (entry.reversesJournalId !== null) {
+      const target = this.entries.find((e) => e.journalId === entry.reversesJournalId);
+      if (!target) {
+        throw new PostingError(
+          "UNKNOWN_REVERSAL",
+          `journal ${entry.journalId} reverses unknown ${entry.reversesJournalId}`,
+        );
+      }
+      if (this.reversed.has(target.journalId)) {
+        throw new PostingError(
+          "INVALID_REVERSAL",
+          `journal ${target.journalId} is already reversed`,
+        );
+      }
+      const mirror = canonicalLines(reversedLines(target.lines));
+      if (target.entityId !== entry.entityId || mirror !== canonicalLines(entry.lines)) {
+        throw new PostingError(
+          "INVALID_REVERSAL",
+          `journal ${entry.journalId} must mirror ${target.journalId} in the same entity`,
+        );
+      }
+      reversed.add(target.journalId);
     }
     const ids = new Set(this.ids);
     ids.add(entry.journalId);
-    return new Ledger([...this.entries, Object.freeze(structuredClone(entry))], ids);
+    const frozen = Object.freeze([...this.entries, deepFreeze(structuredClone(entry))]);
+    return new Ledger(frozen, ids, reversed);
   }
 
+  /** Posted entries, deeply frozen. The array itself is frozen too. */
   get all(): readonly JournalEntry[] {
     return this.entries;
   }
@@ -207,7 +251,14 @@ export function consolidate(
     profit = add(profit, s.profit);
   }
   const eliminated: Array<{ label: string; amount: Money }> = [];
+  const members = new Set<string>(entityIds);
   for (const el of eliminations) {
+    if (!members.has(el.a.entityId) || !members.has(el.b.entityId)) {
+      throw new Error(`elimination "${el.label}" references an entity outside the consolidation`);
+    }
+    if (el.a.entityId === el.b.entityId) {
+      throw new Error(`elimination "${el.label}" must pair two different entities`);
+    }
     const a = ledger.balance(el.a.entityId, el.a.account, currency);
     const b = ledger.balance(el.b.entityId, el.b.account, currency);
     // Compare magnitudes: a contra-equity distribution (debit on a credit-normal

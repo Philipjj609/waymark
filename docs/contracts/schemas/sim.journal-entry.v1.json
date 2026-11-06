@@ -65,12 +65,17 @@
             "properties": {
               "amountMinor": {
                 "type": "integer",
-                "minimum": -9007199254740991,
+                "minimum": 1,
                 "maximum": 9007199254740991
               },
               "currency": {
                 "type": "string",
-                "pattern": "^[A-Z]{3}$"
+                "enum": [
+                  "EUR",
+                  "USD",
+                  "GBP",
+                  "JPY"
+                ]
               }
             },
             "required": [

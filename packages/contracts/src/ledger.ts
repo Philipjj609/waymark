@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { EntityIdSchema, EventIdSchema, JournalIdSchema, WorldDaySchema } from "./ids.js";
-import { MoneySchema } from "./money.js";
+import { PositiveMoneySchema } from "./money.js";
 
 /**
  * Chart-of-accounts classes (ECO-020 §4). Debit-normal: ASSET, EXPENSE.
@@ -27,7 +27,7 @@ export const JournalLineSchema = z
   .object({
     account: AccountCodeSchema,
     direction: DirectionSchema,
-    amount: MoneySchema.refine((m) => m.amountMinor > 0, "line amount must be positive"),
+    amount: PositiveMoneySchema,
   })
   .strict();
 export type JournalLine = z.infer<typeof JournalLineSchema>;

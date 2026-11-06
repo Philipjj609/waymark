@@ -12,7 +12,12 @@
     },
     "currency": {
       "type": "string",
-      "pattern": "^[A-Z]{3}$"
+      "enum": [
+        "EUR",
+        "USD",
+        "GBP",
+        "JPY"
+      ]
     }
   },
   "required": [

@@ -85,6 +85,8 @@ export interface WorldState {
   readonly headHash: string;
   /** Idempotency store: commandId → first outcome (accepted OR rejected). */
   readonly results: Readonly<Record<string, CommandResult>>;
+  /** commandId → sha256 of the command's intent (kind, payload, origin, actor). Detects key reuse. */
+  readonly fingerprints: Readonly<Record<string, string>>;
   /** Provider event ids already applied (one verified provider event → at most one effect). */
   readonly appliedProviderEvents: readonly string[];
   readonly counters: {

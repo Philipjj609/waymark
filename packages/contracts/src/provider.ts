@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ObligationIdSchema, ProviderOperationIdSchema, WorldIdSchema } from "./ids.js";
-import { MoneySchema } from "./money.js";
+import { PositiveMoneySchema } from "./money.js";
 
 /**
  * A provider fact that the SERVER has verified against PayPal (SIM-003 interface E).
@@ -23,7 +23,7 @@ export const VerifiedProviderEventSchema = z
     providerEventId: z.string().min(1).max(128),
     operationId: ProviderOperationIdSchema,
     eventType: z.enum(["CAPTURE_COMPLETED", "CAPTURE_DENIED", "CAPTURE_REFUNDED"]),
-    amount: MoneySchema,
+    amount: PositiveMoneySchema,
     mapping: z
       .object({
         worldId: WorldIdSchema,

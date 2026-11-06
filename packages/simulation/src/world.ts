@@ -16,7 +16,7 @@ import type {
   WorldId,
   WorldSnapshot,
 } from "@fle/contracts";
-import { Ledger } from "@fle/domain";
+import { deepFreeze, Ledger } from "@fle/domain";
 import { chainHash, compareCodeUnits, GENESIS_HASH } from "./canonical.js";
 import type { EntityState, IncomeRule, ScheduledItem, WorldState } from "./state.js";
 
@@ -59,7 +59,72 @@ const PHASE_PRIORITY: Record<"OBLIGATION_DUE" | "INCOME", { phase: DayPhase; pri
  * Build the initial world deterministically: same config → same events → same
  * head hash. Initialization events are system events (no causing command).
  */
+/** A world configuration that would create an impossible or unplayable world. */
+export class WorldConfigError extends Error {
+  override readonly name = "WorldConfigError";
+}
+
+/**
+ * Reject configs that would let the engine move money that doesn't exist, soft-lock
+ * time, or silently skip events (adversarial review M3/M4). Fail loudly at creation.
+ */
+export function validateWorldConfig(config: WorldConfig): void {
+  const fail = (msg: string): never => {
+    throw new WorldConfigError(`${config.worldId}: ${msg}`);
+  };
+  const start = config.startDay ?? 1;
+  if (!Number.isInteger(start) || start < 1) fail(`startDay ${start} must be an integer >= 1`);
+  const money = (m: Money, what: string, allowZero: boolean) => {
+    if (m.currency !== config.currency)
+      fail(`${what} is ${m.currency}, world currency is ${config.currency}`);
+    if (!Number.isSafeInteger(m.amountMinor)) fail(`${what} is not an integer amount`);
+    if (allowZero ? m.amountMinor < 0 : m.amountMinor <= 0)
+      fail(`${what} must be ${allowZero ? "non-negative" : "positive"}`);
+  };
+  const unique = (ids: readonly string[], what: string) => {
+    const seen = new Set<string>();
+    for (const id of ids) {
+      if (seen.has(id)) fail(`duplicate ${what} ${id}`);
+      seen.add(id);
+    }
+  };
+  unique(
+    config.entities.map((e) => e.entityId),
+    "entity id",
+  );
+  unique(
+    config.obligations.map((o) => o.obligationId),
+    "obligation id",
+  );
+  unique(
+    config.incomes.map((i) => i.scheduleId),
+    "income schedule id",
+  );
+  unique(
+    config.obligations.flatMap((o) => (o.document ? [o.document.documentId] : [])),
+    "document id",
+  );
+  const entities = new Set<string>(config.entities.map((e) => e.entityId));
+  for (const e of config.entities) money(e.openingCash, `opening cash of ${e.entityId}`, true);
+  for (const o of config.obligations) {
+    if (!entities.has(o.debtorEntityId))
+      fail(`obligation ${o.obligationId} debtor ${o.debtorEntityId} does not exist`);
+    money(o.amount, `obligation ${o.obligationId}`, false);
+    // Due days must be after the start day: the start day is never processed by ADVANCE_TIME.
+    if (!Number.isInteger(o.dueDay) || o.dueDay <= start)
+      fail(`obligation ${o.obligationId} dueDay must be > startDay ${start}`);
+  }
+  for (const i of config.incomes) {
+    if (!entities.has(i.entityId))
+      fail(`income ${i.scheduleId} entity ${i.entityId} does not exist`);
+    money(i.amount, `income ${i.scheduleId}`, false);
+    if (!Number.isInteger(i.day) || i.day <= start)
+      fail(`income ${i.scheduleId} day must be > startDay ${start}`);
+  }
+}
+
 export function createWorld(config: WorldConfig): WorldState {
+  validateWorldConfig(config);
   const day = config.startDay ?? 1;
   const events: WorldState["events"][number][] = [];
   let headHash = GENESIS_HASH;
@@ -82,7 +147,7 @@ export function createWorld(config: WorldConfig): WorldState {
       ruleVersion: config.ruleVersion,
       payload,
     };
-    events.push(event);
+    events.push(deepFreeze(event));
     headHash = chainHash(headHash, event);
     return event.eventId;
   };
@@ -227,6 +292,7 @@ export function createWorld(config: WorldConfig): WorldState {
     events,
     headHash,
     results: {},
+    fingerprints: {},
     appliedProviderEvents: [],
     counters: { journal: journalCounter, asset: 0, schedule: seq },
     limits: {

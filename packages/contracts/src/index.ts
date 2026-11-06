@@ -4,7 +4,11 @@
  * docs/contracts/README.md (RFC + version bump + regenerated JSON Schema).
  */
 import { z } from "zod";
-import { CommandEnvelopeSchema, CommandResultSchema } from "./command.js";
+import {
+  CommandEnvelopeSchema,
+  CommandResultSchema,
+  PlayerCommandEnvelopeSchema,
+} from "./command.js";
 import { DomainEventSchema } from "./event.js";
 import { EvidencePacketSchema, LessonResponseSchema } from "./learning.js";
 import { JournalEntrySchema } from "./ledger.js";
@@ -31,6 +35,7 @@ export const CONTRACTS_VERSION = "0.1.0" as const;
 export const PUBLISHED_SCHEMAS = {
   "money.v1": MoneySchema,
   "sim.command.v1": CommandEnvelopeSchema,
+  "sim.player-command.v1": PlayerCommandEnvelopeSchema,
   "sim.command-result.v1": CommandResultSchema,
   "sim.event.v1": DomainEventSchema,
   "sim.journal-entry.v1": JournalEntrySchema,

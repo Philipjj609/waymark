@@ -43,23 +43,29 @@ export class AmountFormatError extends Error {
  * PayPal amounts are decimal strings ("30.00"). Convert exactly, without
  * floating point, using the currency's minor-unit exponent.
  */
+const MINOR_DIGITS: Readonly<Record<string, number>> = CURRENCY_MINOR_UNITS;
+
 export function parsePayPalAmount(value: string, currency: string): Money {
-  const digits = CURRENCY_MINOR_UNITS[currency];
+  const digits = MINOR_DIGITS[currency];
   if (digits === undefined) throw new AmountFormatError(`unsupported currency ${currency}`);
-  const m = /^(\d{1,15})(?:\.(\d+))?$/.exec(value);
-  if (!m) throw new AmountFormatError(`not a non-negative decimal amount: "${value}"`);
-  const whole = m[1] ?? "0";
+  // PayPal's pattern allows "30", "30.5", "30.50" and ".5": at least one digit overall.
+  const m = /^(\d{0,15})(?:\.(\d+))?$/.exec(value);
+  if (!m || (m[1] === "" && m[2] === undefined))
+    throw new AmountFormatError(`not a non-negative decimal amount: "${value}"`);
+  const whole = m[1] || "0";
   const frac = m[2] ?? "";
   if (frac.length > digits)
     throw new AmountFormatError(`"${value}" has more than ${digits} decimals for ${currency}`);
   const minor = Number(whole) * 10 ** digits + Number(frac.padEnd(digits, "0") || "0");
   if (!Number.isSafeInteger(minor)) throw new AmountFormatError(`"${value}" overflows`);
-  return { amountMinor: minor, currency };
+  return { amountMinor: minor, currency: currency as Money["currency"] };
 }
 
 export function formatPayPalAmount(m: Money): { currency_code: string; value: string } {
-  const digits = CURRENCY_MINOR_UNITS[m.currency];
+  const digits = MINOR_DIGITS[m.currency];
   if (digits === undefined) throw new AmountFormatError(`unsupported currency ${m.currency}`);
+  if (!Number.isSafeInteger(m.amountMinor))
+    throw new AmountFormatError(`amount ${m.amountMinor} is not a safe integer`);
   if (m.amountMinor < 0) throw new AmountFormatError("PayPal amounts are non-negative");
   const scale = 10 ** digits;
   const whole = Math.trunc(m.amountMinor / scale);
@@ -133,6 +139,7 @@ export type VerificationOutcome =
         | "NOT_CAPTURED"
         | "CAPTURE_NOT_COMPLETED"
         | "AMOUNT_MISMATCH"
+        | "AMOUNT_INVALID"
         | "CURRENCY_MISMATCH";
       readonly attemptState: PaymentAttemptState;
     };
@@ -150,14 +157,21 @@ export function verifyCapture(
   const attemptState = attemptStateFrom(observed.orderStatus, observed.captureStatus);
   if (observed.paypalOrderId !== op.paypalOrderId)
     return { ok: false, reason: "ORDER_MISMATCH", attemptState };
-  if (observed.captureId === null || observed.captureStatus === null) {
+  if (!observed.captureId || observed.captureStatus === null) {
     return { ok: false, reason: "NOT_CAPTURED", attemptState };
   }
-  if (observed.captureStatus !== "COMPLETED")
+  if (observed.captureStatus !== "COMPLETED" || observed.orderStatus === "VOIDED")
     return { ok: false, reason: "CAPTURE_NOT_COMPLETED", attemptState };
   if (observed.currencyCode !== op.expected.currency)
     return { ok: false, reason: "CURRENCY_MISMATCH", attemptState };
-  const amount = parsePayPalAmount(observed.amountValue ?? "", op.expected.currency);
+  let amount: Money;
+  try {
+    amount = parsePayPalAmount(observed.amountValue ?? "", op.expected.currency);
+  } catch {
+    // Malformed provider data is an outcome to reconcile, never an exception (L4).
+    return { ok: false, reason: "AMOUNT_INVALID", attemptState };
+  }
+  if (amount.amountMinor <= 0) return { ok: false, reason: "AMOUNT_INVALID", attemptState };
   if (amount.amountMinor !== op.expected.amountMinor)
     return { ok: false, reason: "AMOUNT_MISMATCH", attemptState };
   return {
