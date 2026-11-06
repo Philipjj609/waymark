@@ -17,7 +17,7 @@ import type {
   WorldSnapshot,
 } from "@fle/contracts";
 import { Ledger } from "@fle/domain";
-import { chainHash, GENESIS_HASH } from "./canonical.js";
+import { chainHash, compareCodeUnits, GENESIS_HASH } from "./canonical.js";
 import type { EntityState, IncomeRule, ScheduledItem, WorldState } from "./state.js";
 
 export interface WorldConfig {
@@ -253,10 +253,10 @@ export function snapshot(state: WorldState): WorldSnapshot {
     ruleVersion: state.ruleVersion,
     balances,
     obligations: Object.values(state.obligations).sort((a, b) =>
-      a.obligationId.localeCompare(b.obligationId),
+      compareCodeUnits(a.obligationId, b.obligationId),
     ),
     documents: Object.values(state.documents).sort((a, b) =>
-      a.documentId.localeCompare(b.documentId),
+      compareCodeUnits(a.documentId, b.documentId),
     ),
     assets: [...state.assets],
     blockingDecisions: [...state.blocking],

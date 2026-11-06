@@ -143,6 +143,24 @@ describe("verified PayPal sandbox settlement (interface E)", () => {
     expect(settled?.payload.realm).toBe("PAYPAL_SANDBOX");
   });
 
+  it("the same capture arriving via order lookup and via webhook has one effect", () => {
+    let w = run(fp30(), [[cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }]]);
+    const viaLookup = providerEvent(w, PHONE, 3000, "CAPTURE-XYZ");
+    const viaWebhook: VerifiedProviderEvent = {
+      ...viaLookup,
+      verification: {
+        method: "WEBHOOK_SIGNATURE_POSTBACK",
+        verifiedAt: "2026-11-06T10:05:00Z",
+        evidenceRef: "paypal:webhook:WH-EVENT-1",
+      },
+    };
+    w = execute(w, providerCommand(w, 10, viaLookup)).state;
+    const second = execute(w, providerCommand(w, 11, viaWebhook));
+    expect(second.result.status).toBe("ACCEPTED");
+    expect(second.events).toHaveLength(0);
+    expect(w.ledger.size).toBe(second.state.ledger.size);
+  });
+
   it("rejects a captured amount that differs from the obligation", () => {
     const w = run(fp30(), [[cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }]]);
     const out = execute(w, providerCommand(w, 10, providerEvent(w, PHONE, 2999)));

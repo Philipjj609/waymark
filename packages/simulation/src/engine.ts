@@ -20,7 +20,7 @@ import {
   type WorldDay,
 } from "@fle/contracts";
 import { PostingError } from "@fle/domain";
-import { chainHash } from "./canonical.js";
+import { chainHash, compareCodeUnits } from "./canonical.js";
 import type { AssetState, EntityState, ScheduledItem, WorldState } from "./state.js";
 
 /** Internal rejection signal. Never escapes `execute`; converted to a CommandResult. */
@@ -201,7 +201,7 @@ function processDay(tx: Tx, day: WorldDay): void {
   tx.s.day = day;
   // OPENING: non-blocking obligations left DUE on an earlier day become OVERDUE.
   for (const o of Object.values(tx.s.obligations).sort((a, b) =>
-    a.obligationId.localeCompare(b.obligationId),
+    compareCodeUnits(a.obligationId, b.obligationId),
   )) {
     if (o.state === "DUE" && o.dueDay < day && !o.blocking) {
       tx.setObligation({ ...o, state: "OVERDUE" });

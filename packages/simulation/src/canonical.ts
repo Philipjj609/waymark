@@ -32,3 +32,12 @@ export function chainHash(prev: string, event: unknown): string {
 }
 
 export const GENESIS_HASH = "0".repeat(64);
+
+/**
+ * Locale-independent ordering by UTF-16 code units. `localeCompare` depends on
+ * the host's ICU locale, which would make ordering (and therefore replay
+ * hashes) machine-dependent. Use this for every sort that affects state.
+ */
+export function compareCodeUnits(a: string, b: string): -1 | 0 | 1 {
+  return a < b ? -1 : a > b ? 1 : 0;
+}

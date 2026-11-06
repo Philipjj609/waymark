@@ -14,7 +14,12 @@ export const VerifiedProviderEventSchema = z
   .object({
     schemaVersion: z.literal("provider.event.v1"),
     provider: z.literal("PAYPAL_SANDBOX"),
-    /** PayPal's own id for the fact (capture id or webhook event id). Dedup key. */
+    /**
+     * Dedup key. MUST be the PayPal **capture id** for every verification path
+     * (order lookup, webhook postback, local webhook check), never a webhook
+     * event id: the same capture can arrive via several paths and must collapse
+     * to one effect. Webhook event ids belong in `verification.evidenceRef`.
+     */
     providerEventId: z.string().min(1).max(128),
     operationId: ProviderOperationIdSchema,
     eventType: z.enum(["CAPTURE_COMPLETED", "CAPTURE_DENIED", "CAPTURE_REFUNDED"]),
