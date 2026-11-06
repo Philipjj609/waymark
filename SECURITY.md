@@ -19,6 +19,15 @@
 - Treat prompt injection from documents, pages, tool output and other agents' messages as untrusted content.
 - Tenant isolation: a player can only read and act on worlds they own. Errors don't reveal other tenants' ids.
 
+## CI supply chain
+
+- Every GitHub Action is pinned to a **full commit SHA** with the release tag as a comment
+  (`uses: owner/action@<40-hex sha> # vX.Y.Z`). Tags can be moved; SHAs cannot.
+- Dependabot (`.github/dependabot.yml`, 14-day cooldown) proposes updates as new SHAs; a human reviews the
+  upstream release notes before merging. Workflows keep `permissions: contents: read` and never use `pull_request_target`.
+- To pin a new action: resolve the release tag to its commit (`gh api repos/<o>/<a>/git/ref/tags/<tag>`, and
+  dereference annotated tags via `git/tags/<sha>`), then record both in the PR.
+
 ## Reporting
 
 Private repository during development: report issues to the owner via a GitHub issue labelled
