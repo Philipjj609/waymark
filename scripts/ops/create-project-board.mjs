@@ -6,6 +6,15 @@
 //   node scripts/ops/create-project-board.mjs --dry-run  # print the plan, no project API calls
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import {
+  decideField,
+  keyOf,
+  planFor,
+  SELECTS,
+  STATUS,
+  statusFor,
+  TEXTS,
+} from "./board-sync-rules.mjs";
 
 const OWNER = "Philipjj609";
 const REPO = `${OWNER}/waymark`;
@@ -18,127 +27,7 @@ const gh = (args) =>
   execFileSync(GH, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
 const ghJson = (args) => JSON.parse(gh(args));
 
-const STATUS = [
-  ["Inbox", "GRAY", "New, not yet triaged"],
-  ["Triage", "PURPLE", "Being clarified or sized"],
-  ["Ready", "GREEN", "Clear, unblocked, can be claimed"],
-  ["In Progress", "YELLOW", "Claimed; branch exists"],
-  ["Blocked", "RED", "Blocked: see Blocked reason"],
-  ["In Review", "BLUE", "PR open, awaiting review/CI"],
-  ["Verified", "PINK", "Merged; acceptance evidence checked"],
-  ["Done", "GREEN", "Closed with evidence"],
-  ["Cancelled", "GRAY", "Will not be done"],
-];
-const LABEL_TO_STATUS = {
-  "status:inbox": "Inbox",
-  "status:triage": "Triage",
-  "status:ready": "Ready",
-  "status:in-progress": "In Progress",
-  "status:blocked": "Blocked",
-  "status:in-review": "In Review",
-  "status:verified": "Verified",
-  "status:cancelled": "Cancelled",
-};
-const SELECTS = {
-  Priority: ["P0", "P1", "P2", "P3"],
-  Phase: [
-    "P0 Discovery",
-    "P1 Foundation",
-    "P2 Parallel",
-    "P3 Integration",
-    "P4 Quality",
-    "P5 Release",
-    "P6 Long-term",
-  ],
-  Track: [
-    "governance",
-    "foundation",
-    "economy",
-    "scenario",
-    "learning-ai",
-    "payments",
-    "ux",
-    "qa-infra",
-    "release",
-    "long-term",
-  ],
-};
-const TEXTS = [
-  "WP",
-  "Agent",
-  "Peer reviewer",
-  "Depends on",
-  "Branch",
-  "Related ADR/Drive",
-  "Latest progress",
-  "Next action",
-  "Blocked reason",
-];
-
-// Fields maintained by people/agents while working. Sync fills them only when EMPTY (or when
-// they still hold a previous auto-generated value), so a re-sync never overwrites a claim,
-// a branch name, a reviewer or a progress note.
-const TEAM_FIELDS = new Set(["Agent", "Peer reviewer", "Branch", "Latest progress", "Next action"]);
-const AUTO_NEXT = {
-  Blocked: "Resolve blocker",
-  Ready: "Claim (docs/process/task-claiming.md)",
-  Triage: "Waiting on prerequisites; becomes Ready when they close",
-};
-// Includes values written by earlier versions of this script, so they are recognised and replaced.
-const AUTO_VALUES = new Set([...Object.values(AUTO_NEXT), "Claim (AGENTS.md §2)"]);
-// Exactly one status label should exist; if several do, this precedence decides (and we warn).
-const STATUS_PRECEDENCE = [
-  "status:blocked",
-  "status:cancelled",
-  "status:verified",
-  "status:in-review",
-  "status:in-progress",
-  "status:ready",
-  "status:triage",
-  "status:inbox",
-];
 const LIMITS = { issues: 1000, prs: 500, items: 2000, projects: 100 };
-const keyOf = (name) => name[0].toLowerCase() + name.slice(1); // gh item-list JSON key
-
-function planFor(item) {
-  const labels = item.labels.map((l) => l.name);
-  const statusLabels = labels.filter((l) => l in LABEL_TO_STATUS);
-  if (statusLabels.length > 1 && item.state === "OPEN")
-    console.warn(
-      `  warn #${item.number}: several status labels (${statusLabels.join(", ")}); using precedence`,
-    );
-  const winner = STATUS_PRECEDENCE.find((l) => statusLabels.includes(l));
-  const status =
-    item.state === "MERGED"
-      ? "Done"
-      : item.state === "CLOSED"
-        ? item.stateReason === "NOT_PLANNED"
-          ? "Cancelled"
-          : "Done"
-        : winner
-          ? LABEL_TO_STATUS[winner]
-          : item.isPR
-            ? "In Review"
-            : "Inbox";
-  const body = item.body ?? "";
-  const grab = (re) => re.exec(body)?.[1]?.trim() ?? "";
-  const phaseIdx = /^P(\d)/.exec(item.milestone?.title ?? "")?.[1];
-  return {
-    Status: status,
-    Priority: labels.find((l) => l.startsWith("priority:"))?.slice(9) ?? "",
-    Phase: phaseIdx !== undefined ? SELECTS.Phase[Number(phaseIdx)] : "",
-    Track: labels.find((l) => l.startsWith("track:"))?.slice(6) ?? "",
-    WP: /^\[([^\]]+)\]/.exec(item.title)?.[1] ?? "",
-    Agent: "",
-    "Peer reviewer": "",
-    "Depends on": grab(/\*\*Depends on:\*\*\s*([^\n]+)/).replace(/\s*·.*$/, ""),
-    Branch: item.headRefName ?? "",
-    "Related ADR/Drive": grab(/\*\*Related ADRs \/ Drive docs:\*\*\s*([^\n]+)/),
-    "Latest progress": "",
-    "Next action": AUTO_NEXT[status] ?? "",
-    "Blocked reason": grab(/>\s*\*\*BLOCKED:\*\*\s*([^\n]+)/),
-  };
-}
 
 const issues = ghJson([
   "issue",
@@ -303,34 +192,13 @@ for (const it of items) {
   ]);
   const plan = planFor(it);
   const existingItem = current.get(it.url) ?? {};
+  const { warning } = statusFor(it);
+  if (warning) console.warn(`  warn ${warning}`);
   for (const [name, value] of Object.entries(plan)) {
-    const f0 = byName[name];
-    // An earlier auto value that no longer applies (e.g. "Resolve blocker" after unblocking) is cleared.
-    const stale = TEAM_FIELDS.has(name)
-      ? AUTO_VALUES.has(existingItem[keyOf(name)] ?? "")
-      : name === "Blocked reason" && Boolean(existingItem[keyOf(name)]);
-    if (!value && f0 && stale) {
-      gh([
-        "project",
-        "item-edit",
-        "--id",
-        added.id,
-        "--project-id",
-        projectId,
-        "--field-id",
-        f0.id,
-        "--clear",
-      ]);
-      continue;
-    }
-    if (!value) continue;
-    if (TEAM_FIELDS.has(name)) {
-      const have = existingItem[keyOf(name)];
-      if (have && !AUTO_VALUES.has(have)) continue; // a person/agent wrote this: keep it
-      if (have === value) continue;
-    }
     const f = byName[name];
     if (!f) continue;
+    const action = decideField(name, value, existingItem[keyOf(name)]);
+    if (action === "keep") continue;
     const args = [
       "project",
       "item-edit",
@@ -341,6 +209,10 @@ for (const it of items) {
       "--field-id",
       f.id,
     ];
+    if (action === "clear") {
+      gh([...args, "--clear"]);
+      continue;
+    }
     if (f.options) {
       const opt = f.options.find((o) => o.name === value);
       if (!opt) {
