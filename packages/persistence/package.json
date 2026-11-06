@@ -1,0 +1,21 @@
+{
+  "name": "@fle/persistence",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PostgreSQL event store (ADR-0005): Drizzle schema, checked-in SQL migrations and PgWorldStore, the Postgres implementation of the @fle/server WorldStore port. Server-only.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@fle/contracts": "workspace:*",
+    "@fle/server": "workspace:*",
+    "@fle/simulation": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.11",
+    "@types/pg": "8.23.1"
+  }
+}
