@@ -1,6 +1,7 @@
 import {
   type AuthorizedCommand,
   type CommandResult,
+  type DomainEvent,
   PlayerCommandEnvelopeSchema,
   type WorldId,
   type WorldSnapshot,
@@ -50,6 +51,20 @@ export async function getWorld(
 ): Promise<ServiceResponse<{ snapshot: WorldSnapshot }>> {
   const state = await store.load(worldId, owner);
   return state ? { ok: true, snapshot: snapshot(state) } : notFound;
+}
+
+/**
+ * Read-only: the snapshot AND the full event log of one of the owner's worlds, taken from ONE
+ * load so they always describe the same head. Input for derived read models such as the tutor
+ * (#84). Owner-scoped exactly like `getWorld`: another session's world is "not found".
+ */
+export async function getWorldHistory(
+  store: WorldStore,
+  owner: SessionHash,
+  worldId: WorldId,
+): Promise<ServiceResponse<{ snapshot: WorldSnapshot; events: readonly DomainEvent[] }>> {
+  const state = await store.load(worldId, owner);
+  return state ? { ok: true, snapshot: snapshot(state), events: state.events } : notFound;
 }
 
 /** Bounded retries when another request committed between our load and our commit. */
