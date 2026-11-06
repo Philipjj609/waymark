@@ -24,6 +24,10 @@ export const DomainEventTypeSchema = z.enum([
   "DAY_ADVANCED",
   "TIME_PAUSED",
   "PROVIDER_SETTLEMENT_APPLIED",
+  /** 0.2.0: a sandbox checkout started; its amount is now reserved (no journal). */
+  "PROVIDER_CHECKOUT_STARTED",
+  /** 0.2.0: a reservation ended without settlement (verified ORDER_VOIDED). No journal. */
+  "RESERVATION_RELEASED",
 ]);
 export type DomainEventType = z.infer<typeof DomainEventTypeSchema>;
 

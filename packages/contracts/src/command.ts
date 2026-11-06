@@ -40,6 +40,13 @@ export const CommandEnvelopeSchema = z.discriminatedUnion("kind", [
   command("ADVANCE_TIME", z.object({ targetDay: WorldDaySchema }).strict()),
   command("PAY_OBLIGATION", z.object({ obligationId: ObligationIdSchema }).strict()),
   command("DEFER_OBLIGATION", z.object({ obligationId: ObligationIdSchema }).strict()),
+  /**
+   * 0.2.0 (ADR-0008): pay a DUE/OVERDUE bill through a PayPal SANDBOX checkout. Reserves the
+   * remaining amount from fictional cash (an earmark, not an expense) and locks the obligation
+   * (PAYMENT_IN_FLIGHT) until a verified capture settles it or a verified ORDER_VOIDED releases it.
+   * The provider operation id is derived by the engine, never chosen by the client.
+   */
+  command("START_PROVIDER_CHECKOUT", z.object({ obligationId: ObligationIdSchema }).strict()),
   command(
     "PURCHASE_ASSET",
     z

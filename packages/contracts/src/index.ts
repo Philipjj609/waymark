@@ -29,7 +29,7 @@ export * from "./scenario.js";
 export * from "./world.js";
 
 /** Bump on any contract change. Major = breaking. See docs/contracts/README.md. */
-export const CONTRACTS_VERSION = "0.1.0" as const;
+export const CONTRACTS_VERSION = "0.2.0" as const;
 
 /** Published schemas: name → zod schema. JSON Schema files are generated from these. */
 export const PUBLISHED_SCHEMAS = {

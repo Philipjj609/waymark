@@ -1,5 +1,16 @@
 # Contracts changelog
 
+## 0.2.0 — PayPal sandbox checkout reservations (2026-11-06, #12, ADR-0008)
+
+Additive (minor):
+- Command `START_PROVIDER_CHECKOUT { obligationId }` (also in `sim.player-command.v1`).
+- `provider.event.v1` `eventType` adds `ORDER_VOIDED` (verified "can no longer be captured"; releases, never settles).
+- Error codes `PAYMENT_IN_FLIGHT`, `PROVIDER_OPERATION_MISMATCH`.
+- Domain events `PROVIDER_CHECKOUT_STARTED`, `RESERVATION_RELEASED` (neither posts a journal).
+- Blocking decision option `START_PROVIDER_CHECKOUT`.
+- `sim.snapshot.v1` adds `reservations[]` and `availableCash[]`. These are required fields: the engine is the only producer and
+  ships in the same release. Consumers that strict-parse snapshots must update together.
+
 ## 0.1.0 — review hardening (2026-11-06, before first merge)
 
 From the independent adversarial review of PR #37:

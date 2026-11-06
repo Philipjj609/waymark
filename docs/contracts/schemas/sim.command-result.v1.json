@@ -1,7 +1,7 @@
 {
   "$id": "https://schemas.finance-learning-economy.invalid/sim.command-result.v1.json",
   "title": "sim.command-result.v1",
-  "x-contracts-version": "0.1.0",
+  "x-contracts-version": "0.2.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -55,7 +55,9 @@
                 "PROVIDER_EVENT_UNMAPPED",
                 "PROVIDER_AMOUNT_MISMATCH",
                 "PROVIDER_EVENT_NOT_SETTLING",
-                "IDEMPOTENCY_CONFLICT"
+                "IDEMPOTENCY_CONFLICT",
+                "PAYMENT_IN_FLIGHT",
+                "PROVIDER_OPERATION_MISMATCH"
               ]
             },
             "message": {
