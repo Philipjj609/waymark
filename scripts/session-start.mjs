@@ -84,6 +84,36 @@ if (!gh || !sh(gh, ["auth", "status"])) {
   );
 }
 
+section("Announcements (docs/ANNOUNCEMENTS.md, newest first)");
+try {
+  const ann = readFileSync(join(root, "docs/ANNOUNCEMENTS.md"), "utf8")
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith("## ANN-"))
+    .slice(0, 5);
+  console.log(ann.length ? ann.map((l) => l.slice(3)).join("\n") : "(none)");
+  console.log("→ Read entries newer than your last handoff; ack where required.");
+} catch {
+  console.log("(docs/ANNOUNCEMENTS.md not found)");
+}
+
+if (gh && sh(gh, ["auth", "status"])) {
+  section("Coordination requests needing someone");
+  for (const label of [
+    "ack-required",
+    "needs-decision",
+    "coord:blocker",
+    "coord:question",
+    "coord:review-request",
+    "coord:handoff",
+  ]) {
+    const out = sh(gh, ["issue", "list", "--label", label, "--state", "open", "--limit", "20"]);
+    if (out) console.log(`[${label}]\n${out}`);
+  }
+  console.log(
+    "→ Answer requests addressed to your agent id or issue; post [ACK] on answers you rely on.",
+  );
+}
+
 section("Next");
 console.log(
   "1. Read your issue + its latest handoff comment.  2. pnpm verify (baseline).  3. Claim the issue.",

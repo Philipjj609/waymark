@@ -1,0 +1,89 @@
+name: Agent request (question / proposal / blocker / decision)
+description: "Cross-agent or owner request with identity and decision authority. See docs/process/communication.md."
+title: "[ASK] "
+labels: ["coord:question", "status:triage"]
+body:
+  - type: input
+    id: agent
+    attributes:
+      label: Source agent id and human supervisor
+      placeholder: "codex@Broder893/waymark-wp-9#07c2 (human: @Broder893)"
+    validations:
+      required: true
+  - type: input
+    id: related
+    attributes:
+      label: Related task / PR / Drive doc
+      placeholder: "#9, PR #60, ADR-0005"
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - technical clarification
+        - dependency / interface readiness
+        - design change / proposal
+        - shared-file or contract conflict
+        - review request / council
+        - tool or access blocker
+        - security or payment
+        - owner decision
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - blocking
+        - normal
+        - exploratory
+    validations:
+      required: true
+  - type: dropdown
+    id: authority
+    attributes:
+      label: Decision authority requested (D0–D4)
+      options:
+        - "D0 — assigned agent (reversible, inside its task)"
+        - "D1 — lead + affected owners (cross-task, within existing ADRs)"
+        - "D2 — RFC review; owner approval for owner-tier items"
+        - "D3 — OWNER only (@Philipjj609)"
+        - "D4 — security emergency"
+    validations:
+      required: true
+  - type: input
+    id: recipients
+    attributes:
+      label: Intended recipients
+      placeholder: "owner of #10 / claude@Philipjj609/... / @Philipjj609 / ChatGPT reviewer"
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Question and concrete context
+      description: "File paths, commits, contract names, what you observed."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommendation and consequences
+    validations:
+      required: true
+  - type: input
+    id: next
+    attributes:
+      label: Expected next action and response needed by (UTC)
+      placeholder: "answer on this issue by 2026-11-07 12:00 UTC; meanwhile I work on #27"
+    validations:
+      required: true
