@@ -31,7 +31,8 @@
 ## Secret scanning and dependency audit (#11)
 
 - **What runs:** every PR and every push to `main` runs two CI jobs:
-  - `secrets` runs gitleaks v8.30.1 over the **full git history**. The binary's sha256 is pinned in `ci.yml`, and
+  - `secrets` runs gitleaks v8.30.1 over the **full history of the commit under test** (the PR's merge commit, or
+    `main`), not other branches, so one branch's finding can't block unrelated PRs. The binary's sha256 is pinned in `ci.yml`, and
     findings are redacted in the log.
   - `audit` runs `pnpm audit --audit-level high`.
 - **Why not GitHub's built-ins:** secret scanning, push protection and `dependency-review-action` need paid GitHub

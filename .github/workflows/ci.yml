@@ -53,8 +53,11 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tgz" | sha256sum --check --strict
           tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
-      - name: Scan the full git history
-        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --no-banner --exit-code 1 .'
+      # Scan every commit reachable from the commit under test (the PR merge commit, or main),
+      # NOT --all: gitleaks defaults to `git log --all`, and with fetch-depth 0 that included other
+      # branches, so one branch's finding failed every PR (#11 follow-up).
+      - name: Scan the history of the commit under test
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --no-banner --exit-code 1 --log-opts="--full-history HEAD" .'
 
   # Dependency audit (#11): the free stand-in for dependency-review. It fails on high or critical
   # advisories in the lockfile.
