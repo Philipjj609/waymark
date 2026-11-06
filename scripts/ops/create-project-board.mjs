@@ -74,21 +74,17 @@ const TEXTS = [
   "Blocked reason",
 ];
 
-// Point-in-time progress notes keyed by issue/PR number (edit when re-syncing; issues stay the source of truth).
-const PROGRESS = {
-  7: "PR #37 reviewed (REV-001); CI green; awaiting owner merge approval",
-  37: "Reviewed; R-1/R-2 fixed; CI green; awaiting owner merge approval",
-  38: "PR #39 open, stacked on #37; CI green",
-  39: "Stacked on #37; retarget to main after #37 merges",
-  8: "Board created and synced (users/Philipjj609/projects/2); branch protection on main",
+// Fields maintained by people/agents while working. Sync fills them only when EMPTY (or when
+// they still hold a previous auto-generated value), so a re-sync never overwrites a claim,
+// a branch name, a reviewer or a progress note.
+const TEAM_FIELDS = new Set(["Agent", "Peer reviewer", "Branch", "Latest progress", "Next action"]);
+const AUTO_NEXT = {
+  Blocked: "Resolve blocker",
+  Ready: "Claim (docs/process/task-claiming.md)",
+  Triage: "Waiting on prerequisites; becomes Ready when they close",
 };
-const AGENTS = {
-  7: "Claude (lead)",
-  37: "Claude (lead)",
-  38: "Claude (lead)",
-  39: "Claude (lead)",
-  8: "Claude (lead)",
-};
+const AUTO_VALUES = new Set(Object.values(AUTO_NEXT));
+const keyOf = (name) => name[0].toLowerCase() + name.slice(1); // gh item-list JSON key
 
 function planFor(item) {
   const labels = item.labels.map((l) => l.name);
@@ -106,20 +102,13 @@ function planFor(item) {
     Phase: phaseIdx !== undefined ? SELECTS.Phase[Number(phaseIdx)] : "",
     Track: labels.find((l) => l.startsWith("track:"))?.slice(6) ?? "",
     WP: /^\[([^\]]+)\]/.exec(item.title)?.[1] ?? "",
-    Agent: AGENTS[item.number] ?? "",
+    Agent: "",
     "Peer reviewer": "",
     "Depends on": grab(/\*\*Depends on:\*\*\s*([^\n]+)/).replace(/\s*·.*$/, ""),
     Branch: item.headRefName ?? "",
     "Related ADR/Drive": grab(/\*\*Related ADRs \/ Drive docs:\*\*\s*([^\n]+)/),
-    "Latest progress": PROGRESS[item.number] ?? "",
-    "Next action":
-      status === "Blocked"
-        ? "Resolve blocker"
-        : status === "Ready"
-          ? "Claim (docs/process/task-claiming.md)"
-          : status === "Triage"
-            ? "Waiting on prerequisites; becomes Ready when they close"
-            : "",
+    "Latest progress": "",
+    "Next action": AUTO_NEXT[status] ?? "",
     "Blocked reason": grab(/>\s*\*\*BLOCKED:\*\*\s*([^\n]+)/),
   };
 }
@@ -231,6 +220,20 @@ const byName = Object.fromEntries(fields.map((f) => [f.name, f]));
 
 // 3. Items
 const projectId = ghJson(["project", "view", num, "--owner", OWNER, "--format", "json"]).id;
+// Current values, so team-maintained fields are never overwritten.
+const current = new Map(
+  ghJson([
+    "project",
+    "item-list",
+    num,
+    "--owner",
+    OWNER,
+    "--limit",
+    "500",
+    "--format",
+    "json",
+  ]).items.map((i) => [i.content?.url, i]),
+);
 for (const it of items) {
   const added = ghJson([
     "project",
@@ -244,8 +247,14 @@ for (const it of items) {
     "json",
   ]);
   const plan = planFor(it);
+  const existingItem = current.get(it.url) ?? {};
   for (const [name, value] of Object.entries(plan)) {
     if (!value) continue;
+    if (TEAM_FIELDS.has(name)) {
+      const have = existingItem[keyOf(name)];
+      if (have && !AUTO_VALUES.has(have)) continue; // a person/agent wrote this: keep it
+      if (have === value) continue;
+    }
     const f = byName[name];
     if (!f) continue;
     const args = [
