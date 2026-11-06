@@ -13,6 +13,11 @@ export interface TutorProvider {
   readonly id: string;
   /** Configured model id, or null for the fake. Never hard-coded in product code. */
   readonly modelId: string | null;
+  /**
+   * True for test implementations (the deterministic fake). Their lessons are labelled
+   * "TEST STAND-IN" in provenance so no UI or reviewer can mistake them for real AI output.
+   */
+  readonly testStandIn: boolean;
   complete(request: TutorRequest, options: { readonly signal: AbortSignal }): Promise<string>;
 }
 

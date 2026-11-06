@@ -18,6 +18,7 @@ export type FakeBehavior =
 export class FakeTutorProvider implements TutorProvider {
   readonly id = "fake";
   readonly modelId = null;
+  readonly testStandIn = true;
   calls: TutorRequest[] = [];
 
   /** `script[i]` is the behaviour of call i; the last entry repeats. */

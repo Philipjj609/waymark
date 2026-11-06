@@ -72,7 +72,12 @@ export async function explainOutcome(input: {
 }): Promise<LessonResponse> {
   const ctx = buildTutorContext(input);
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const meta = { model: input.provider.modelId };
+  // Test implementations are labelled in provenance, never presented as a real model (owner, 6 Nov).
+  const meta = {
+    model: input.provider.testStandIn
+      ? `TEST STAND-IN: ${input.provider.id} (not an AI model)`
+      : input.provider.modelId,
+  };
 
   let errors: ValidationFailure["errors"] | undefined;
   for (const stage of ["generate", "repair"] as const) {

@@ -233,9 +233,7 @@ describe("providers", () => {
     );
     expect(out).toBe("{}");
     expect(seen?.url).toBe("https://example.test/v1/chat/completions");
-    expect(((seen?.init ?? {}).headers as Record<string, string>).authorization).toBe(
-      "Bearer test-key",
-    );
+    expect((seen?.init?.headers as Record<string, string>).authorization).toBe("Bearer test-key");
     expect(JSON.parse(String(seen?.init.body)).model).toBe("configured-model");
   });
 
@@ -267,5 +265,70 @@ describe("providers", () => {
       timeoutMs: 30000,
     });
     expect(LessonResponseSchema.safeParse(lesson).success).toBe(true);
+  });
+});
+
+describe("owner conditions (6 Nov): stand-in labelling and rate limits", () => {
+  it("lessons from the fake are labelled TEST STAND-IN in provenance, never as a real model", async () => {
+    const lesson = await run(new FakeTutorProvider(["valid"]));
+    expect(lesson.provenance.generator).toBe("MODEL");
+    expect(lesson.provenance.model).toMatch(/^TEST STAND-IN: fake \(not an AI model\)$/);
+    expect(new FakeTutorProvider().testStandIn).toBe(true);
+  });
+
+  it("a 429 falls back, then the provider cools down for Retry-After without calling the API", async () => {
+    let clock = 1_000_000;
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response("slow down", { status: 429, headers: { "retry-after": "20" } });
+    }) as unknown as typeof fetch;
+    const provider = new NebiusTutorProvider({
+      apiKey: "k",
+      model: "configured-model",
+      baseUrl: "https://x.test/v1",
+      fetchImpl,
+      now: () => clock,
+    });
+    const s = scenario();
+    const ask = () =>
+      explainOutcome({ snapshot: s.snap, events: s.events, learnerState: s.learner, provider });
+
+    const first = await ask();
+    expect(first.provenance.generator).toBe("REVIEWED_STATIC");
+    expect(calls).toBe(1);
+
+    clock += 19_000; // still inside Retry-After
+    const second = await ask();
+    expect(second.provenance.generator).toBe("REVIEWED_STATIC");
+    expect(calls).toBe(1); // no request while cooling down
+
+    clock += 2_000; // past Retry-After
+    await ask();
+    expect(calls).toBe(2);
+    expect(LessonResponseSchema.safeParse(second).success).toBe(true);
+  });
+
+  it("a 503 without Retry-After cools down for the default 30 s", async () => {
+    let clock = 0;
+    let calls = 0;
+    const provider = new NebiusTutorProvider({
+      apiKey: "k",
+      model: "m",
+      baseUrl: "https://x.test/v1",
+      fetchImpl: (async () => {
+        calls += 1;
+        return new Response("down", { status: 503 });
+      }) as unknown as typeof fetch,
+      now: () => clock,
+    });
+    const req = { stage: "generate" as const, system: "", user: "" };
+    const signal = new AbortController().signal;
+    await expect(provider.complete(req, { signal })).rejects.toThrow(/^nebius http 503$/);
+    clock = 29_999;
+    await expect(provider.complete(req, { signal })).rejects.toThrow(/cooling down/);
+    clock = 30_001;
+    await expect(provider.complete(req, { signal })).rejects.toThrow(/^nebius http 503$/);
+    expect(calls).toBe(2);
   });
 });
