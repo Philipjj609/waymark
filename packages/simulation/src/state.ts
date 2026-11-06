@@ -13,6 +13,7 @@ import type {
   Money,
   Obligation,
   ObligationId,
+  ProviderOperationId,
   ScheduleId,
   WorldDay,
   WorldId,
@@ -44,6 +45,19 @@ export interface IncomeRule {
   readonly label: string;
   /** True when the amount is already net of fictional withholding (no second deduction, T15). */
   readonly isNet: boolean;
+}
+
+/**
+ * Fictional cash earmarked for an in-flight PayPal SANDBOX checkout (ADR-0008 step 1). Not an
+ * expense and never a journal: it only lowers the entity's available cash, so nothing else can
+ * spend the money the verified capture will settle with. One active operation per obligation.
+ */
+export interface Reservation {
+  readonly obligationId: ObligationId;
+  readonly operationId: ProviderOperationId;
+  readonly entityId: EntityId;
+  readonly amount: Money;
+  readonly sinceDay: WorldDay;
 }
 
 export type ScheduledWork =
@@ -80,6 +94,8 @@ export interface WorldState {
   readonly incomes: Readonly<Record<string, IncomeRule>>;
   readonly schedule: readonly ScheduledItem[];
   readonly blocking: readonly BlockingDecision[];
+  /** obligationId → its active sandbox checkout reservation (the in-flight lock, ADR-0008). */
+  readonly reservations: Readonly<Record<string, Reservation>>;
   readonly ledger: Ledger;
   readonly events: readonly DomainEvent[];
   readonly headHash: string;

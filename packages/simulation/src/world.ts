@@ -332,6 +332,7 @@ export function createWorld(config: WorldConfig): WorldState {
     incomes,
     schedule,
     blocking: [],
+    reservations: {},
     ledger,
     events,
     headHash,
@@ -346,15 +347,31 @@ export function createWorld(config: WorldConfig): WorldState {
   };
 }
 
+/**
+ * Fictional cash an entity can still spend: ledger cash minus its sandbox-checkout reservations.
+ * Every spending path (pay, purchase, provider settlement) checks this, never raw cash, so a
+ * reservation can't be spent twice and never drives cash below zero (ADR-0008, T11).
+ */
+export function availableCash(state: WorldState, entityId: EntityId): Money {
+  const cash = state.ledger.balance(entityId, "ASSET:Cash", state.currency);
+  let reserved = 0;
+  for (const r of Object.values(state.reservations)) {
+    if (r.entityId === entityId) reserved += r.amount.amountMinor;
+  }
+  return { amountMinor: cash.amountMinor - reserved, currency: cash.currency };
+}
+
 /** Read model for the UI (`sim.snapshot.v1`). Derived only from authoritative state. */
 export function snapshot(state: WorldState): WorldSnapshot {
-  const balances = Object.keys(state.entities)
-    .sort()
-    .flatMap((entityId) =>
-      state.ledger
-        .trialBalance(entityId as EntityId, state.currency)
-        .map((r) => ({ entityId: entityId as EntityId, account: r.account, balance: r.balance })),
-    );
+  const entityIds = Object.keys(state.entities).sort(compareCodeUnits) as EntityId[];
+  const reservations = Object.values(state.reservations).sort((a, b) =>
+    compareCodeUnits(a.obligationId, b.obligationId),
+  );
+  const balances = entityIds.flatMap((entityId) =>
+    state.ledger
+      .trialBalance(entityId, state.currency)
+      .map((r) => ({ entityId, account: r.account, balance: r.balance })),
+  );
   return {
     schemaVersion: "sim.snapshot.v1",
     worldId: state.worldId,
@@ -369,7 +386,18 @@ export function snapshot(state: WorldState): WorldSnapshot {
       compareCodeUnits(a.documentId, b.documentId),
     ),
     assets: [...state.assets],
-    blockingDecisions: [...state.blocking],
+    // While a sandbox checkout is in flight only DEFER is offered: paying again or starting a
+    // second checkout would be refused with PAYMENT_IN_FLIGHT (ADR-0008 "one payment path").
+    blockingDecisions: state.blocking.map((b) =>
+      state.reservations[b.obligationId]
+        ? { ...b, options: b.options.filter((o) => o === "DEFER_OBLIGATION") }
+        : { ...b, options: [...b.options] },
+    ),
+    reservations: reservations.map((r) => ({ ...r })),
+    availableCash: entityIds.map((entityId) => ({
+      entityId,
+      amount: availableCash(state, entityId),
+    })),
     playerActorId: state.playerActorId,
     eventCount: state.events.length,
     stateHash: state.headHash,
