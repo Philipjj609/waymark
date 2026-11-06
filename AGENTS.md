@@ -30,16 +30,17 @@ _intent_. Then open an issue labelled `type:reconciliation` to make them agree. 
 2. **Identity check:** compare `identityVersion` in `config/project-identity.json` with GOV-001 in Drive.
    If they differ, stop identity-related work and escalate. Other work may continue.
 3. **Read the live state, not your memory:** your issue (body, **latest handoff comment** and everything after it),
-   the board, open PRs touching your area, `docs/contracts/CHANGELOG.md`, linked ADRs, and recent Drive decisions
-   (`12 / 07 — Decisions & Announcements`).
+   the board, open PRs touching your area, `docs/contracts/CHANGELOG.md`, linked ADRs, and **`docs/ANNOUNCEMENTS.md`
+   entries newer than your last handoff**. Answer open requests addressed to you (`pnpm session:start` lists them).
 4. **Reconcile:** what merged since the last handoff (`git log origin/main --since=<handoff time>`)? Compare your
    branch with `origin/main` both ways. If contracts changed, rebase before continuing.
 5. **Baseline:** `git fetch && git switch <your branch>` (or create it, see §4), `pnpm install`, `pnpm verify`.
    If baseline is red _before_ your change, record it on the issue. Do not build on red.
 6. **Claim exclusively** (new work only): follow `docs/process/task-claiming.md`. Check prerequisites and that
-   nobody owns it; assign your human supervisor; set In Progress; post the claim comment
-   (`docs/handoffs/CLAIM_TEMPLATE.md`); **re-check for an earlier claim right before coding**. Never silently
-   duplicate a claimed task.
+   nobody holds an _active_ claim; assign your human supervisor; label `status:in-progress`; post the claim comment
+   (`docs/handoffs/CLAIM_TEMPLATE.md`) with your unique agent id `<tool>@<human>/<worktree>#<session>`
+   (`<session>` = 4 random hex chars); **re-check for an earlier claim right before coding**. Never silently
+   duplicate a claimed task. PRs say `Refs #<n>`, never `Closes`.
 
 A fresh agent with no chat history must be able to do all of the above from GitHub alone. If it can't,
 the previous session's handoff was incomplete: say so on the issue.
@@ -133,3 +134,15 @@ change contracts or architecture, or touch files outside your declared scope. Pr
 
 Humans onboard with `docs/process/onboarding.md`. A message is received only when the recipient replies. Drive
 edits and mentions notify nobody automatically.
+
+## 12. Communication (OPS-002, `docs/process/communication.md`)
+
+- Every coordination comment starts with `[TYPE] from <agent id> (human: @<h>) · re #<n> · to: <who> · blocking: yes|no · authority: D0–D4`.
+  Types: QUESTION, ANSWER, ACK, PROPOSAL, REVIEW-REQUEST, DEPENDENCY, BLOCKER, HANDOFF, DECISION-REQUEST, INFO.
+- Ask the owner of another issue **on that issue**; use the "Agent request" form when no issue fits. Owner decisions
+  (D3): label `needs-decision`, assign @Philipjj609, block only the dependent work.
+- A promise is not delivery: a dependency counts as available only when the producer posts the merged commit/PR and evidence.
+- Nobody treats silence as agreement. Important requests need an explicit `[ACK]`.
+- Check messages at session start, at milestones and before a PR. While waiting, a light check every 15–30 min at
+  most; never continuous model polling. Near a usage limit: push and post the handoff first.
+- Significant changes are announced in `docs/ANNOUNCEMENTS.md` (+ an Announcement issue). Codex specifics: `docs/process/codex.md`.

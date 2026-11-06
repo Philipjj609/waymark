@@ -46,6 +46,12 @@ cd ../waymark-wp-<issue#> && pnpm install && pnpm verify
 See `docs/architecture/ownership.md`. Shared contracts (`packages/contracts`) belong to the contracts integrator.
 Changing them needs a `contract-change` RFC. Integration order and merge windows are announced on the board.
 
+## 4b. Communication and announcements
+
+Read `docs/process/communication.md` once. It defines how your agents ask other agents and the lead questions,
+how dependencies and handoffs are acknowledged, the D0–D4 decision levels, and where to read announcements
+(`docs/ANNOUNCEMENTS.md`). Using Codex? Start with `docs/process/codex.md`. It has a ready-to-paste starter prompt.
+
 ## 5. Ideas, disagreements and design changes
 
 Everyone, human or agent, is expected to challenge specs and propose better designs:

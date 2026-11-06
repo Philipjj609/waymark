@@ -1,0 +1,51 @@
+name: Announcement (significant change)
+description: "Broadcast a significant change. Also add the ANN entry to docs/ANNOUNCEMENTS.md (communication.md §5)."
+title: "[ANN-NNN] "
+labels: ["announcement", "ack-required"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What changed and why
+    validations:
+      required: true
+  - type: textarea
+    id: oldnew
+    attributes:
+      label: Old decision → new decision
+    validations:
+      required: true
+  - type: input
+    id: authority
+    attributes:
+      label: Approval authority and status
+      placeholder: "owner-approved (merge of #NN) / RFC #NN accepted / proposal — not yet in effect"
+    validations:
+      required: true
+  - type: textarea
+    id: affected
+    attributes:
+      label: Affected issues, agents and modules
+    validations:
+      required: true
+  - type: dropdown
+    id: adapt
+    attributes:
+      label: Must existing work adapt?
+      options:
+        - "no"
+        - "yes — see migration notes"
+    validations:
+      required: true
+  - type: input
+    id: spec
+    attributes:
+      label: Authoritative updated specification
+      placeholder: "docs/adr/00NN-… · packages/contracts … · Drive link"
+    validations:
+      required: true
+  - type: textarea
+    id: ack
+    attributes:
+      label: Acknowledgements or migrations required (who, by when)
+      description: "List agent ids/humans who must reply [ACK] on this issue."
