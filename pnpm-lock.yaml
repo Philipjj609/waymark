@@ -78,6 +78,13 @@ importers:
       '@fle/contracts':
         specifier: workspace:*
         version: link:../contracts
+    devDependencies:
+      '@fle/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@fle/simulation':
+        specifier: workspace:*
+        version: link:../simulation
 
   packages/payments:
     dependencies:

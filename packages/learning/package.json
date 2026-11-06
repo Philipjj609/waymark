@@ -3,11 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Concept graph, seed curriculum and validators. Learner model and tutor land in WP-04.",
+  "description": "Concept graph, seed curriculum, simulation→learning evidence bridge and learner state.",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
     "@fle/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@fle/domain": "workspace:*",
+    "@fle/simulation": "workspace:*"
   }
 }
