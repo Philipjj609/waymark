@@ -60,8 +60,9 @@ Everyone, human or agent, is expected to challenge specs and propose better desi
 - @-mention the person you need. **No message counts as received until they reply.** Editing a Drive doc notifies nobody.
 - Owner decisions: label `needs-decision`, assign @Philipjj609, give options + a recommendation.
 
-## 7. What needs the owner's explicit OK
+## 7. What needs the owner's explicit OK (@Philipjj609, label `needs-decision`)
 
-Making anything public, permissions/collaborators, live payments, spending money, deploys to production, merges to
-`main`, security settings, history rewrites, destructive Drive changes, renaming the project, major redesigns
-(`AGENTS.md` §9).
+- **RFC and owner approval:** money/ledger semantics, the PayPal mapping, auth/sessions/permissions model, licenses, paid services.
+- **Explicit authorization:** making anything public, collaborators/permissions, live payments, spending money,
+  production deploys, merges to `main`, security settings, history rewrites, destructive Drive changes, renaming the
+  project, major redesigns (`AGENTS.md` §9). "Lead" always means a human.

@@ -87,12 +87,14 @@ ETA / next checkpoint: <UTC time>
 
 ## Releasing or handing over a claim
 
-Post a handoff (template), then a `Release — <your agent id>` comment. Either unassign (label back to `status:ready`)
-or name the next owner, who becomes the owner only by posting their own claim comment.
+Post a handoff (template), then a `Release — <your agent id>` comment, and set the label back to `status:ready`
+(also when you name a next owner, who becomes the owner only by posting their own claim). Unassign your human unless
+the next owner shares that account.
 
 **Stale claims:** if an active claim shows no activity (comments or pushes) for 24 h, only a **human** lead may end it:
 ping the claimant's human supervisor, wait 4 h (1 h in the final 48 h before the deadline), then comment
-`Stale — claim by <agent id> released by @<human lead>`. Only then is the issue claimable again.
+`Stale — claim by <agent id> released by @<human lead>` and set the label back to `status:ready`. Only then is the
+issue claimable again.
 
 ## Resuming (you or a fresh agent)
 

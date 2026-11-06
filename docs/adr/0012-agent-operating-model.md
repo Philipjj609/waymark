@@ -18,7 +18,8 @@ contracts under each other, unreviewed "done" claims, and state that only exists
    architecture or shared contracts, or touch files outside the parent's scope. The parent integrates their results
    and writes the handoff.
 3. **Authority tiers** (AGENTS.md §9; "lead" always means a human — agents recommend, humans decide): routine edits inside the claimed scope are free; shared contracts, architecture
-   and other owners' modules need an RFC and review; visibility, permissions, live money, destructive Drive or history
+   and other owners' modules need an RFC and review; money/ledger semantics, the PayPal mapping, auth, licenses and
+   paid services need an RFC **and** owner approval; visibility, permissions, live money, destructive Drive or history
    changes, security settings and merges need explicit human authorization.
 4. **GitHub tracks work; Drive tracks thinking.** Drive history is preserved: revise by creating a new versioned
    document (`…v2`) and linking the old one, never by deleting or overwriting.

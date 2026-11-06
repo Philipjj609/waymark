@@ -89,13 +89,13 @@ const AUTO_VALUES = new Set([...Object.values(AUTO_NEXT), "Claim (AGENTS.md §2)
 // Exactly one status label should exist; if several do, this precedence decides (and we warn).
 const STATUS_PRECEDENCE = [
   "status:blocked",
+  "status:cancelled",
+  "status:verified",
   "status:in-review",
   "status:in-progress",
   "status:ready",
   "status:triage",
   "status:inbox",
-  "status:verified",
-  "status:cancelled",
 ];
 const LIMITS = { issues: 1000, prs: 500, items: 2000, projects: 100 };
 const keyOf = (name) => name[0].toLowerCase() + name.slice(1); // gh item-list JSON key
@@ -275,20 +275,19 @@ const byName = Object.fromEntries(fields.map((f) => [f.name, f]));
 // 3. Items
 const projectId = ghJson(["project", "view", num, "--owner", OWNER, "--format", "json"]).id;
 // Current values, so team-maintained fields are never overwritten.
-const current = new Map(
-  ghJson([
-    "project",
-    "item-list",
-    num,
-    "--owner",
-    OWNER,
-    "--limit",
-    String(LIMITS.items),
-    "--format",
-    "json",
-  ]).items.map((i) => [i.content?.url, i]),
-);
-if (current.size >= LIMITS.items)
+const boardItems = ghJson([
+  "project",
+  "item-list",
+  num,
+  "--owner",
+  OWNER,
+  "--limit",
+  String(LIMITS.items),
+  "--format",
+  "json",
+]).items;
+const current = new Map(boardItems.map((i) => [i.content?.url, i]));
+if (boardItems.length >= LIMITS.items)
   throw new Error("board item count reached the list limit: raise LIMITS.items before syncing");
 for (const it of items) {
   const added = ghJson([
@@ -307,7 +306,10 @@ for (const it of items) {
   for (const [name, value] of Object.entries(plan)) {
     const f0 = byName[name];
     // An earlier auto value that no longer applies (e.g. "Resolve blocker" after unblocking) is cleared.
-    if (!value && TEAM_FIELDS.has(name) && f0 && AUTO_VALUES.has(existingItem[keyOf(name)] ?? "")) {
+    const stale = TEAM_FIELDS.has(name)
+      ? AUTO_VALUES.has(existingItem[keyOf(name)] ?? "")
+      : name === "Blocked reason" && Boolean(existingItem[keyOf(name)]);
+    if (!value && f0 && stale) {
       gh([
         "project",
         "item-edit",
