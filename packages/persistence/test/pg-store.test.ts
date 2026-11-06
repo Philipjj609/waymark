@@ -134,7 +134,13 @@ describe("PgWorldStore on PGlite", () => {
     const x = mk(cmd(1), 8);
     const y = mk(cmd(2), 9);
     const commit = (v: { command: AuthorizedCommand; outcome: ReturnType<typeof execute> }) =>
-      store.commit({ worldId: cfg.worldId, owner: A, expectedVersion: s0.version, ...v });
+      store.commit({
+        worldId: cfg.worldId,
+        owner: A,
+        expectedVersion: s0.version,
+        expectedRecorded: 0,
+        ...v,
+      });
     const results = await Promise.all([commit(x), commit(y)]);
     expect(results.filter((r) => r.ok)).toHaveLength(1);
     expect(results.filter((r) => !r.ok)).toEqual([{ ok: false, reason: "CONFLICT" }]);
@@ -162,6 +168,7 @@ describe("PgWorldStore on PGlite", () => {
         worldId: cfg.worldId,
         owner: A,
         expectedVersion: s.version,
+        expectedRecorded: Object.keys(s.results).length,
         command,
         outcome,
       });
@@ -194,6 +201,7 @@ describe("PgWorldStore on PGlite", () => {
       worldId: cfg.worldId,
       owner: A,
       expectedVersion: 5,
+      expectedRecorded: 0,
       command,
       outcome,
       outbox: [{ kind: "x", payload: { a: 1 } }],
@@ -204,6 +212,7 @@ describe("PgWorldStore on PGlite", () => {
       worldId: cfg.worldId,
       owner: A,
       expectedVersion: s0.version,
+      expectedRecorded: 0,
       command,
       outcome,
       outbox: [{ kind: "paypal.capture", payload: { a: 1 } }],

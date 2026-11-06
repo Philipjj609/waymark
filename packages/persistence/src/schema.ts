@@ -22,6 +22,7 @@ export const worlds = pgTable(
     worldId: text("world_id").primaryKey(),
     ownerSessionHash: text("owner_session_hash").notNull(),
     version: integer("version").notNull(),
+    recordedCommands: integer("recorded_commands").notNull().default(0),
     config: jsonb("config").$type<WorldConfig>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

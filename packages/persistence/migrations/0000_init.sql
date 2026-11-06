@@ -4,6 +4,7 @@ CREATE TABLE "worlds" (
   "world_id" text PRIMARY KEY,
   "owner_session_hash" text NOT NULL,
   "version" integer NOT NULL CHECK ("version" >= 0),
+  "recorded_commands" integer NOT NULL DEFAULT 0 CHECK ("recorded_commands" >= 0),
   "config" jsonb NOT NULL,
   "created_at" timestamptz NOT NULL DEFAULT now()
 );

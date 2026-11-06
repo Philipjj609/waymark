@@ -41,6 +41,7 @@ export class PgWorldStore implements WorldStore {
         worldId: state.worldId,
         ownerSessionHash: owner,
         version: state.version,
+        recordedCommands: Object.keys(state.results).length,
         config,
       });
       await insertEvents(tx, state.worldId, state.events);
@@ -58,18 +59,22 @@ export class PgWorldStore implements WorldStore {
   }
 
   async commit(input: PgCommitInput): Promise<CommitOutcome> {
-    const { worldId, owner, expectedVersion, command, outcome } = input;
+    const { worldId, owner, expectedVersion, expectedRecorded, command, outcome } = input;
     return this.db.transaction(async (tx) => {
       // The version check, owner scope and row lock in one statement. A concurrent commit that
       // already moved the version leaves 0 rows here (blocked until it finishes, then re-checked).
       const updated = await tx
         .update(worlds)
-        .set({ version: outcome.state.version })
+        .set({
+          version: outcome.state.version,
+          recordedCommands: expectedRecorded + 1,
+        })
         .where(
           and(
             eq(worlds.worldId, worldId),
             eq(worlds.ownerSessionHash, owner),
             eq(worlds.version, expectedVersion),
+            eq(worlds.recordedCommands, expectedRecorded),
           ),
         )
         .returning({ worldId: worlds.worldId });
