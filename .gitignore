@@ -3,6 +3,7 @@ dist/
 coverage/
 .turbo/
 .next/
+next-env.d.ts
 *.log
 .env
 .env.*
