@@ -20,11 +20,14 @@ import {
   type Obligation,
   type ObligationId,
   OriginSchema,
+  type ProviderOperationId,
+  type VerifiedProviderEvent,
   type WorldDay,
 } from "@fle/contracts";
 import { deepFreeze, PostingError } from "@fle/domain";
 import { canonicalJson, chainHash, compareCodeUnits, sha256Hex } from "./canonical.js";
-import type { AssetState, EntityState, ScheduledItem, WorldState } from "./state.js";
+import type { AssetState, EntityState, Reservation, ScheduledItem, WorldState } from "./state.js";
+import { availableCash } from "./world.js";
 
 /** Internal rejection signal. Never escapes `execute`; converted to a CommandResult. */
 class Reject extends Error {
@@ -121,6 +124,21 @@ export class Tx {
     return this.s.ledger.balance(entityId, "ASSET:Cash", this.s.currency);
   }
 
+  /** Cash minus reservations: the only amount any spending path may use (ADR-0008, T11). */
+  available(entityId: EntityId): Money {
+    return availableCash(this.s, entityId);
+  }
+
+  reservation(id: ObligationId): Reservation | undefined {
+    return this.s.reservations[id];
+  }
+
+  /** End a reservation (consumed by settlement or released by a verified void). */
+  dropReservation(id: ObligationId): void {
+    const { [id]: _dropped, ...rest } = this.s.reservations;
+    this.s.reservations = rest;
+  }
+
   obligation(id: ObligationId): Obligation {
     const o = this.s.obligations[id];
     if (!o) throw new Reject("UNKNOWN_OBLIGATION", `no obligation ${id}`);
@@ -172,17 +190,26 @@ function settle(
 ): void {
   const due = remaining(o);
   const cash = tx.cash(o.debtorEntityId);
+  // Reserved cash belongs to an in-flight sandbox checkout; nothing else may spend it. A
+  // provider settlement drops its own reservation before calling this, so it can use it.
+  const available = tx.available(o.debtorEntityId);
   if (due.currency !== tx.s.currency || due.amountMinor <= 0) {
     throw new Reject(
       "INVALID_AMOUNT",
       `obligation ${o.obligationId} has no payable amount in ${tx.s.currency}`,
     );
   }
-  if (cash.amountMinor < due.amountMinor) {
-    throw new Reject("INSUFFICIENT_FUNDS", `cash ${cash.amountMinor} < due ${due.amountMinor}`, {
-      cashMinor: cash.amountMinor,
-      dueMinor: due.amountMinor,
-    });
+  if (available.amountMinor < due.amountMinor) {
+    throw new Reject(
+      "INSUFFICIENT_FUNDS",
+      `available cash ${available.amountMinor} < due ${due.amountMinor}`,
+      {
+        cashMinor: cash.amountMinor,
+        availableMinor: available.amountMinor,
+        reservedMinor: cash.amountMinor - available.amountMinor,
+        dueMinor: due.amountMinor,
+      },
+    );
   }
   const evt = tx.emit("OBLIGATION_SETTLED", {
     obligationId: o.obligationId,
@@ -239,7 +266,7 @@ function processDay(tx: Tx, day: WorldDay): void {
           kind: "OBLIGATION_DUE",
           obligationId: o.obligationId,
           sinceDay: day,
-          options: ["PAY_OBLIGATION", "DEFER_OBLIGATION"],
+          options: ["PAY_OBLIGATION", "DEFER_OBLIGATION", "START_PROVIDER_CHECKOUT"],
         };
         tx.s.blocking = [...tx.s.blocking, decision];
       }
@@ -259,6 +286,58 @@ function processDay(tx: Tx, day: WorldDay): void {
       ]);
     }
   }
+}
+
+function rejectIfInFlight(tx: Tx, id: ObligationId): void {
+  const r = tx.reservation(id);
+  if (r) {
+    throw new Reject(
+      "PAYMENT_IN_FLIGHT",
+      `obligation ${id} has an active PayPal sandbox checkout ${r.operationId}`,
+      { operationId: r.operationId },
+    );
+  }
+}
+
+/**
+ * Verified ORDER_VOIDED (ADR-0008 5b): the order can no longer be captured, so the earmark is
+ * released. It never settles and never posts a journal; the obligation keeps its state (and its
+ * blocking decision, if any). Deduplicated per fact, keyed by event type + provider event id so
+ * it can never collide with a capture id in the shared store.
+ */
+function releaseOnVoid(tx: Tx, ev: VerifiedProviderEvent): void {
+  const factKey = `ORDER_VOIDED:${ev.providerEventId}`;
+  if (tx.s.appliedProviderEvents.includes(factKey)) return; // redelivered void: one effect only
+  if (ev.mapping.worldId !== tx.s.worldId)
+    throw new Reject("PROVIDER_EVENT_UNMAPPED", "event maps to another world");
+  const o = tx.s.obligations[ev.mapping.obligationId];
+  if (!o) throw new Reject("PROVIDER_EVENT_UNMAPPED", `no obligation ${ev.mapping.obligationId}`);
+  const r = tx.reservation(o.obligationId);
+  if (!r || r.operationId !== ev.operationId) {
+    throw new Reject(
+      "PROVIDER_OPERATION_MISMATCH",
+      `void is for ${ev.operationId}, active checkout is ${r?.operationId ?? "none"}`,
+      { activeOperationId: r?.operationId ?? null, eventOperationId: ev.operationId },
+    );
+  }
+  if (ev.amount.currency !== r.amount.currency || ev.amount.amountMinor !== r.amount.amountMinor) {
+    throw new Reject("PROVIDER_AMOUNT_MISMATCH", "voided amount differs from the reservation", {
+      voidedMinor: ev.amount.amountMinor,
+      reservedMinor: r.amount.amountMinor,
+    });
+  }
+  tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, factKey];
+  tx.dropReservation(o.obligationId);
+  tx.emit("RESERVATION_RELEASED", {
+    obligationId: o.obligationId,
+    operationId: r.operationId,
+    entityId: r.entityId,
+    amount: r.amount,
+    reason: "ORDER_VOIDED",
+    provider: ev.provider,
+    providerEventId: ev.providerEventId,
+    verification: ev.verification,
+  });
 }
 
 type Handler = (tx: Tx, cmd: AuthorizedCommand) => void;
@@ -304,7 +383,55 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
       // which v1 does not model; refuse rather than book it as an expense.
       throw new Reject("OBLIGATION_NOT_PAYABLE", `obligation ${o.obligationId} is ${o.state}`);
     }
+    rejectIfInFlight(tx, o.obligationId);
     settle(tx, o, "FICTIONAL", {});
+  },
+
+  START_PROVIDER_CHECKOUT(tx, cmd) {
+    if (cmd.kind !== "START_PROVIDER_CHECKOUT") return;
+    const o = tx.obligation(cmd.payload.obligationId);
+    requireOwnedEntity(tx, o.debtorEntityId, cmd);
+    if (o.state !== "DUE" && o.state !== "OVERDUE") {
+      throw new Reject("OBLIGATION_NOT_PAYABLE", `obligation ${o.obligationId} is ${o.state}`);
+    }
+    rejectIfInFlight(tx, o.obligationId);
+    const due = remaining(o);
+    if (due.currency !== tx.s.currency || due.amountMinor <= 0) {
+      throw new Reject(
+        "INVALID_AMOUNT",
+        `obligation ${o.obligationId} has no payable amount in ${tx.s.currency}`,
+      );
+    }
+    // A reservation never overdraws: it must fit in cash nobody else has earmarked.
+    const available = tx.available(o.debtorEntityId);
+    if (available.amountMinor < due.amountMinor) {
+      throw new Reject(
+        "INSUFFICIENT_FUNDS",
+        `available cash ${available.amountMinor} < due ${due.amountMinor}`,
+        { availableMinor: available.amountMinor, dueMinor: due.amountMinor },
+      );
+    }
+    // Derived from the commandId, never chosen by the client: unique per world (command ids
+    // are), deterministic on replay, and the stem of the PayPal-Request-Id (ADR-0008).
+    const operationId = `pop_${cmd.commandId}` as ProviderOperationId;
+    const reservation: Reservation = {
+      obligationId: o.obligationId,
+      operationId,
+      entityId: o.debtorEntityId,
+      amount: due,
+      sinceDay: tx.s.day,
+    };
+    tx.s.reservations = { ...tx.s.reservations, [o.obligationId]: reservation };
+    // No journal: an earmark is not an expense and moves no money (ADR-0008 step 1).
+    // The blocking decision stays open on purpose: pending is not paid, so time waits for the
+    // verified capture, or for DEFER, which stays allowed while in flight (I-014).
+    tx.emit("PROVIDER_CHECKOUT_STARTED", {
+      obligationId: o.obligationId,
+      operationId,
+      entityId: o.debtorEntityId,
+      amount: due,
+      realm: "PAYPAL_SANDBOX",
+    });
   },
 
   DEFER_OBLIGATION(tx, cmd) {
@@ -332,12 +459,15 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
       throw new Reject("INVALID_AMOUNT", "cost must be positive and in the world currency");
     }
     const cash = tx.cash(entityId);
-    if (cash.amountMinor < cost.amountMinor) {
+    const available = tx.available(entityId); // reserved cash is not spendable (T11)
+    if (available.amountMinor < cost.amountMinor) {
       throw new Reject(
         "INSUFFICIENT_FUNDS",
-        `cash ${cash.amountMinor} < cost ${cost.amountMinor}`,
+        `available cash ${available.amountMinor} < cost ${cost.amountMinor}`,
         {
           cashMinor: cash.amountMinor,
+          availableMinor: available.amountMinor,
+          reservedMinor: cash.amountMinor - available.amountMinor,
           costMinor: cost.amountMinor,
         },
       );
@@ -359,8 +489,13 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
   APPLY_VERIFIED_PROVIDER_EVENT(tx, cmd) {
     if (cmd.kind !== "APPLY_VERIFIED_PROVIDER_EVENT") return;
     const ev = cmd.payload.event;
+    if (ev.eventType === "ORDER_VOIDED") {
+      releaseOnVoid(tx, ev);
+      return;
+    }
     // Type first: a refund/denial for an already-applied capture must NOT be swallowed by the
     // dedup below. Non-settling events are rejected visibly (reconciliation handles them, #22).
+    // A single CAPTURE_DENIED keeps the reservation: the buyer may retry (ADR-0008 M2).
     if (ev.eventType !== "CAPTURE_COMPLETED") {
       throw new Reject("PROVIDER_EVENT_NOT_SETTLING", `${ev.eventType} does not settle anything`);
     }
@@ -376,23 +511,45 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
         `obligation ${o.obligationId} is ${o.state}; needs reconciliation`,
       );
     }
+    // With an active checkout, only that operation's capture may consume its reservation.
+    // Without one (a late capture after a release, reconciliation) the pre-0.2.0 path applies.
+    const reservation = tx.reservation(o.obligationId);
+    if (reservation && reservation.operationId !== ev.operationId) {
+      throw new Reject(
+        "PROVIDER_OPERATION_MISMATCH",
+        `capture is for ${ev.operationId}, active checkout is ${reservation.operationId}`,
+        { activeOperationId: reservation.operationId, eventOperationId: ev.operationId },
+      );
+    }
     const due = remaining(o);
-    if (ev.amount.currency !== due.currency || ev.amount.amountMinor !== due.amountMinor) {
+    // Without partial settlement a reservation always equals the remaining amount; check both.
+    const expected = reservation?.amount ?? due;
+    if (
+      ev.amount.currency !== due.currency ||
+      ev.amount.amountMinor !== due.amountMinor ||
+      ev.amount.amountMinor !== expected.amountMinor
+    ) {
       throw new Reject(
         "PROVIDER_AMOUNT_MISMATCH",
         "captured amount differs from the mapped obligation",
         {
           capturedMinor: ev.amount.amountMinor,
           dueMinor: due.amountMinor,
+          ...(reservation ? { reservedMinor: reservation.amount.amountMinor } : {}),
         },
       );
     }
     tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, ev.providerEventId];
+    // Consume the earmark and settle in this same command (ADR-0008 5a). The reserved cash is
+    // then exactly what settle() finds available, so a reserved capture can't be INSUFFICIENT_FUNDS.
+    if (reservation) tx.dropReservation(o.obligationId);
     const applied = tx.emit("PROVIDER_SETTLEMENT_APPLIED", {
       provider: ev.provider,
       providerEventId: ev.providerEventId,
       operationId: ev.operationId,
       verification: ev.verification,
+      // Only present when a reservation was consumed, so pre-0.2.0 payloads (and hashes) are unchanged.
+      ...(reservation ? { reservationConsumed: { amount: reservation.amount } } : {}),
     });
     settle(tx, o, "PAYPAL_SANDBOX", {
       providerEventId: ev.providerEventId,
