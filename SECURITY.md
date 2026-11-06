@@ -28,6 +28,25 @@
 - To pin a new action: resolve the release tag to its commit (`gh api repos/<o>/<a>/git/ref/tags/<tag>`, and
   dereference annotated tags via `git/tags/<sha>`), then record both in the PR.
 
+## Secret scanning and dependency audit (#11)
+
+- **What runs:** every PR and every push to `main` runs two CI jobs:
+  - `secrets` runs gitleaks v8.30.1 over the **full git history**. The binary's sha256 is pinned in `ci.yml`, and
+    findings are redacted in the log.
+  - `audit` runs `pnpm audit --audit-level high`.
+- **Why not GitHub's built-ins:** secret scanning, push protection and `dependency-review-action` need paid GitHub
+  Advanced Security on private repositories. On 6 Nov the dependency-review API returned 403 for this repo, and the
+  owner declined paid services. Revisit when the repository goes public (#33): public repos get those features free.
+- **Locally:** if gitleaks is installed, run `pnpm secrets:scan` before pushing. Never paste a real secret anywhere
+  to "test" scanning. For verification, use an obviously fake value labelled FAKE.
+- **False positives:** add a narrow rule to `.gitleaks.toml` (`[extend] useDefault = true` plus an allowlist with
+  a comment explaining why). Never disable the job. A finding in history counts as an incident: see Reporting.
+- **Enforcement:** the jobs block a PR once the owner adds `secrets` (and optionally `audit`) to the required
+  checks on `main`, which is a D3 security setting. Until then a red `secrets` check must be treated as blocking.
+- **Updating gitleaks:** bump `GITLEAKS_VERSION` and `GITLEAKS_SHA256` together. Take the hash from the release's
+  `gitleaks_<v>_checksums.txt` and confirm it matches GitHub's asset digest
+  (`gh api repos/gitleaks/gitleaks/releases/tags/v<v>`).
+
 ## Reporting
 
 Private repository during development: report issues to the owner via a GitHub issue labelled

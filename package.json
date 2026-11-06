@@ -17,6 +17,7 @@
     "contracts:generate": "tsx packages/contracts/scripts/generate-json-schema.ts",
     "contracts:check": "tsx packages/contracts/scripts/generate-json-schema.ts --check",
     "demo": "tsx packages/simulation/scripts/demo.ts",
+    "secrets:scan": "gitleaks git --redact --verbose .",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm contracts:check"
   },
   "devDependencies": {
