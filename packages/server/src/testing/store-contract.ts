@@ -58,6 +58,7 @@ export function worldStoreContract(
           worldId: config.worldId,
           owner: A,
           expectedVersion: s0.version,
+          expectedRecorded: Object.keys(s0.results).length,
           command: c1,
           outcome: o1,
         }),
@@ -69,11 +70,49 @@ export function worldStoreContract(
           worldId: config.worldId,
           owner: A,
           expectedVersion: s0.version,
+          expectedRecorded: Object.keys(s0.results).length,
           command: c2,
           outcome: o2,
         }),
       ).toEqual({ ok: false, reason: "CONFLICT" });
       expect((await store.load(config.worldId, A))?.version).toBe(o1.state.version);
+    });
+
+    it("a recorded rejection (version unchanged) is not overwritten by a concurrent commit", async () => {
+      const store = await makeStore();
+      const config = fresh("rej");
+      const s0 = createWorld(config);
+      await store.create({ owner: A, config, state: s0 });
+      // Rejected (bill not due yet) but RECORDED: state changes, version does not.
+      const rej = playerCommand(s0, cmd(1), {
+        kind: "PAY_OBLIGATION",
+        payload: { obligationId: "obl_phone_d8" as never },
+      });
+      const oRej = execute(s0, rej);
+      expect(oRej.result.status).toBe("REJECTED");
+      expect(oRej.state.version).toBe(s0.version);
+      const ok = await store.commit({
+        worldId: config.worldId,
+        owner: A,
+        expectedVersion: s0.version,
+        expectedRecorded: Object.keys(s0.results).length,
+        command: rej,
+        outcome: oRej,
+      });
+      expect(ok).toEqual({ ok: true });
+      // A second request computed from s0 (it never saw the rejection) must now CONFLICT.
+      const adv = playerCommand(s0, cmd(2), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } });
+      const oAdv = execute(s0, adv);
+      const late = await store.commit({
+        worldId: config.worldId,
+        owner: A,
+        expectedVersion: s0.version,
+        expectedRecorded: Object.keys(s0.results).length,
+        command: adv,
+        outcome: oAdv,
+      });
+      expect(late).toEqual({ ok: false, reason: "CONFLICT" });
+      expect(Object.keys((await store.load(config.worldId, A))?.results ?? {})).toContain(cmd(1));
     });
 
     it("refuses commits from another owner exactly like a missing world", async () => {
@@ -87,6 +126,7 @@ export function worldStoreContract(
         worldId: config.worldId,
         owner: B,
         expectedVersion: s0.version,
+        expectedRecorded: Object.keys(s0.results).length,
         command: c,
         outcome: o,
       });
@@ -94,6 +134,7 @@ export function worldStoreContract(
         worldId: "wld_missing" as WorldId,
         owner: A,
         expectedVersion: 0,
+        expectedRecorded: 0,
         command: c,
         outcome: o,
       });
@@ -121,6 +162,7 @@ export function worldStoreContract(
               worldId: config.worldId,
               owner: A,
               expectedVersion: s.version,
+              expectedRecorded: Object.keys(s.results).length,
               command: c,
               outcome: o,
             })

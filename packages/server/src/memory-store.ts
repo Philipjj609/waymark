@@ -2,6 +2,9 @@ import type { AuthorizedCommand, WorldId } from "@fle/contracts";
 import type { WorldConfig, WorldState } from "@fle/simulation";
 import type { CommitInput, CommitOutcome, SessionHash, WorldStore } from "./store.js";
 
+/** Commands recorded in a state: the optimistic-concurrency token next to the version. */
+export const recorded = (s: WorldState): number => Object.keys(s.results).length;
+
 interface Row {
   readonly owner: SessionHash;
   readonly config: WorldConfig;
@@ -40,7 +43,11 @@ export class InMemoryWorldStore implements WorldStore {
   async commit(input: CommitInput): Promise<CommitOutcome> {
     const row = this.rows.get(input.worldId);
     if (!row || row.owner !== input.owner) return { ok: false, reason: "NOT_FOUND" };
-    if (row.state.version !== input.expectedVersion) return { ok: false, reason: "CONFLICT" };
+    if (
+      row.state.version !== input.expectedVersion ||
+      recorded(row.state) !== input.expectedRecorded
+    )
+      return { ok: false, reason: "CONFLICT" };
     row.state = input.outcome.state;
     row.commands.push(input.command);
     return { ok: true };

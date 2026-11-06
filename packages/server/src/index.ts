@@ -1,5 +1,5 @@
 /** @fle/server: the server application seam (#74). Server-only: never import from browser code. */
-export { InMemoryWorldStore } from "./memory-store.js";
+export { InMemoryWorldStore, recorded } from "./memory-store.js";
 export {
   createGuestWorld,
   getWorld,

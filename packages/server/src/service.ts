@@ -101,6 +101,7 @@ export async function submitPlayerCommand(
       worldId: state.worldId,
       owner,
       expectedVersion: state.version,
+      expectedRecorded: Object.keys(state.results).length,
       command,
       outcome,
     });
