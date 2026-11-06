@@ -92,3 +92,23 @@ Shared-file hot spot: `packages/contracts` — only via `contract-change` issues
 Must for submission: 3.1 slice working end to end with one verified sandbox capture and one validated lesson;
 deploy or clear run instructions; video; public repo. Everything else is ranked on the board and may slip to P6
 without breaking the architecture.
+
+## Vertical slice v1 (critical path after #37 merges)
+
+Goal: **browser → guest session → persistent economy → decision → contextual AI learning → verified sandbox payment → consequence**,
+with the full architecture intact (every step goes through the real contracts, engine and verification).
+
+| Step                                              | Issue | Prerequisite                     | Parallel with                     |
+| ------------------------------------------------- | ----- | -------------------------------- | --------------------------------- |
+| Persistence adapter (event store, outbox, PGlite) | #9    | #37                              | #10, #12, #13, #17, #23, #24, #27 |
+| Web shell + guest session + `/api/commands`       | #10   | #37 (decisions recorded in #2)   | #9                                |
+| Reservation lifecycle (contract-change)           | #12   | #37                              | #9, #10                           |
+| PayPal sandbox client + checkout                  | #21   | #12, #5 (sandbox credentials)    | #18                               |
+| Webhooks + reconciliation worker                  | #22   | #21, #9                          | #19                               |
+| Evidence bridge + learner state                   | #18   | #17                              | #21                               |
+| AI boundary + Nebius + validators                 | #19   | #18, #6 (key + capability probe) | #22                               |
+| World screens (minimal, on chosen direction)      | #25   | #23, #24, #10                    | #19, #22                          |
+| Lesson renderer                                   | #26   | #24                              | #25                               |
+| E2E slice                                         | #29   | all of the above                 | —                                 |
+
+Merge order for the slice: #9 → #12 → #10 → #21 → #22, while #17 → #18 → #19 and #23/#24 → #25/#26 run in parallel.

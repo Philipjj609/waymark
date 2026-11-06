@@ -1,5 +1,5 @@
 <!-- AGENTS.md §4. Unverified claims make this PR "In Review", never "Done". -->
-**Closes:** # · **Work package:** · **Depends on:** none | #
+**Refs:** # · **Work package:** · **Depends on:** none | #
 
 ### Summary
 

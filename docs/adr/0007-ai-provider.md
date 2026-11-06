@@ -18,6 +18,10 @@ context (concept ids, reviewed facts, world event refs) and return **structured*
 
 The boundary keeps switching providers cheap.
 
+**Capability gate (owner, 6 Nov).** No model id is used in product code until the #6 probe has verified, on the
+owner's account: the model is listed by the API, structured output parses against `LessonResponseSchema` at an
+acceptable rate, and latency fits the tutor budget. Results are recorded on #6.
+
 **Open.**
 - Quota and model availability on the owner's Nebius account are unverified.
 - The latency budget for tutor replies.

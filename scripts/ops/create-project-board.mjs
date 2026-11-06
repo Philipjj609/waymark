@@ -6,6 +6,15 @@
 //   node scripts/ops/create-project-board.mjs --dry-run  # print the plan, no project API calls
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import {
+  decideField,
+  keyOf,
+  planFor,
+  SELECTS,
+  STATUS,
+  statusFor,
+  TEXTS,
+} from "./board-sync-rules.mjs";
 
 const OWNER = "Philipjj609";
 const REPO = `${OWNER}/waymark`;
@@ -18,90 +27,7 @@ const gh = (args) =>
   execFileSync(GH, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
 const ghJson = (args) => JSON.parse(gh(args));
 
-const STATUS = [
-  ["Inbox", "GRAY", "New, not yet triaged"],
-  ["Triage", "PURPLE", "Being clarified or sized"],
-  ["Ready", "GREEN", "Clear, unblocked, can be claimed"],
-  ["In Progress", "YELLOW", "Claimed; branch exists"],
-  ["Blocked", "RED", "Blocked: see Blocked reason"],
-  ["In Review", "BLUE", "PR open, awaiting review/CI"],
-  ["Verified", "PINK", "Merged; acceptance evidence checked"],
-  ["Done", "GREEN", "Closed with evidence"],
-  ["Cancelled", "GRAY", "Will not be done"],
-];
-const LABEL_TO_STATUS = {
-  "status:inbox": "Inbox",
-  "status:triage": "Triage",
-  "status:ready": "Ready",
-  "status:in-progress": "In Progress",
-  "status:blocked": "Blocked",
-  "status:in-review": "In Review",
-  "status:verified": "Verified",
-};
-const SELECTS = {
-  Priority: ["P0", "P1", "P2", "P3"],
-  Phase: [
-    "P0 Discovery",
-    "P1 Foundation",
-    "P2 Parallel",
-    "P3 Integration",
-    "P4 Quality",
-    "P5 Release",
-    "P6 Long-term",
-  ],
-  Track: [
-    "governance",
-    "foundation",
-    "economy",
-    "scenario",
-    "learning-ai",
-    "payments",
-    "ux",
-    "qa-infra",
-    "release",
-    "long-term",
-  ],
-};
-const TEXTS = [
-  "WP",
-  "Agent",
-  "Reviewer",
-  "Depends on",
-  "Branch",
-  "Related ADR/Drive",
-  "Latest progress",
-  "Next action",
-  "Blocked reason",
-];
-
-function planFor(item) {
-  const labels = item.labels.map((l) => l.name);
-  const status =
-    item.state === "CLOSED" || item.state === "MERGED"
-      ? "Done"
-      : (labels.map((l) => LABEL_TO_STATUS[l]).find(Boolean) ??
-        (item.isPR ? "In Review" : "Inbox"));
-  const body = item.body ?? "";
-  const grab = (re) => re.exec(body)?.[1]?.trim() ?? "";
-  const phaseIdx = /^P(\d)/.exec(item.milestone?.title ?? "")?.[1];
-  return {
-    Status: status,
-    Priority: labels.find((l) => l.startsWith("priority:"))?.slice(9) ?? "",
-    Phase: phaseIdx !== undefined ? SELECTS.Phase[Number(phaseIdx)] : "",
-    Track: labels.find((l) => l.startsWith("track:"))?.slice(6) ?? "",
-    WP: /^\[([^\]]+)\]/.exec(item.title)?.[1] ?? "",
-    Agent: "",
-    Reviewer: "",
-    "Depends on": grab(/\*\*Depends on:\*\*\s*([^\n]+)/).replace(/\s*·.*$/, ""),
-    Branch: item.headRefName ?? "",
-    "Related ADR/Drive": grab(/\*\*Related ADRs \/ Drive docs:\*\*\s*([^\n]+)/),
-    "Latest progress":
-      item.number === 7 || item.isPR ? "PR #37 open; CI green (ubuntu+windows)" : "",
-    "Next action":
-      status === "Blocked" ? "Resolve blocker" : status === "Ready" ? "Claim (AGENTS.md §2)" : "",
-    "Blocked reason": grab(/>\s*\*\*BLOCKED:\*\*\s*([^\n]+)/),
-  };
-}
+const LIMITS = { issues: 1000, prs: 500, items: 2000, projects: 100 };
 
 const issues = ghJson([
   "issue",
@@ -111,9 +37,9 @@ const issues = ghJson([
   "--state",
   "all",
   "--limit",
-  "200",
+  String(LIMITS.issues),
   "--json",
-  "number,title,labels,milestone,body,url,state",
+  "number,title,labels,milestone,body,url,state,stateReason",
 ]);
 const prs = ghJson([
   "pr",
@@ -123,10 +49,14 @@ const prs = ghJson([
   "--state",
   "all",
   "--limit",
-  "100",
+  String(LIMITS.prs),
   "--json",
   "number,title,labels,body,url,state,headRefName",
 ]).map((p) => ({ ...p, isPR: true }));
+if (issues.length >= LIMITS.issues || prs.length >= LIMITS.prs)
+  throw new Error(
+    "issue/PR count reached the list limit: raise LIMITS before syncing (nothing changed)",
+  );
 const items = [...issues, ...prs].sort((a, b) => a.number - b.number);
 
 if (DRY) {
@@ -138,9 +68,21 @@ if (DRY) {
 }
 
 // 1. Board
-const existing = ghJson(["project", "list", "--owner", OWNER, "--format", "json"]).projects.find(
-  (p) => p.title === TITLE,
-);
+const projectList = ghJson([
+  "project",
+  "list",
+  "--owner",
+  OWNER,
+  "--limit",
+  String(LIMITS.projects),
+  "--format",
+  "json",
+]).projects;
+if (projectList.length >= LIMITS.projects)
+  throw new Error(
+    "project count reached the list limit: refusing to risk creating a duplicate board",
+  );
+const existing = projectList.find((p) => p.title === TITLE);
 const project =
   existing ?? ghJson(["project", "create", "--owner", OWNER, "--title", TITLE, "--format", "json"]);
 const num = String(project.number);
@@ -165,6 +107,17 @@ let fields = ghJson([
 ]).fields;
 const statusField = fields.find((f) => f.name === "Status");
 const haveAll = STATUS.every(([n]) => statusField.options?.some((o) => o.name === n));
+const freshDefaults = (statusField.options ?? []).every((o) =>
+  ["Todo", "In Progress", "Done"].includes(o.name),
+);
+if (!haveAll && !freshDefaults) {
+  // Replacing options on a live board could reset every item's Status: refuse and let a human add the option.
+  throw new Error(
+    `Status field is missing options (${STATUS.map(([n]) => n)
+      .filter((n) => !statusField.options?.some((o) => o.name === n))
+      .join(", ")}). Add them in the board UI; the script only rewrites options on a fresh board.`,
+  );
+}
 if (!haveAll) {
   gh([
     "api",
@@ -210,6 +163,21 @@ const byName = Object.fromEntries(fields.map((f) => [f.name, f]));
 
 // 3. Items
 const projectId = ghJson(["project", "view", num, "--owner", OWNER, "--format", "json"]).id;
+// Current values, so team-maintained fields are never overwritten.
+const boardItems = ghJson([
+  "project",
+  "item-list",
+  num,
+  "--owner",
+  OWNER,
+  "--limit",
+  String(LIMITS.items),
+  "--format",
+  "json",
+]).items;
+const current = new Map(boardItems.map((i) => [i.content?.url, i]));
+if (boardItems.length >= LIMITS.items)
+  throw new Error("board item count reached the list limit: raise LIMITS.items before syncing");
 for (const it of items) {
   const added = ghJson([
     "project",
@@ -223,10 +191,14 @@ for (const it of items) {
     "json",
   ]);
   const plan = planFor(it);
+  const existingItem = current.get(it.url) ?? {};
+  const { warning } = statusFor(it);
+  if (warning) console.warn(`  warn ${warning}`);
   for (const [name, value] of Object.entries(plan)) {
-    if (!value) continue;
     const f = byName[name];
     if (!f) continue;
+    const action = decideField(name, value, existingItem[keyOf(name)]);
+    if (action === "keep") continue;
     const args = [
       "project",
       "item-edit",
@@ -237,6 +209,10 @@ for (const it of items) {
       "--field-id",
       f.id,
     ];
+    if (action === "clear") {
+      gh([...args, "--clear"]);
+      continue;
+    }
     if (f.options) {
       const opt = f.options.find((o) => o.name === value);
       if (!opt) {
