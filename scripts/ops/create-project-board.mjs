@@ -37,6 +37,7 @@ const LABEL_TO_STATUS = {
   "status:blocked": "Blocked",
   "status:in-review": "In Review",
   "status:verified": "Verified",
+  "status:cancelled": "Cancelled",
 };
 const SELECTS = {
   Priority: ["P0", "P1", "P2", "P3"],
@@ -83,16 +84,42 @@ const AUTO_NEXT = {
   Ready: "Claim (docs/process/task-claiming.md)",
   Triage: "Waiting on prerequisites; becomes Ready when they close",
 };
-const AUTO_VALUES = new Set(Object.values(AUTO_NEXT));
+// Includes values written by earlier versions of this script, so they are recognised and replaced.
+const AUTO_VALUES = new Set([...Object.values(AUTO_NEXT), "Claim (AGENTS.md §2)"]);
+// Exactly one status label should exist; if several do, this precedence decides (and we warn).
+const STATUS_PRECEDENCE = [
+  "status:blocked",
+  "status:in-review",
+  "status:in-progress",
+  "status:ready",
+  "status:triage",
+  "status:inbox",
+  "status:verified",
+  "status:cancelled",
+];
+const LIMITS = { issues: 1000, prs: 500, items: 2000, projects: 100 };
 const keyOf = (name) => name[0].toLowerCase() + name.slice(1); // gh item-list JSON key
 
 function planFor(item) {
   const labels = item.labels.map((l) => l.name);
+  const statusLabels = labels.filter((l) => l in LABEL_TO_STATUS);
+  if (statusLabels.length > 1 && item.state === "OPEN")
+    console.warn(
+      `  warn #${item.number}: several status labels (${statusLabels.join(", ")}); using precedence`,
+    );
+  const winner = STATUS_PRECEDENCE.find((l) => statusLabels.includes(l));
   const status =
-    item.state === "CLOSED" || item.state === "MERGED"
+    item.state === "MERGED"
       ? "Done"
-      : (labels.map((l) => LABEL_TO_STATUS[l]).find(Boolean) ??
-        (item.isPR ? "In Review" : "Inbox"));
+      : item.state === "CLOSED"
+        ? item.stateReason === "NOT_PLANNED"
+          ? "Cancelled"
+          : "Done"
+        : winner
+          ? LABEL_TO_STATUS[winner]
+          : item.isPR
+            ? "In Review"
+            : "Inbox";
   const body = item.body ?? "";
   const grab = (re) => re.exec(body)?.[1]?.trim() ?? "";
   const phaseIdx = /^P(\d)/.exec(item.milestone?.title ?? "")?.[1];
@@ -121,9 +148,9 @@ const issues = ghJson([
   "--state",
   "all",
   "--limit",
-  "200",
+  String(LIMITS.issues),
   "--json",
-  "number,title,labels,milestone,body,url,state",
+  "number,title,labels,milestone,body,url,state,stateReason",
 ]);
 const prs = ghJson([
   "pr",
@@ -133,10 +160,14 @@ const prs = ghJson([
   "--state",
   "all",
   "--limit",
-  "100",
+  String(LIMITS.prs),
   "--json",
   "number,title,labels,body,url,state,headRefName",
 ]).map((p) => ({ ...p, isPR: true }));
+if (issues.length >= LIMITS.issues || prs.length >= LIMITS.prs)
+  throw new Error(
+    "issue/PR count reached the list limit: raise LIMITS before syncing (nothing changed)",
+  );
 const items = [...issues, ...prs].sort((a, b) => a.number - b.number);
 
 if (DRY) {
@@ -148,9 +179,21 @@ if (DRY) {
 }
 
 // 1. Board
-const existing = ghJson(["project", "list", "--owner", OWNER, "--format", "json"]).projects.find(
-  (p) => p.title === TITLE,
-);
+const projectList = ghJson([
+  "project",
+  "list",
+  "--owner",
+  OWNER,
+  "--limit",
+  String(LIMITS.projects),
+  "--format",
+  "json",
+]).projects;
+if (projectList.length >= LIMITS.projects)
+  throw new Error(
+    "project count reached the list limit: refusing to risk creating a duplicate board",
+  );
+const existing = projectList.find((p) => p.title === TITLE);
 const project =
   existing ?? ghJson(["project", "create", "--owner", OWNER, "--title", TITLE, "--format", "json"]);
 const num = String(project.number);
@@ -175,6 +218,17 @@ let fields = ghJson([
 ]).fields;
 const statusField = fields.find((f) => f.name === "Status");
 const haveAll = STATUS.every(([n]) => statusField.options?.some((o) => o.name === n));
+const freshDefaults = (statusField.options ?? []).every((o) =>
+  ["Todo", "In Progress", "Done"].includes(o.name),
+);
+if (!haveAll && !freshDefaults) {
+  // Replacing options on a live board could reset every item's Status: refuse and let a human add the option.
+  throw new Error(
+    `Status field is missing options (${STATUS.map(([n]) => n)
+      .filter((n) => !statusField.options?.some((o) => o.name === n))
+      .join(", ")}). Add them in the board UI; the script only rewrites options on a fresh board.`,
+  );
+}
 if (!haveAll) {
   gh([
     "api",
@@ -229,11 +283,13 @@ const current = new Map(
     "--owner",
     OWNER,
     "--limit",
-    "500",
+    String(LIMITS.items),
     "--format",
     "json",
   ]).items.map((i) => [i.content?.url, i]),
 );
+if (current.size >= LIMITS.items)
+  throw new Error("board item count reached the list limit: raise LIMITS.items before syncing");
 for (const it of items) {
   const added = ghJson([
     "project",
@@ -249,6 +305,22 @@ for (const it of items) {
   const plan = planFor(it);
   const existingItem = current.get(it.url) ?? {};
   for (const [name, value] of Object.entries(plan)) {
+    const f0 = byName[name];
+    // An earlier auto value that no longer applies (e.g. "Resolve blocker" after unblocking) is cleared.
+    if (!value && TEAM_FIELDS.has(name) && f0 && AUTO_VALUES.has(existingItem[keyOf(name)] ?? "")) {
+      gh([
+        "project",
+        "item-edit",
+        "--id",
+        added.id,
+        "--project-id",
+        projectId,
+        "--field-id",
+        f0.id,
+        "--clear",
+      ]);
+      continue;
+    }
     if (!value) continue;
     if (TEAM_FIELDS.has(name)) {
       const have = existingItem[keyOf(name)];

@@ -2,7 +2,7 @@
      Goal: a fresh agent with no chat history can resume from this comment + GitHub alone. -->
 ### Handoff — <agent id / tool> (supervised by @<human>) — <YYYY-MM-DD HH:MM UTC>
 
-**Issue:** #<n> · **Status now:** In Progress | In Review | Blocked | Verified
+**Issue:** #<n> · **Status now:** In Progress | In Review | Blocked (Verified/Done are set by a non-author reviewer / human lead)
 **Branch / worktree:** `feat/<n>-<slug>` · **PR:** #<n or none> · **Head SHA:** `<sha>` · **Base:** `origin/main` @ `<sha>`
 **Identity:** projectId finance-learning-economy · identityVersion <n> · rename pending: no
 **Scope worked on:** <files/packages> (within the claim? yes / no — explain)

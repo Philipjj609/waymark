@@ -7,15 +7,17 @@ sometimes on one machine. The failure modes we must prevent: two agents doing th
 contracts under each other, unreviewed "done" claims, and state that only exists in a chat transcript.
 
 **Decision.**
-1. **The issue is the lock.** A task is owned when it has an assignee (the supervising human's account), the
-   `status:in-progress` label/board status, and a claim comment naming the human supervisor, agent identity, branch or
-   worktree, scope and deliverables (`docs/process/task-claiming.md`). Re-check just before coding; if someone else
-   claimed first, stop.
+1. **The issue is the lock; the claim comment is the key.** A task is owned by the earliest _active_ claim comment:
+   one not followed by a Release/Yield from the same agent, and not marked stale by a human lead. The claim names the
+   unique agent id (`<tool>@<human>/<worktree>`), the human supervisor, branch/worktree, scope and deliverables. The
+   assignee (the supervisor's account) and the `status:in-progress` label are visible signals, but several agents
+   can share one account, so they never prove ownership on their own. Re-check just before coding; a later claimant
+   yields without touching assignees or labels (`docs/process/task-claiming.md`).
 2. **One owner per issue; parents keep ownership.** An owning agent may delegate _bounded_ research, review, test or
    implementation subtasks to sub-agents (`docs/process/subagents.md`). Sub-agents never claim issues, merge, change
    architecture or shared contracts, or touch files outside the parent's scope. The parent integrates their results
    and writes the handoff.
-3. **Authority tiers** (AGENTS.md §9): routine edits inside the claimed scope are free; shared contracts, architecture
+3. **Authority tiers** (AGENTS.md §9; "lead" always means a human — agents recommend, humans decide): routine edits inside the claimed scope are free; shared contracts, architecture
    and other owners' modules need an RFC and review; visibility, permissions, live money, destructive Drive or history
    changes, security settings and merges need explicit human authorization.
 4. **GitHub tracks work; Drive tracks thinking.** Drive history is preserved: revise by creating a new versioned

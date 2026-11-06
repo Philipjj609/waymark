@@ -42,8 +42,11 @@ ownership of the issue, integration, quality and the final handoff. Sub-agents a
 - Each sub-agent has its own context window and returns a summary. Nesting is allowed up to 3 levels by default
   (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`); up to 20 run concurrently by default.
 - Sub-agents can't ask the user questions (`AskUserQuestion` is removed). Background sub-agents get a smaller tool set.
-- This repo ships two: `contract-reviewer` (read-only review against the invariants) and `verifier` (runs
-  `pnpm verify`, reports results, edits nothing).
+- This repo ships two:
+  - `contract-reviewer`: tools `Read, Glob, Grep` only, so it **cannot** write or run commands. The parent passes it the diff.
+  - `verifier`: needs `Bash` to run `pnpm verify`, so "edits nothing" is enforced **only by its prompt**. Use it only
+    in sessions with normal permission prompts, never under bypass-permissions, or add a `PreToolUse` hook that blocks
+    writing commands (`git commit|push`, `gh`, `rm`, redirections).
 
 **OpenAI Codex** (docs: learn.chatgpt.com/docs/agent-configuration/subagents and …/agents-md)
 - Sub-agents are enabled by default. Custom agents are TOML files in `.codex/agents/` with required `name`,
@@ -52,7 +55,9 @@ ownership of the issue, integration, quality and the final handoff. Sub-agents a
   `agents.max_concurrent_threads_per_session`.
 - Codex reads `AGENTS.md` from the repo root down to the working directory, capped at 32 KiB in total, so keep
   `AGENTS.md` short and put detail in linked docs.
-- This repo ships matching `.codex/agents/contract-reviewer.toml` and `.codex/agents/verifier.toml`.
+- This repo ships matching `.codex/agents/contract-reviewer.toml` and `.codex/agents/verifier.toml`. Custom agents
+  **cannot** set their own `sandbox_mode`; they inherit the parent's. For a review, run the parent session with a
+  read-only sandbox (for example `codex --sandbox read-only`). Otherwise "read-only" is only a prompt instruction.
 
 **Other tools** (Cursor, ChatGPT, Gemini…): follow the same rules manually. If a tool can't isolate files, run one
 agent per git worktree instead.

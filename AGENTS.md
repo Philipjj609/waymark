@@ -49,14 +49,14 @@ the previous session's handoff was incomplete: say so on the issue.
 1. Commit and push your branch (WIP commits are fine; never leave work only on disk).
 2. Post a handoff comment on the issue using `docs/handoffs/TEMPLATE.md`: done / not done, commits, PR,
    **commands you actually ran and their results**, open problems, decisions needed, the exact next command.
-3. Update the board fields: `Status`, `Latest progress`, `Next action`, `Blocked reason` (if blocked).
+3. Update the issue's `status:*` label (the board Status follows it on sync) and the board fields `Latest progress`, `Next action`, `Blocked reason` (if blocked).
 4. If you changed a shared contract or made a design decision, it must be in an ADR or PR description and
    linked from the issue. Design-level findings get a short note in Drive `04 — Handoffs & Evidence Packages`.
 
 ## 4. Branches, worktrees, PRs
 
 - Branch per issue: `feat/<issue#>-<slug>`, `fix/…`, `docs/…`, `spike/…`. One DRI per branch.
-- Parallel agents on one machine use **separate git worktrees**: `git worktree add ../waymark-<issue#> -b feat/<issue#>-<slug>`.
+- Parallel agents on one machine use **separate git worktrees**: `git worktree add ../waymark-wp-<issue#> -b feat/<issue#>-<slug>`.
 - Never push to `main`. Never force-push someone else's branch. Rebase your own branch only before review.
 - Open a **draft PR early** so interface changes are visible. Fill the PR template completely.
 - A PR touches one work package. If you find out-of-scope problems, open an issue; don't fix them in passing.
@@ -108,11 +108,15 @@ pnpm contracts:generate # regenerate docs/contracts/schemas after a contract cha
 
 ## 9. Authority (ADR-0012)
 
-| Tier                                 | Examples                                                                                                                                                                                           | Who decides                        |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| Free, inside your claimed issue      | edits, tests and docs in your scope; your own branch; critiques, alternatives and new issues                                                                                                       | you; explain in the PR             |
-| RFC + review (`docs/process/rfc.md`) | `packages/contracts`, ADRs/architecture, another owner's module, cross-module behaviour, money/ledger semantics, the PayPal mapping                                                                | module owners, then the lead/owner |
-| Explicit human authorization         | repo visibility, collaborators/permissions, live payments, spending, production deploys, merges to `main`, security settings, history rewrites, destructive Drive changes, renames, major redesign | the owner (@Philipjj609)           |
+| Tier                                 | Examples                                                                                                                                                                                           | Who decides                                      |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Free, inside your claimed issue      | edits, tests and docs in your scope; your own branch; critiques, alternatives and new issues                                                                                                       | you; explain in the PR                           |
+| RFC + review (`docs/process/rfc.md`) | `packages/contracts`, ADRs/architecture, another owner's module, cross-module behaviour                                                                                                            | owners of affected modules, then a human lead    |
+| RFC **and** owner approval           | money/ledger semantics, the PayPal mapping, auth/sessions/permissions model, licenses, adding paid services                                                                                        | the owner (@Philipjj609), label `needs-decision` |
+| Explicit human authorization         | repo visibility, collaborators/permissions, live payments, spending, production deploys, merges to `main`, security settings, history rewrites, destructive Drive changes, renames, major redesign | the owner (@Philipjj609)                         |
+
+"Lead" always means a **human** (the owner, or a human designated on #3). Agents, including a lead orchestrator agent,
+prepare options and recommendations; humans decide. Ask with the `needs-decision` label and assign @Philipjj609.
 
 Drive history is preserved: revise by creating a new versioned doc and linking the old one. Never delete or overwrite.
 You are encouraged to propose missing systems, edge cases and better designs. Use an issue or an RFC; don't change
