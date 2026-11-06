@@ -1,0 +1,13 @@
+{
+  "name": "@fle/learning",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Concept graph, seed curriculum and validators. Learner model and tutor land in WP-04.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@fle/contracts": "workspace:*"
+  }
+}

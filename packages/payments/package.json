@@ -1,0 +1,13 @@
+{
+  "name": "@fle/payments",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PayPal sandbox boundary: verified status mapping, exact amount conversion, event dedup and verification rules. Network client lands in WP-05.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@fle/contracts": "workspace:*"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "finance-learning-economy",
+  "private": true,
+  "description": "Financial education platform with a persistent deterministic economic simulation, adaptive AI teaching and PayPal sandbox integration. Codename: Waymark (provisional).",
+  "type": "module",
+  "packageManager": "pnpm@11.6.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "session:start": "node scripts/session-start.mjs",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "contracts:generate": "tsx packages/contracts/scripts/generate-json-schema.ts",
+    "contracts:check": "tsx packages/contracts/scripts/generate-json-schema.ts --check",
+    "demo": "tsx packages/simulation/scripts/demo.ts",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm contracts:check"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.2",
+    "@types/node": "24.19.2",
+    "fast-check": "4.10.2",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  }
+}

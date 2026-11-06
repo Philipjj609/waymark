@@ -1,0 +1,122 @@
+{
+  "$id": "https://schemas.finance-learning-economy.invalid/provider.event.v1.json",
+  "title": "provider.event.v1",
+  "x-contracts-version": "0.1.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "provider.event.v1"
+    },
+    "provider": {
+      "type": "string",
+      "const": "PAYPAL_SANDBOX"
+    },
+    "providerEventId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "operationId": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 128,
+      "pattern": "^pop_[A-Za-z0-9_.:-]+$"
+    },
+    "eventType": {
+      "type": "string",
+      "enum": [
+        "CAPTURE_COMPLETED",
+        "CAPTURE_DENIED",
+        "CAPTURE_REFUNDED"
+      ]
+    },
+    "amount": {
+      "type": "object",
+      "properties": {
+        "amountMinor": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "currency": {
+          "type": "string",
+          "enum": [
+            "EUR",
+            "USD",
+            "GBP",
+            "JPY"
+          ]
+        }
+      },
+      "required": [
+        "amountMinor",
+        "currency"
+      ],
+      "additionalProperties": false
+    },
+    "mapping": {
+      "type": "object",
+      "properties": {
+        "worldId": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 128,
+          "pattern": "^wld_[A-Za-z0-9_.:-]+$"
+        },
+        "obligationId": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 128,
+          "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+        }
+      },
+      "required": [
+        "worldId",
+        "obligationId"
+      ],
+      "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "ORDER_LOOKUP",
+            "WEBHOOK_SIGNATURE_POSTBACK",
+            "WEBHOOK_SIGNATURE_LOCAL"
+          ]
+        },
+        "verifiedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+        },
+        "evidenceRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "method",
+        "verifiedAt",
+        "evidenceRef"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "provider",
+    "providerEventId",
+    "operationId",
+    "eventType",
+    "amount",
+    "mapping",
+    "verification"
+  ],
+  "additionalProperties": false
+}

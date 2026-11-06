@@ -1,0 +1,13 @@
+{
+  "name": "@fle/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Versioned shared schemas (zod) for commands, events, money, ledger, snapshots, provider events, learning and director contracts.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@fle/simulation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic turn-based world engine: commands, scheduled events, idempotency, replay and fixtures. No I/O.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@fle/contracts": "workspace:*",
+    "@fle/domain": "workspace:*"
+  }
+}
