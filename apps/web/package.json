@@ -3,14 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Next.js (App Router) web shell: guest sessions, route handlers over @fle/server, plain functional UI (#10).",
+  "description": "Next.js (App Router) web shell: guest sessions, route handlers over @fle/server, plain functional UI (#10), tutor explanations via @fle/learning + @fle/ai (#84).",
   "scripts": {
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start"
   },
   "dependencies": {
+    "@fle/ai": "workspace:*",
     "@fle/contracts": "workspace:*",
+    "@fle/learning": "workspace:*",
     "@fle/persistence": "workspace:*",
     "@fle/server": "workspace:*",
     "next": "16.4.3",

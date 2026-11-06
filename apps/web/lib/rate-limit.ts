@@ -11,6 +11,8 @@ export interface Limit {
 export const LIMITS = {
   commands: { name: "commands", max: 60, windowMs: 60_000 },
   worlds: { name: "worlds", max: 10, windowMs: 60 * 60_000 },
+  /** Tutor explanations (#84): read-only, but each may call a paid model. */
+  explain: { name: "explain", max: 20, windowMs: 60_000 },
   /** Per client IP, only when CLIENT_IP_HEADER is configured: caps cookie-less world spam. */
   worldsPerIp: { name: "worlds-ip", max: 30, windowMs: 60 * 60_000 },
 } as const satisfies Record<string, Limit>;

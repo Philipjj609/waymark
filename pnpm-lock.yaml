@@ -29,9 +29,15 @@ importers:
 
   apps/web:
     dependencies:
+      '@fle/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@fle/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@fle/learning':
+        specifier: workspace:*
+        version: link:../../packages/learning
       '@fle/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
