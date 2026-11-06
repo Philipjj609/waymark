@@ -134,9 +134,13 @@ export function createApiClient(overrides: Partial<ClientDeps> = {}) {
    * a failure only means no lesson is shown; it never affects the game.
    */
   async function explain(worldId: string): Promise<Explanation> {
+    // POST behind the CSRF gate: it spends quota (and possibly a paid model call).
     const res = await deps.fetch(`/api/worlds/${encodeURIComponent(worldId)}/explain`, {
+      method: "POST",
       credentials: "same-origin",
       cache: "no-store",
+      headers: { "content-type": "application/json" },
+      body: "{}",
     });
     const body = await readJson(res);
     if (!res.ok) throw toApiError(res, body);

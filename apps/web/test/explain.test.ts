@@ -14,7 +14,7 @@ import { conceptView, createLearnerState, interpretFact, recordObservation } fro
 import { getWorldHistory, hashSessionId } from "@fle/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { POST as postCommand } from "../app/api/commands/route";
-import { GET as getExplain } from "../app/api/worlds/[worldId]/explain/route";
+import { POST as postExplain } from "../app/api/worlds/[worldId]/explain/route";
 import { GET as getWorld } from "../app/api/worlds/[worldId]/route";
 import { POST as postWorld } from "../app/api/worlds/route";
 import { labelFictional } from "../lib/money";
@@ -108,7 +108,23 @@ async function paidPhone(): Promise<Guest> {
 }
 
 const explain = (g: Guest, cookie: string | null = g.cookie, worldId = g.worldId) =>
-  getExplain(read(`/api/worlds/${worldId}/explain`, cookie ?? undefined), params(worldId));
+  postExplain(post(`/api/worlds/${worldId}/explain`, {}, cookie ?? undefined), params(worldId));
+
+/** A request as a hostile page would send it: wrong/missing Origin, wrong content type or body. */
+function forged(
+  g: Guest,
+  opts: { origin?: string | null; contentType?: string | null; body?: string },
+): Request {
+  const headers = new Headers({ cookie: g.cookie });
+  if (opts.origin !== null) headers.set("origin", opts.origin ?? ORIGIN);
+  if (opts.contentType !== null)
+    headers.set("content-type", opts.contentType ?? "application/json");
+  return new Request(`${ORIGIN}/api/worlds/${g.worldId}/explain`, {
+    method: "POST",
+    headers,
+    body: opts.body ?? "{}",
+  });
+}
 
 const ownerOf = (g: Guest) => hashSessionId(g.cookie.split("=")[1] ?? "");
 
@@ -117,7 +133,60 @@ async function snapshotOf(g: Guest): Promise<WorldSnapshot> {
   return ((await res.json()) as { snapshot: WorldSnapshot }).snapshot;
 }
 
-describe("GET /api/worlds/[worldId]/explain", () => {
+describe("explain endpoint: CSRF and request validation (owner, 7 Nov)", () => {
+  it("a legitimate same-origin JSON request succeeds", async () => {
+    const g = await paidPhone();
+    expect((await explain(g)).status).toBe(200);
+  });
+
+  it("rejects missing or foreign Origin (403) and non-JSON (415) even with the session cookie", async () => {
+    const g = await paidPhone();
+    const cases: Array<[Request, number, string]> = [
+      [forged(g, { origin: null }), 403, "CSRF_ORIGIN_REJECTED"],
+      [forged(g, { origin: "https://evil.example" }), 403, "CSRF_ORIGIN_REJECTED"],
+      [forged(g, { origin: `${ORIGIN}.evil.example` }), 403, "CSRF_ORIGIN_REJECTED"],
+      [forged(g, { contentType: "text/plain" }), 415, "UNSUPPORTED_MEDIA_TYPE"],
+      [
+        forged(g, { contentType: "application/x-www-form-urlencoded", body: "a=1" }),
+        415,
+        "UNSUPPORTED_MEDIA_TYPE",
+      ],
+    ];
+    for (const [req, status, code] of cases) {
+      const res = await postExplain(req, params(g.worldId));
+      expect(res.status).toBe(status);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(code);
+    }
+  });
+
+  it("validates the body: only an empty JSON object is accepted", async () => {
+    const g = await paidPhone();
+    for (const body of ["not json", "[]", '{"worldId":"wld_x"}', '{"model":"x"}', "null", ""]) {
+      const res = await postExplain(forged(g, { body }), params(g.worldId));
+      expect(res.status).toBe(400);
+    }
+    const big = await postExplain(
+      forged(g, { body: `{"x":"${"a".repeat(2000)}"}` }),
+      params(g.worldId),
+    );
+    expect(big.status).toBe(413);
+  });
+
+  it("forged cross-origin requests do NOT consume the session's quota", async () => {
+    const g = await paidPhone();
+    for (let i = 0; i < LIMITS.explain.max * 3; i++) {
+      const res = await postExplain(
+        forged(g, { origin: "https://evil.example" }),
+        params(g.worldId),
+      );
+      expect(res.status).toBe(403);
+    }
+    for (let i = 0; i < LIMITS.explain.max; i++) expect((await explain(g)).status).toBe(200);
+    expect((await explain(g)).status).toBe(429);
+  });
+});
+
+describe("POST /api/worlds/[worldId]/explain", () => {
   it("returns a contract-valid lesson labelled TEST STAND-IN on the fake path", async () => {
     const g = await paidPhone();
     const res = await explain(g);

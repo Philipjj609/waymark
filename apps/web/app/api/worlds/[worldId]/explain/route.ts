@@ -1,4 +1,5 @@
 import { WorldIdSchema } from "@fle/contracts";
+import { rejectUnsafeWrite } from "../../../../../lib/csrf";
 import {
   errorResponse,
   guarded,
@@ -13,17 +14,46 @@ import { explainWorld } from "../../../../../lib/tutor";
 
 export const runtime = "nodejs";
 
+/** The request carries no parameters today: only `{}` is accepted (strict, like the contracts). */
+const isEmptyObject = (v: unknown): boolean =>
+  typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length === 0;
+const MAX_BODY_BYTES = 1024;
+
 /**
  * "What just happened" for one of the caller's worlds (#84): JSON `{lesson, worldVersion}`.
- * Read-only: it never writes the world, so it needs no CSRF gate and cannot affect commands.
- * No session, a bad id and another session's world all 404. Rate-limited per session because
- * each call may reach a paid model; the AI layer has its own per-call timeout and fallback.
+ *
+ * It never writes the world, but it spends a per-session quota and may reach a paid model, so it
+ * is a POST behind the same CSRF gate as commands (exact Origin allowlist + JSON only, ADR-0011).
+ * The gate and body validation run BEFORE the rate limit, so a cross-site request can neither
+ * read a lesson nor consume the session's quota. No session, a bad id and another session's world
+ * all 404.
  */
-export async function GET(
+export async function POST(
   req: Request,
   ctx: { params: Promise<{ worldId: string }> },
 ): Promise<Response> {
   return guarded(async () => {
+    const unsafe = rejectUnsafeWrite(req);
+    if (unsafe) return unsafe;
+
+    const declared = Number(req.headers.get("content-length") ?? "0");
+    if (declared > MAX_BODY_BYTES) {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "request too large");
+    }
+    const text = await req.text();
+    if (text.length > MAX_BODY_BYTES) {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "request too large");
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(text || "null");
+    } catch {
+      return errorResponse(400, "INVALID_REQUEST", "body is not valid JSON");
+    }
+    if (!isEmptyObject(body)) {
+      return errorResponse(400, "INVALID_REQUEST", "explain takes an empty JSON object");
+    }
+
     const session = readSession(req);
     const worldId = WorldIdSchema.safeParse((await ctx.params).worldId);
     if (!session || !worldId.success) return worldNotFound();

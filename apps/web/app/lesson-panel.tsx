@@ -3,6 +3,7 @@
 import type { LessonResponse } from "@fle/contracts";
 import { labelFictional } from "../lib/money";
 import { type ProvenanceKind, provenanceBadge } from "../lib/provenance";
+import { visualCaption } from "../lib/visual-caption";
 
 export type ExplanationView =
   | { readonly status: "idle" }
@@ -60,11 +61,15 @@ function Lesson({ lesson }: { lesson: LessonResponse }) {
               </p>
             );
           case "visual":
-            // Recipe renderers are not built yet: show the required text equivalent.
+            // Renderers arrive with #26. Until then: a plain caption plus the required text
+            // equivalent. The raw recipe id stays in the data and is never shown to the user.
             return (
-              <p key={key}>
-                <small>[{block.recipe}]</small> {labelFictional(block.textEquivalent)}
-              </p>
+              <figure key={key} style={{ margin: "8px 0" }}>
+                <figcaption>
+                  <strong>{visualCaption(block.recipe)}</strong>
+                </figcaption>
+                <p style={{ margin: "4px 0 0" }}>{labelFictional(block.textEquivalent)}</p>
+              </figure>
             );
           case "question":
             return (

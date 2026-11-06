@@ -8,7 +8,7 @@ import type { WorldSnapshot } from "@fle/contracts";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { POST as postCommand } from "../app/api/commands/route";
-import { GET as getExplain } from "../app/api/worlds/[worldId]/explain/route";
+import { POST as postExplain } from "../app/api/worlds/[worldId]/explain/route";
 import { GET as getWorld } from "../app/api/worlds/[worldId]/route";
 import { POST as postWorld } from "../app/api/worlds/route";
 import { resetRateLimits } from "../lib/rate-limit";
@@ -91,8 +91,8 @@ describe.skipIf(!ADMIN_URL)("web app on real PostgreSQL", () => {
     expect(paid.result.status).toBe("ACCEPTED");
 
     const explainOnce = async () => {
-      const res = await getExplain(
-        read(`/api/worlds/${snap.worldId}/explain`, cookie),
+      const res = await postExplain(
+        post(`/api/worlds/${snap.worldId}/explain`, {}, cookie),
         params(snap.worldId),
       );
       expect(res.status).toBe(200);
