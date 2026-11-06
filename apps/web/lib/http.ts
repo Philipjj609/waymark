@@ -9,6 +9,7 @@ export type HttpErrorCode =
   | ServiceErrorCode
   | "CSRF_ORIGIN_REJECTED"
   | "UNSUPPORTED_MEDIA_TYPE"
+  | "INVALID_REQUEST"
   | "PAYLOAD_TOO_LARGE"
   | "RATE_LIMITED"
   | "INTERNAL";

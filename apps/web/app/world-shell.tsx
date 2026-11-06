@@ -1,9 +1,10 @@
 "use client";
 
 import type { Obligation, WorldSnapshot } from "@fle/contracts";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, createApiClient, type Intent } from "../lib/command-client";
 import { formatFictional } from "../lib/money";
+import { type ExplanationView, LessonPanel } from "./lesson-panel";
 
 /** Remembering the world id is a convenience; the cookie (not this) is what grants access. */
 const WORLD_KEY = "waymark.worldId";
@@ -50,6 +51,28 @@ export function WorldShell() {
   const [message, setMessage] = useState<string | null>(null);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [targetDay, setTargetDay] = useState<number | null>(null);
+  const [explanation, setExplanation] = useState<ExplanationView>({ status: "idle" });
+  /** Only the newest explanation request may update the panel. */
+  const explainSeq = useRef(0);
+
+  /** Fire-and-forget: the game never waits for (or fails because of) the tutor. */
+  const explainLatest = useCallback(
+    (worldId: string) => {
+      const seq = ++explainSeq.current;
+      setExplanation({ status: "loading" });
+      api
+        .explain(worldId)
+        .then((r) => {
+          if (seq === explainSeq.current) setExplanation({ status: "ready", lesson: r.lesson });
+        })
+        .catch((err: unknown) => {
+          if (seq !== explainSeq.current) return;
+          const message = err instanceof ApiError ? err.code : "network error";
+          setExplanation({ status: "error", message });
+        });
+    },
+    [api],
+  );
 
   const note = useCallback((text: string) => {
     setLog((prev) => [{ n: (prev[0]?.n ?? 0) + 1, text }, ...prev].slice(0, 20));
@@ -77,6 +100,8 @@ export function WorldShell() {
       saveWorld(created.worldId);
       setSnapshot(created.snapshot);
       setLog([]);
+      explainSeq.current++;
+      setExplanation({ status: "idle" });
       note(`New world ${created.worldId} on day ${created.snapshot.day}`);
     } catch (err) {
       setMessage(err instanceof ApiError ? `${err.code}: ${err.message}` : "Network error");
@@ -99,6 +124,7 @@ export function WorldShell() {
           : `rejected: ${r.error?.code ?? "?"}`;
       note(`${describe(intent)}: ${status}${out.duplicate ? " (duplicate)" : ""}`);
       if (r.status === "REJECTED") setMessage(r.error?.message ?? "Rejected");
+      else explainLatest(out.snapshot.worldId);
     } catch (err) {
       setMessage(err instanceof ApiError ? `${err.code}: ${err.message}` : "Network error");
       if (err instanceof ApiError && err.status === 409) {
@@ -136,6 +162,8 @@ export function WorldShell() {
         Cash: <strong>{cash ? formatFictional(cash.balance) : "none"}</strong>
       </p>
       {message && <p role="alert">{message}</p>}
+
+      <LessonPanel view={explanation} />
 
       <h3>Obligations</h3>
       <table>

@@ -8,6 +8,7 @@ import type { WorldSnapshot } from "@fle/contracts";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { POST as postCommand } from "../app/api/commands/route";
+import { POST as postExplain } from "../app/api/worlds/[worldId]/explain/route";
 import { GET as getWorld } from "../app/api/worlds/[worldId]/route";
 import { POST as postWorld } from "../app/api/worlds/route";
 import { resetRateLimits } from "../lib/rate-limit";
@@ -29,12 +30,13 @@ beforeAll(async () => {
   process.env.WORLD_STORE = "postgres";
   process.env.DATABASE_URL = url.toString();
   process.env.APP_ORIGINS = ORIGIN;
+  process.env.AI_PROVIDER = "fake";
   await resetStoreForTests();
   resetRateLimits();
 });
 
 afterAll(async () => {
-  for (const k of ["WORLD_STORE", "DATABASE_URL", "APP_ORIGINS"]) {
+  for (const k of ["WORLD_STORE", "DATABASE_URL", "APP_ORIGINS", "AI_PROVIDER"]) {
     if (saved[k] === undefined) delete process.env[k];
     else process.env[k] = saved[k];
   }
@@ -88,7 +90,20 @@ describe.skipIf(!ADMIN_URL)("web app on real PostgreSQL", () => {
     };
     expect(paid.result.status).toBe("ACCEPTED");
 
+    const explainOnce = async () => {
+      const res = await postExplain(
+        post(`/api/worlds/${snap.worldId}/explain`, {}, cookie),
+        params(snap.worldId),
+      );
+      expect(res.status).toBe(200);
+      return res.json();
+    };
+    const lessonBefore = await explainOnce();
+
     await resetStoreForTests(); // a new process: new pool, nothing cached in memory
+
+    // #84: the learner state is re-derived from the reloaded event log: same lesson after restart.
+    expect(await explainOnce()).toEqual(lessonBefore);
 
     const reread = await getWorld(
       read(`/api/worlds/${snap.worldId}`, cookie),

@@ -10,8 +10,14 @@ export const DEFAULT_TIMEOUT_MS = 8000;
 const SYSTEM_PROMPT = [
   "You are a financial-education tutor inside a simulation with fictional money.",
   "Reply with ONE JSON object matching learning.lesson.v1 WITHOUT the `validation` and `provenance` fields.",
-  "Use only facts from the provided context. Every money amount you mention must equal an amount in the context.",
-  "Blocks are typed: text, visual (recipe must be one of the allowed recipe names), question.",
+  "Use only facts from the provided context.",
+  "NEVER write a figure yourself: no digits, no number words (one, two, half, dozen, hundred...), no currency symbols, codes or names (EUR, euro, $...).",
+  "Write every amount, day and creditor ONLY as a placeholder, which the server fills in from the context:",
+  "{{cash}} (cash held now), {{day}} (today, renders as 'day N'), {{owedTotal}} (total still owed),",
+  "{{bill:<obligationId>.amount}}, {{bill:<obligationId>.remaining}}, {{bill:<obligationId>.dueDay}} (renders as 'day N'), {{bill:<obligationId>.creditor}},",
+  "where <obligationId> is an obligationId from context.obligations. Example: 'You hold {{cash}}; {{bill:obl_x.creditor}} is owed {{bill:obl_x.remaining}}, due on {{bill:obl_x.dueDay}}.'",
+  "Do not name creditors or other parties in your own words (no 'bank', 'lender', 'loan', 'landlord', 'provider', no capitalised names): use the creditor placeholder. Write in sentence case.",
+  "Blocks are typed: text, visual (recipe must be one of the allowed recipe names, data must be {}), question.",
   "sourceRefs must be chosen from context.allowedSourceRefs; conceptIds from context.concepts.",
   "Never judge the learner as wrong; describe what happened and what to consider.",
 ].join(" ");
@@ -58,7 +64,8 @@ async function callWithTimeout(
  * THE server-side entry point of the AI boundary (#19, ADR-0007).
  *
  * The model proposes a lesson; deterministic code decides whether it may be shown:
- * parse -> amounts recomputed from the snapshot -> recipe whitelist -> source refs.
+ * parse -> recipe whitelist -> no figure outside a server-resolved placeholder -> source refs,
+ * then the server substitutes the placeholders with values from the snapshot.
  * On failure: one repair attempt, then a reviewed static fallback. A provider error or
  * timeout goes straight to the fallback (no retry against a failing/slow provider).
  * It never throws and never touches economic state (invariant 3).

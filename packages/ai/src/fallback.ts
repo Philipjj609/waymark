@@ -5,7 +5,8 @@ import type { TutorContext } from "./context.js";
 import { CURRICULUM_VERSION } from "./types.js";
 
 /**
- * Static fallback lessons keyed by concept. Deliberately number-free: nothing here can
+ * Static fallback lessons keyed by concept. Deliberately figure-free (no numerals, number words
+ * or currencies; a test applies the model's figure rules to this text): nothing here can
  * disagree with the snapshot. The contract has no `reviewed` flag, so provenance is
  * `REVIEWED_STATIC` + `validation.status = FALLBACK_REVIEWED`. NOTE: the seed concepts are
  * still DRAFT (LEARN-001), so this text awaits editorial review; see the #19 handoff.
@@ -24,12 +25,12 @@ const FALLBACK_TEXT: Readonly<Record<string, { body: string; prompt: string }>> 
     prompt: "What could you do if a bill fell due and your cash was short?",
   },
   cpt_opportunity_cost: {
-    body: "Opportunity cost is what you give up by using money one way instead of another. A purchase costs more than its price tag.",
+    body: "Opportunity cost is what you give up when you spend money on something instead of something else. A purchase costs more than its price tag.",
     prompt: "What else could that money have covered?",
   },
 };
 const GENERIC = {
-  body: "Each choice in the simulation changes your cash and what you owe. Comparing the two before you act is the habit to practise.",
+  body: "Each choice in the simulation changes your cash and what you owe. Comparing them before you act is the habit to practise.",
   prompt: "What did your last choice change in your cash and your upcoming bills?",
 };
 

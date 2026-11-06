@@ -5,6 +5,7 @@ import {
   interpretFact,
   type LearnerState,
   recordObservation,
+  SEED_CONCEPTS,
 } from "@fle/learning";
 import { cmd, execute, fp30, PHONE, playerCommand, RENT, snapshot } from "@fle/simulation";
 import { describe, expect, it } from "vitest";
@@ -13,8 +14,13 @@ import {
   createTutorProvider,
   explainOutcome,
   FakeTutorProvider,
-  moneyMentionsMinor,
+  fallbackLesson,
+  figureIssues,
+  formatFictionalAmount,
   NebiusTutorProvider,
+  nameIssues,
+  type TutorContext,
+  type TutorProvider,
   validateModelOutput,
 } from "../src/index.js";
 
@@ -64,9 +70,11 @@ describe("explainOutcome with the fake provider", () => {
     expect(lesson.validation.status).toBe("VALIDATED");
     expect(lesson.provenance.generator).toBe("MODEL");
     expect(provider.calls).toHaveLength(1);
+    // The fake writes placeholders only; the server filled in the snapshot's values.
     const text = JSON.stringify(lesson.blocks);
-    expect(text).toContain("770.00 EUR");
-    expect(text).toContain("550.00 EUR");
+    expect(text).toContain("770.00 EUR (fictional)");
+    expect(text).toContain("550.00 EUR (fictional)");
+    expect(text).not.toContain("{{");
   });
 
   it("is deterministic: same input, same lesson", async () => {
@@ -97,12 +105,13 @@ describe("explainOutcome with the fake provider", () => {
     expect(LessonResponseSchema.safeParse(lesson).success).toBe(true);
   });
 
-  it("a wrong amount is rejected and never shown", async () => {
+  it("a literal (wrong) amount is rejected and never shown", async () => {
+    // Was NUMBER_MISMATCH (amounts re-parsed from text); now any figure outside a placeholder.
     const provider = new FakeTutorProvider(["wrong-number"]);
     const lesson = await run(provider);
     expect(lesson.validation.status).toBe("FALLBACK_REVIEWED");
-    expect(lesson.validation.checks[0]).toContain("NUMBER_MISMATCH");
-    expect(JSON.stringify(lesson)).not.toContain("650.00");
+    expect(lesson.validation.checks[0]).toContain("FIGURE_OUTSIDE_PLACEHOLDER");
+    expect(JSON.stringify(lesson)).not.toContain("551.00");
   });
 
   it("a non-whitelisted visual recipe and missing source refs are rejected", async () => {
@@ -119,7 +128,7 @@ describe("explainOutcome with the fake provider", () => {
     expect(!refs.ok && refs.errors.map((e) => e.code)).toContain("SOURCE_REFS_MISSING");
   });
 
-  it("rejects amounts hidden in visual data (…Minor fields)", async () => {
+  it("rejects any model-supplied visual data (renderers compute it from the snapshot, #26)", async () => {
     const { snap, events, learner } = scenario();
     const ctx = buildTutorContext({ snapshot: snap, events, learnerState: learner });
     const lesson = JSON.parse(
@@ -128,14 +137,16 @@ describe("explainOutcome with the fake provider", () => {
         { signal: new AbortController().signal },
       ),
     ) as LessonResponse;
-    const tampered = JSON.stringify({
-      ...lesson,
-      blocks: lesson.blocks.map((b) =>
-        b.type === "visual" ? { ...b, data: { cashMinor: 123456 } } : b,
-      ),
-    });
-    const r = validateModelOutput(tampered, ctx, { model: null });
-    expect(!r.ok && r.errors.map((e) => e.code)).toContain("NUMBER_MISMATCH");
+    expect(validateModelOutput(JSON.stringify(lesson), ctx, { model: null }).ok).toBe(true);
+    // Was: only …Minor keys were checked. Now any non-empty data is rejected, whatever its keys.
+    for (const data of [{ cashMinor: 123456 }, { cash: "€1,000" }, { label: "Ghost Bank" }]) {
+      const tampered = JSON.stringify({
+        ...lesson,
+        blocks: lesson.blocks.map((b) => (b.type === "visual" ? { ...b, data } : b)),
+      });
+      const r = validateModelOutput(tampered, ctx, { model: null });
+      expect(!r.ok && r.errors.map((e) => e.code)).toContain("VISUAL_DATA_NOT_EMPTY");
+    }
   });
 
   it("timeout -> fallback, even if the provider ignores the abort signal", async () => {
@@ -188,12 +199,6 @@ describe("bounded context", () => {
     expect(ctx.obligations.find((o) => o.state === "OVERDUE")?.remainingMinor).toBe(55000);
     expect(ctx.concepts.find((c) => c.conceptId === "cpt_net_worth")).toBeUndefined();
     expect(ctx.concepts.every((c) => c.learnerStatus !== undefined)).toBe(true);
-  });
-
-  it("money-mention parser uses integer minor units", () => {
-    expect(moneyMentionsMinor("pay €550 or 30.5 EUR, then 7,05 euros; day 8 is not money")).toEqual(
-      [55000, 3050, 705],
-    );
   });
 });
 
@@ -332,5 +337,226 @@ describe("owner conditions (6 Nov): stand-in labelling and rate limits", () => {
     clock = 30_001;
     await expect(provider.complete(req, { signal })).rejects.toThrow(/^nebius http 503$/);
     expect(calls).toBe(2);
+  });
+});
+
+describe("the model never writes figures (#84 review): placeholders only", () => {
+  const ctxOf = () => {
+    const { snap, events, learner } = scenario();
+    return buildTutorContext({ snapshot: snap, events, learnerState: learner });
+  };
+  /** A model reply whose user-visible strings are exactly the given ones. */
+  const reply = (
+    ctx: TutorContext,
+    t: {
+      markdown?: string;
+      textEquivalent?: string;
+      prompt?: string;
+      choices?: string[];
+      data?: object;
+    },
+  ) =>
+    JSON.stringify({
+      schemaVersion: "learning.lesson.v1",
+      lessonId: "les_t",
+      curriculumVersion: "seed.draft.v1",
+      conceptIds: [ctx.concepts[0]?.conceptId],
+      blocks: [
+        { type: "text", markdown: t.markdown ?? "You hold {{cash}}." },
+        {
+          type: "visual",
+          recipe: "CashFlowTimeline",
+          data: t.data ?? {},
+          textEquivalent: t.textEquivalent ?? "Cash against bills.",
+        },
+        {
+          type: "question",
+          prompt: t.prompt ?? "What would you check next?",
+          ...(t.choices ? { choices: t.choices } : {}),
+          rubricRef: "rubric:reflection",
+        },
+      ],
+      sourceRefs: ctx.allowedSourceRefs.slice(-1),
+    });
+  const codes = (raw: string, ctx: TutorContext) => {
+    const r = validateModelOutput(raw, ctx, { model: null });
+    return r.ok ? [] : r.errors.map((e) => e.code);
+  };
+  /** Always replies with the same raw text: the repair attempt repeats the mistake. */
+  const fixed = (raw: string): TutorProvider => ({
+    id: "fixed",
+    modelId: "test-model",
+    testStandIn: false,
+    complete: async () => raw,
+  });
+
+  const REVIEWER_EXAMPLES = [
+    "Your rent is $9,999.",
+    "You hold 9999 USD.",
+    "Rent of 9999 is due.",
+    "You have seven thousand euros.",
+    "You hold 770,000 EUR.",
+    "Rent is 770.00 EUR, due on day 1.",
+    "Rent is due on day 99, today is day 3.",
+    "You owe 770.00 EUR to Ghost Bank on day 5.",
+    "You hold €1,000.",
+  ];
+
+  it("every example from the independent review is rejected, in every text field", () => {
+    const ctx = ctxOf();
+    for (const bad of REVIEWER_EXAMPLES) {
+      for (const where of [
+        { markdown: bad },
+        { textEquivalent: bad },
+        { prompt: bad },
+        { choices: ["Pay now", bad] },
+      ])
+        expect(
+          codes(reply(ctx, where), ctx).length,
+          `${bad} in ${Object.keys(where)[0]}`,
+        ).toBeGreaterThan(0);
+    }
+  });
+
+  it("...and end-to-end they fall back to reviewed content after one repair; the figure is never shown", async () => {
+    const s = scenario();
+    const ctx = ctxOf();
+    for (const bad of REVIEWER_EXAMPLES) {
+      const lesson = await explainOutcome({
+        snapshot: s.snap,
+        events: s.events,
+        learnerState: s.learner,
+        provider: fixed(reply(ctx, { markdown: bad })),
+      });
+      expect(lesson.validation.status).toBe("FALLBACK_REVIEWED");
+      expect(JSON.stringify(lesson.blocks)).not.toContain(bad);
+    }
+  });
+
+  it("number words, currency words/symbols and non-ASCII numerals are rejected", () => {
+    const ctx = ctxOf();
+    const cases: Array<[string, string]> = [
+      ["You paid one bill.", "NUMBER_WORD"],
+      ["Twenty-Five days remain.", "NUMBER_WORD"],
+      ["About HALF of your cash.", "NUMBER_WORD"],
+      ["A dozen choices.", "NUMBER_WORD"],
+      ["Hundreds of options.", "NUMBER_WORD"],
+      ["Paid in euros.", "CURRENCY_OUTSIDE_PLACEHOLDER"],
+      ["A few dollars.", "CURRENCY_OUTSIDE_PLACEHOLDER"],
+      ["Some pounds.", "CURRENCY_OUTSIDE_PLACEHOLDER"],
+      ["Measured in CHF.", "CURRENCY_OUTSIDE_PLACEHOLDER"],
+      ["Measured in eur.", "CURRENCY_OUTSIDE_PLACEHOLDER"],
+      ["Costs ¥ and ₹.", "CURRENCY_OUTSIDE_PLACEHOLDER"],
+      ["Day ٣ is near.", "FIGURE_OUTSIDE_PLACEHOLDER"],
+      ["About ½ of it.", "FIGURE_OUTSIDE_PLACEHOLDER"],
+    ];
+    for (const [text, code] of cases)
+      expect(codes(reply(ctx, { markdown: text }), ctx), text).toContain(code);
+    // Word boundaries: these are not number words.
+    for (const ok of ["Someone often pays on behalf of nobody.", "None of this is gone."])
+      expect(codes(reply(ctx, { markdown: ok }), ctx), ok).toEqual([]);
+  });
+
+  it("creditor names come only from the placeholder: made-up names and creditor nouns are rejected", () => {
+    const ctx = ctxOf();
+    for (const text of [
+      "You owe money to Ghost Bank.",
+      "Acme Lending wants it back.",
+      "Your landlord is waiting.",
+      "Ask the lender.",
+      "A loan could help.",
+    ])
+      expect(codes(reply(ctx, { markdown: text }), ctx), text).toContain("UNSOURCED_NAME");
+  });
+
+  it("unknown placeholders, unknown obligation ids and malformed braces are rejected", () => {
+    const ctx = ctxOf();
+    const cases: Array<[string, string]> = [
+      ["You hold {{balance}}.", "UNKNOWN_PLACEHOLDER"],
+      ["You hold {{ cash }}.", "UNKNOWN_PLACEHOLDER"],
+      [`It is {{bill:${RENT}.colour}}.`, "UNKNOWN_PLACEHOLDER"],
+      ["You owe {{bill:obl_ghost_bank.remaining}}.", "UNKNOWN_OBLIGATION"],
+      ["You hold {cash}.", "PLACEHOLDER_MALFORMED"],
+      ["You hold {{cash}.", "PLACEHOLDER_MALFORMED"],
+      ["You hold {{{cash}}}.", "PLACEHOLDER_MALFORMED"],
+    ];
+    for (const [text, code] of cases)
+      expect(codes(reply(ctx, { markdown: text }), ctx), text).toContain(code);
+  });
+
+  it("a valid placeholder lesson is substituted with the exact snapshot values, after validation", () => {
+    const ctx = ctxOf();
+    const r = validateModelOutput(
+      reply(ctx, {
+        markdown: `You hold {{cash}} after paying {{bill:${PHONE}.amount}} to {{bill:${PHONE}.creditor}}. {{bill:${RENT}.creditor}} is owed {{bill:${RENT}.remaining}}, due on {{bill:${RENT}.dueDay}}; today is {{day}}.`,
+        textEquivalent: "Cash {{cash}} against {{owedTotal}} still owed.",
+        prompt: `What would you do before {{bill:${RENT}.dueDay}}?`,
+        choices: [`Pay {{bill:${RENT}.remaining}}`, "Wait"],
+      }),
+      ctx,
+      { model: "m" },
+    );
+    if (!r.ok) throw new Error(JSON.stringify(r.errors));
+    const [text, visual, question] = r.lesson.blocks;
+    expect(text).toEqual({
+      type: "text",
+      markdown:
+        "You hold 770.00 EUR (fictional) after paying 30.00 EUR (fictional) to Phone provider (fictional). Landlord (fictional) is owed 550.00 EUR (fictional), due on day 10; today is day 10.",
+    });
+    expect(visual).toMatchObject({
+      data: {},
+      textEquivalent: "Cash 770.00 EUR (fictional) against 550.00 EUR (fictional) still owed.",
+    });
+    expect(question).toMatchObject({
+      prompt: "What would you do before day 10?",
+      choices: ["Pay 550.00 EUR (fictional)", "Wait"],
+    });
+    // The substituted values contain digits, currency codes and creditor nouns: fine, they are
+    // the server's, and the checks ran on the raw text. The result is still contract-valid.
+    expect(LessonResponseSchema.safeParse(r.lesson).success).toBe(true);
+    expect(r.lesson.validation.checks).toContain("placeholders-rendered");
+  });
+
+  it("substituted text that outgrows the contract limit is rejected, not truncated", () => {
+    const ctx = ctxOf();
+    const markdown = "{{cash}} ".repeat(130); // raw fits 1200 chars, the rendered text does not
+    expect(markdown.length).toBeLessThanOrEqual(1200);
+    expect(codes(reply(ctx, { markdown }), ctx)).toEqual(["SCHEMA_INVALID"]);
+  });
+
+  it("amount formatting is integer-only and always labelled fictional", () => {
+    expect(formatFictionalAmount(77_000, "EUR")).toBe("770.00 EUR (fictional)");
+    expect(formatFictionalAmount(5, "EUR")).toBe("0.05 EUR (fictional)");
+    expect(formatFictionalAmount(-55_001, "GBP")).toBe("-550.01 GBP (fictional)");
+    expect(formatFictionalAmount(1200, "JPY")).toBe("1200 JPY (fictional)");
+  });
+
+  it("the reviewed fallback lessons pass the same figure and name rules (no numbers, ever)", () => {
+    const ctx = ctxOf();
+    for (const c of SEED_CONCEPTS) {
+      const lesson = fallbackLesson(
+        {
+          ...ctx,
+          concepts: [
+            {
+              conceptId: c.conceptId,
+              label: c.canonicalLabel,
+              summary: "",
+              learnerStatus: "NO_EVIDENCE",
+            },
+          ],
+        },
+        "test",
+      );
+      for (const b of lesson.blocks) {
+        const strings =
+          b.type === "text"
+            ? [b.markdown]
+            : b.type === "question"
+              ? [b.prompt, ...(b.choices ?? [])]
+              : [b.textEquivalent];
+        for (const t of strings) expect([...figureIssues(t), ...nameIssues(t)], t).toEqual([]);
+      }
+    }
   });
 });

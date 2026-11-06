@@ -15,3 +15,15 @@ export function formatFictional(money: Money): string {
   const minor = digits === 0 ? "" : `.${abs.slice(-digits)}`;
   return `${negative ? "-" : ""}${SYMBOL[money.currency]}${major}${minor} (fictional)`;
 }
+
+const MONEY_IN_TEXT =
+  /(?:[€$£¥]\s?-?\d+(?:[.,]\d{1,2})?|-?\d+(?:[.,]\d{1,2})?\s?(?:EUR|USD|GBP|JPY)\b)(?!\s*\(fictional\))/g;
+
+/**
+ * Appends "(fictional)" to every money amount in free text (lesson blocks, #84), e.g.
+ * "You hold 770.00 EUR" -> "You hold 770.00 EUR (fictional)". Display only: the validated lesson
+ * is not changed, and amounts already labelled are left alone (invariant 7).
+ */
+export function labelFictional(text: string): string {
+  return text.replace(MONEY_IN_TEXT, (m) => `${m} (fictional)`);
+}

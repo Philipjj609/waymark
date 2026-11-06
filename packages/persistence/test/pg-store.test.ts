@@ -14,9 +14,13 @@ import {
 import { getTableName, sql } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/pglite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type Db, migrate, PgWorldStore, schema } from "../src/index.js";
 import { rowsOf } from "../src/migrate.js";
+
+// PGlite (Postgres compiled to WASM) starts a fresh in-process database per test. On the
+// Windows CI runner that took ~7 s once, past Vitest's 5 s default, and failed an unrelated PR.
+vi.setConfig({ testTimeout: 30_000 });
 
 const A = "a".repeat(64) as SessionHash;
 const B = "b".repeat(64) as SessionHash;

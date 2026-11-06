@@ -5,5 +5,6 @@ export * from "./explain.js";
 export * from "./fake.js";
 export * from "./fallback.js";
 export * from "./nebius.js";
+export * from "./placeholders.js";
 export * from "./types.js";
 export * from "./validate.js";

@@ -3,6 +3,7 @@ export { InMemoryWorldStore, recorded } from "./memory-store.js";
 export {
   createGuestWorld,
   getWorld,
+  getWorldHistory,
   type ServiceErrorCode,
   type ServiceResponse,
   submitPlayerCommand,

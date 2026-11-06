@@ -3,8 +3,10 @@ import type { NextConfig } from "next";
 const config: NextConfig = {
   // Workspace packages ship TypeScript source (exports point at src/*.ts), so Next compiles them.
   transpilePackages: [
+    "@fle/ai",
     "@fle/contracts",
     "@fle/domain",
+    "@fle/learning",
     "@fle/persistence",
     "@fle/server",
     "@fle/simulation",

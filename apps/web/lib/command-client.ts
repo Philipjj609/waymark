@@ -1,4 +1,4 @@
-import type { CommandEnvelope, CommandResult, WorldSnapshot } from "@fle/contracts";
+import type { CommandEnvelope, CommandResult, LessonResponse, WorldSnapshot } from "@fle/contracts";
 
 type PlayerKind = Exclude<CommandEnvelope["kind"], "APPLY_VERIFIED_PROVIDER_EVENT">;
 
@@ -129,7 +129,31 @@ export function createApiClient(overrides: Partial<ClientDeps> = {}) {
     throw lastError instanceof Error ? lastError : new ApiError(0, "NETWORK", "network error");
   }
 
-  return { createWorld, getSnapshot, send };
+  /**
+   * The tutor's explanation of the world's latest events (#84). Read-only and never retried:
+   * a failure only means no lesson is shown; it never affects the game.
+   */
+  async function explain(worldId: string): Promise<Explanation> {
+    // POST behind the CSRF gate: it spends quota (and possibly a paid model call).
+    const res = await deps.fetch(`/api/worlds/${encodeURIComponent(worldId)}/explain`, {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    const body = await readJson(res);
+    if (!res.ok) throw toApiError(res, body);
+    return body as Explanation;
+  }
+
+  return { createWorld, explain, getSnapshot, send };
+}
+
+export interface Explanation {
+  readonly lesson: LessonResponse;
+  /** The world version the lesson describes. */
+  readonly worldVersion: number;
 }
 
 export type ApiClient = ReturnType<typeof createApiClient>;

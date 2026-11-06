@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createGuestWorld,
   getWorld,
+  getWorldHistory,
   hashSessionId,
   InMemoryWorldStore,
   newSessionId,
@@ -194,5 +195,42 @@ describe("command service", () => {
     // Our command was built on the old version: re-run against the new head, it is STALE (recorded).
     expect(mine.ok && mine.result.error?.code).toBe("STALE_WORLD_VERSION");
     expect(inner.history(worldId)?.commands.map((c) => c.commandId)).toEqual([cmd(9), cmd(1)]);
+  });
+});
+
+describe("getWorldHistory (#84, read-only tutor input)", () => {
+  it("returns the snapshot and the full event log of the owner's world from one load", async () => {
+    const store = new InMemoryWorldStore();
+    const me = owner();
+    const { worldId, snapshot } = await createGuestWorld(store, me);
+    await submitPlayerCommand(
+      store,
+      me,
+      envelope(worldId, snapshot.version, cmd(1), {
+        kind: "ADVANCE_TIME",
+        payload: { targetDay: 8 },
+      }),
+    );
+    const r = await getWorldHistory(store, me, worldId);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.events).toHaveLength(r.snapshot.eventCount);
+    expect(r.events.map((e) => e.sequence)).toEqual(r.events.map((_, i) => i + 1));
+    expect(r.events.every((e) => e.worldId === worldId)).toBe(true);
+    // Reading changes nothing.
+    const again = await getWorld(store, me, worldId);
+    expect(again.ok && again.snapshot.stateHash).toBe(r.snapshot.stateHash);
+  });
+
+  it("another session and a missing world both get WORLD_NOT_FOUND", async () => {
+    const store = new InMemoryWorldStore();
+    const me = owner();
+    const { worldId } = await createGuestWorld(store, me);
+    for (const r of [
+      await getWorldHistory(store, owner(), worldId),
+      await getWorldHistory(store, me, "wld_nope" as WorldId),
+    ]) {
+      expect(r).toMatchObject({ ok: false, httpStatus: 404, error: { code: "WORLD_NOT_FOUND" } });
+    }
   });
 });
