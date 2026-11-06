@@ -16,6 +16,21 @@
 | `learning.lesson.v1`    | typed lesson blocks + validation + provenance                                   |
 | `director.candidate.v1` | scenario proposal the engine validates before scheduling                        |
 
+## Command ids (client policy, #46)
+
+The engine stores **every** outcome, accepted or rejected, under its `commandId`, together with a fingerprint
+of the intent (kind, payload, origin, actor). This makes retries safe, and it means:
+1. **One fresh UUID per user intent.** Generate it when the user acts (clicks "Pay"), not per HTTP attempt.
+2. **Network retry of the same intent → reuse the same id.** You get the stored outcome back (`duplicate: true`).
+   `correlationId` and `expectedWorldVersion` are not part of the intent, so changing them still counts as a retry.
+3. **A rejected id is final.** After `STALE_WORLD_VERSION` (or any rejection), re-read the snapshot and, if the user
+   still wants it, send the command again with a **new** id and the current `expectedWorldVersion`.
+4. **Never reuse an id for a different intent.** That returns `IDEMPOTENCY_CONFLICT` and changes nothing.
+5. **Provider facts** (PayPal) use a server-only id space and a fresh id per attempt. The capture id, not the
+   commandId, is their dedup key (ADR-0008, #48). Browsers can't submit them (`sim.player-command.v1`).
+
+Pinned by `packages/simulation/test/command-id-policy.test.ts`. The web client implements rules 1–3 in #10.
+
 ## Changing a contract
 
 1. Open an issue labelled `contract-change`: what, why, consumers affected, additive or breaking.
