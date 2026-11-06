@@ -70,6 +70,34 @@ describe("command-id policy", () => {
     });
     expect(retry.duplicate).toBe(true);
   });
+
+  it("expectedWorldVersion is not part of the intent: a retry sent after the world moved is still a duplicate", () => {
+    const w = atPhoneDue();
+    const pay = playerCommand(w, cmd(2), {
+      kind: "PAY_OBLIGATION",
+      payload: { obligationId: PHONE },
+    });
+    const first = execute(w, pay);
+    expect(first.state.version).not.toBe(w.version);
+    const retry = execute(first.state, { ...pay, expectedWorldVersion: first.state.version });
+    expect(retry.duplicate).toBe(true);
+    expect(retry.result).toEqual(first.result);
+    expect(retry.state).toBe(first.state);
+  });
+
+  it("the fingerprint includes the origin: same id and body from another origin is a conflict, not a replay", () => {
+    const w = run(atPhoneDue(), [
+      [cmd(2), { kind: "DEFER_OBLIGATION", payload: { obligationId: PHONE } }],
+    ]);
+    const forged = {
+      ...playerCommand(w, cmd(2), { kind: "DEFER_OBLIGATION", payload: { obligationId: PHONE } }),
+      origin: "RULE_ENGINE",
+    } as Parameters<typeof execute>[1];
+    const r = execute(w, forged);
+    expect(r.result.error?.code).toBe("IDEMPOTENCY_CONFLICT");
+    expect(r.duplicate).not.toBe(true);
+    expect(r.state).toBe(w);
+  });
 });
 
 describe("answers to the #46 question from claude@Philipjj609/waymark-wp-27#5e2b", () => {
