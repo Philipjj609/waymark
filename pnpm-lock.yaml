@@ -51,6 +51,15 @@ importers:
         specifier: workspace:*
         version: link:../contracts
 
+  packages/server:
+    dependencies:
+      '@fle/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@fle/simulation':
+        specifier: workspace:*
+        version: link:../simulation
+
   packages/simulation:
     dependencies:
       '@fle/contracts':

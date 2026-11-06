@@ -1,0 +1,15 @@
+{
+  "name": "@fle/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Server application seam: WorldStore port, in-memory store, guest sessions and the command service. Shared by apps/web (#10) and the Postgres store (#9). Server-only (uses node:crypto).",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/store-contract.ts"
+  },
+  "dependencies": {
+    "@fle/contracts": "workspace:*",
+    "@fle/simulation": "workspace:*"
+  }
+}
