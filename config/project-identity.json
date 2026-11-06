@@ -7,7 +7,7 @@
   "finalBrandName": null,
   "identityVersion": 1,
   "githubRepository": "https://github.com/Philipjj609/waymark",
-  "githubRepositoryStatus": "PLANNED_PRIVATE",
+  "githubRepositoryStatus": "CREATED_PRIVATE",
   "decisionRecord": "https://docs.google.com/document/d/1vUVzYbrRMPqGh6EJZnMQOW1hjaM09zNOUb_4-OCfR4Y/edit",
   "lastDecision": "2026-11-06: use Waymark only as a temporary development codename; likely rename later.",
   "renamePending": false
