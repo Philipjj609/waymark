@@ -20,7 +20,7 @@
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm contracts:check"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.2",
+    "@biomejs/biome": "2.6.4",
     "@types/node": "24.19.2",
     "fast-check": "4.10.2",
     "tsx": "4.23.15",
