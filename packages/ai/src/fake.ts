@@ -1,5 +1,4 @@
 import type { TutorContext } from "./context.js";
-import { formatMinorForLesson } from "./format.js";
 import type { TutorProvider, TutorRequest } from "./types.js";
 
 export type FakeBehavior =
@@ -38,34 +37,34 @@ export class FakeTutorProvider implements TutorProvider {
   }
 }
 
+/**
+ * Placeholder-based like a real model must be (placeholders.ts): the fake writes no figure itself.
+ * "wrong-number" writes a literal (wrong) figure, which the validator must reject.
+ */
 function lessonFor(ctx: TutorContext, behavior: FakeBehavior) {
   const concept = ctx.concepts[0];
-  const rent = ctx.obligations.find((o) => o.remainingMinor > 0);
-  const cash = formatMinorForLesson(ctx.cashMinor, ctx.currency);
-  const sentence = rent
-    ? `You hold ${cash} and ${rent.creditor} is owed ${formatMinorForLesson(
-        behavior === "wrong-number" ? rent.remainingMinor + 100 : rent.remainingMinor,
-        ctx.currency,
-      )} on day ${rent.dueDay}.`
-    : `You hold ${cash}.`;
+  const bill = ctx.obligations.find((o) => o.remainingMinor > 0);
+  const owed = (id: string) =>
+    behavior === "wrong-number"
+      ? `${Math.trunc((bill?.remainingMinor ?? 0) / 100) + 1}.00 EUR`
+      : `{{bill:${id}.remaining}}`;
+  const sentence = bill
+    ? `You hold {{cash}} and {{bill:${bill.obligationId}.creditor}} is owed ${owed(
+        bill.obligationId,
+      )}, due on {{bill:${bill.obligationId}.dueDay}}.`
+    : "You hold {{cash}}.";
   return {
     schemaVersion: "learning.lesson.v1",
     lessonId: `les_fake_d${ctx.day}`,
     curriculumVersion: "seed.draft.v1",
     conceptIds: [concept?.conceptId ?? "cpt_cash_balance"],
     blocks: [
-      { type: "text", markdown: `${sentence} ${concept?.summary ?? ""}`.trim() },
+      { type: "text", markdown: `${sentence} Today is {{day}}.` },
       {
         type: "visual",
         recipe: behavior === "bad-recipe" ? "RunArbitraryScript" : "CashFlowTimeline",
-        data: {
-          cashMinor: ctx.cashMinor,
-          obligations: ctx.obligations.map((o) => ({
-            dueDay: o.dueDay,
-            amountMinor: o.remainingMinor,
-          })),
-        },
-        textEquivalent: `Cash ${cash} against the bills due in the coming days.`,
+        data: {},
+        textEquivalent: "Your cash ({{cash}}) against everything still owed ({{owedTotal}}).",
       },
       {
         type: "question",

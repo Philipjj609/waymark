@@ -1,5 +1,5 @@
 /**
- * #84: the tutor read model and GET /api/worlds/[worldId]/explain. Default (in-memory) store and
+ * #84: the tutor read model and POST /api/worlds/[worldId]/explain. Default (in-memory) store and
  * the deterministic fake provider: no network, no key.
  */
 import { FakeTutorProvider } from "@fle/ai";
@@ -170,6 +170,24 @@ describe("explain endpoint: CSRF and request validation (owner, 7 Nov)", () => {
       params(g.worldId),
     );
     expect(big.status).toBe(413);
+    // A body larger than the cap is refused even when content-length is absent (chunked), and it
+    // is NOT buffered: reading stops at the cap instead of pulling the whole (here ~5 MB) stream.
+    let pulled = 0;
+    const chunk = new TextEncoder().encode(`{"x":"${"a".repeat(506)}`);
+    const streamed = new Request(`${ORIGIN}/api/worlds/${g.worldId}/explain`, {
+      method: "POST",
+      headers: { cookie: g.cookie, origin: ORIGIN, "content-type": "application/json" },
+      body: new ReadableStream({
+        pull(c) {
+          if (++pulled > 10_000) c.close();
+          else c.enqueue(chunk);
+        },
+      }),
+      duplex: "half",
+    } as RequestInit);
+    expect(streamed.headers.get("content-length")).toBeNull();
+    expect((await postExplain(streamed, params(g.worldId))).status).toBe(413);
+    expect(pulled).toBeLessThan(10);
   });
 
   it("forged cross-origin requests do NOT consume the session's quota", async () => {
@@ -199,6 +217,12 @@ describe("POST /api/worlds/[worldId]/explain", () => {
     expect(body.lesson.provenance.generator).toBe("MODEL");
     expect(body.lesson.provenance.model).toMatch(/^TEST STAND-IN/);
     expect(provenanceBadge(body.lesson.provenance).label).toBe("TEST STAND-IN (not an AI model)");
+    // The fake writes placeholders only; the server substituted the snapshot's values (day 8,
+    // phone paid: cash 770.00, rent 550.00 due day 10). No raw placeholder reaches the UI.
+    const shown = JSON.stringify(body.lesson.blocks);
+    expect(shown).toContain("You hold 770.00 EUR (fictional)");
+    expect(shown).toContain("is owed 550.00 EUR (fictional), due on day 10");
+    expect(shown).not.toContain("{{");
     // Grounded in the world: a concept of the payment, citing the latest event (the payment).
     expect(["cpt_obligation", "cpt_cash_balance"]).toContain(body.lesson.conceptIds[0]);
     const h = await getWorldHistory(getStore(), ownerOf(g), g.worldId as WorldId);

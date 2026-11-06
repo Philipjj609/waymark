@@ -1,12 +1,14 @@
 import { type LessonResponse, LessonResponseSchema, VisualRecipeTypeSchema } from "@fle/contracts";
 import type { TutorContext } from "./context.js";
+import { checkModelText, type PlaceholderErrorCode, renderPlaceholders } from "./placeholders.js";
 import { CURRICULUM_VERSION, PROMPT_VERSION } from "./types.js";
 
 export type ValidationErrorCode =
   | "JSON_PARSE"
   | "SCHEMA_INVALID"
   | "UNKNOWN_RECIPE"
-  | "NUMBER_MISMATCH"
+  | PlaceholderErrorCode
+  | "VISUAL_DATA_NOT_EMPTY"
   | "SOURCE_REFS_MISSING"
   | "UNKNOWN_SOURCE_REF"
   | "UNKNOWN_CONCEPT";
@@ -19,66 +21,34 @@ export type ValidationResult =
   | { readonly ok: true; readonly lesson: LessonResponse }
   | ValidationFailure;
 
-/** Integer minor-unit amounts the snapshot supports. Anything else the model says is rejected. */
-export function allowedAmountsMinor(ctx: TutorContext): Set<number> {
-  const out = new Set<number>([ctx.cashMinor]);
-  let open = 0;
-  for (const o of ctx.obligations) {
-    out.add(o.amountMinor);
-    out.add(o.remainingMinor);
-    if (o.remainingMinor > 0) {
-      open += o.remainingMinor;
-      const after = ctx.cashMinor - o.remainingMinor;
-      out.add(Math.abs(after)); // shortfall, or cash left after paying
-    }
-  }
-  out.add(open);
-  out.add(Math.abs(ctx.cashMinor - open));
-  for (const a of ctx.assets) out.add(a.costMinor);
+/** Model-authored, user-visible strings of one block, with a path for error details. */
+function modelStrings(block: Record<string, unknown>): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  for (const key of ["markdown", "textEquivalent", "prompt"])
+    if (typeof block[key] === "string") out.push([key, block[key] as string]);
+  if (Array.isArray(block.choices))
+    block.choices.forEach((c, i) => {
+      if (typeof c === "string") out.push([`choices[${i}]`, c]);
+    });
   return out;
 }
 
-const MONEY_MENTION =
-  /(?:€\s?(\d+(?:[.,]\d{1,2})?))|(?:(\d+(?:[.,]\d{1,2})?)\s?(?:€|EUR\b|euros?\b))/gi;
-
-/** "55", "55.5", "55,05" -> minor units, with integer arithmetic only (no floats, invariant 1). */
-export function toMinor(text: string): number {
-  const [whole = "0", frac = ""] = text.replace(",", ".").split(".");
-  return Number(whole) * 100 + Number(frac.padEnd(2, "0"));
-}
-
-export function moneyMentionsMinor(text: string): number[] {
-  const out: number[] = [];
-  for (const m of text.matchAll(MONEY_MENTION)) out.push(toMinor((m[1] ?? m[2]) as string));
-  return out;
-}
-
-function collectStrings(lesson: Record<string, unknown>): string[] {
-  const blocks = Array.isArray(lesson.blocks) ? lesson.blocks : [];
-  const out: string[] = [];
-  for (const b of blocks as Record<string, unknown>[]) {
-    for (const key of ["markdown", "textEquivalent", "prompt"])
-      if (typeof b[key] === "string") out.push(b[key] as string);
-    if (Array.isArray(b.choices)) for (const c of b.choices) if (typeof c === "string") out.push(c);
-  }
-  return out;
-}
-
-/** Numbers under keys ending in "Minor" inside visual data are amounts; check them too. */
-function collectMinorFields(value: unknown, out: number[] = []): number[] {
-  if (Array.isArray(value)) for (const v of value) collectMinorFields(v, out);
-  else if (value && typeof value === "object")
-    for (const [k, v] of Object.entries(value)) {
-      if (k.endsWith("Minor") && typeof v === "number") out.push(v);
-      else collectMinorFields(v, out);
-    }
-  return out;
+/** Same block with every user-visible string passed through `f`. */
+function mapStrings<T extends Record<string, unknown>>(block: T, f: (s: string) => string): T {
+  const out: Record<string, unknown> = { ...block };
+  for (const key of ["markdown", "textEquivalent", "prompt"])
+    if (typeof out[key] === "string") out[key] = f(out[key] as string);
+  if (Array.isArray(out.choices))
+    out.choices = out.choices.map((c) => (typeof c === "string" ? f(c) : c));
+  return out as T;
 }
 
 /**
- * LEARN-002 steps 5-7 plus ADR-0007: schema -> numbers recomputed from the snapshot ->
- * recipe whitelist -> source refs. The model supplies only the lesson content; `validation`
- * and `provenance` are written HERE so a model can never self-certify.
+ * LEARN-002 steps 5-7 plus ADR-0007: schema -> recipe whitelist -> "no figure outside a
+ * placeholder" (see placeholders.ts) -> empty visual data -> source refs -> concepts. All checks run
+ * on the RAW model text; only then does the server substitute the placeholders with values from
+ * the context. The model supplies only the lesson content; `validation` and `provenance` are
+ * written HERE so a model can never self-certify.
  */
 export function validateModelOutput(
   raw: string,
@@ -106,11 +76,11 @@ export function validateModelOutput(
       fail("UNKNOWN_RECIPE", `recipe ${String(b.recipe)} is not whitelisted`);
   }
 
-  const full = LessonResponseSchema.safeParse({
-    ...candidate,
+  const envelope = {
     validation: { status: "VALIDATED", checks: [] },
     provenance: { generator: "MODEL", model: meta.model, promptVersion: PROMPT_VERSION },
-  });
+  } as const;
+  const full = LessonResponseSchema.safeParse({ ...candidate, ...envelope });
   if (!full.success) {
     if (!errors.some((e) => e.code === "UNKNOWN_RECIPE"))
       fail("SCHEMA_INVALID", full.error.issues[0]?.message ?? "schema mismatch");
@@ -119,14 +89,14 @@ export function validateModelOutput(
   if (errors.length > 0) return { ok: false, errors };
   const lesson = full.data;
 
-  const allowed = allowedAmountsMinor(ctx);
-  const mentioned = [
-    ...collectStrings(lesson as unknown as Record<string, unknown>).flatMap(moneyMentionsMinor),
-    ...lesson.blocks.flatMap((b) => (b.type === "visual" ? collectMinorFields(b.data) : [])),
-  ];
-  for (const m of mentioned)
-    if (!allowed.has(m))
-      fail("NUMBER_MISMATCH", `amount ${m} (minor units) is not in the snapshot`);
+  lesson.blocks.forEach((b, i) => {
+    for (const [path, text] of modelStrings(b as unknown as Record<string, unknown>))
+      for (const issue of checkModelText(text, ctx))
+        fail(issue.code, `blocks[${i}].${path}: ${issue.detail}`);
+    // Renderers (#26) compute their data from the snapshot; the model supplies none.
+    if (b.type === "visual" && Object.keys(b.data).length > 0)
+      fail("VISUAL_DATA_NOT_EMPTY", `blocks[${i}].data must be {}`);
+  });
 
   if (lesson.sourceRefs.length === 0) fail("SOURCE_REFS_MISSING", "no source refs");
   for (const ref of lesson.sourceRefs)
@@ -137,14 +107,38 @@ export function validateModelOutput(
     if (!knownConcepts.has(id)) fail("UNKNOWN_CONCEPT", `concept ${id} is not in the context`);
 
   if (errors.length > 0) return { ok: false, errors };
+
+  // Validated: now (and only now) the server writes the figures, from the context.
+  const rendered = LessonResponseSchema.safeParse({
+    ...lesson,
+    blocks: lesson.blocks.map((b) => mapStrings(b, (t) => renderPlaceholders(t, ctx))),
+  });
+  if (!rendered.success)
+    return {
+      ok: false,
+      errors: [
+        {
+          code: "SCHEMA_INVALID",
+          detail: `after substitution: ${rendered.error.issues[0]?.message ?? "schema mismatch"}`,
+        },
+      ],
+    };
   return {
     ok: true,
     lesson: {
-      ...lesson,
+      ...rendered.data,
       curriculumVersion: CURRICULUM_VERSION,
       validation: {
         status: "VALIDATED",
-        checks: ["schema", "numbers-recomputed", "recipe-whitelist", "source-refs", "concepts"],
+        checks: [
+          "schema",
+          "recipe-whitelist",
+          "no-figures-outside-placeholders",
+          "visual-data-empty",
+          "source-refs",
+          "concepts",
+          "placeholders-rendered",
+        ],
       },
     },
   };
