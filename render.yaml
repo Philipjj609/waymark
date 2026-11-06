@@ -1,0 +1,50 @@
+# Render Blueprint (#28, ADR-0006). PREPARED, NOT APPLIED.
+# Applying it creates resources in the owner's Render account. The plans below are `free`;
+# switching any plan to a paid one is an owner spending decision (AGENTS.md §9). See docs/deploy/render.md.
+#
+# Secrets are never in this file: every `sync: false` value is entered in the Render dashboard.
+services:
+  - type: web
+    name: waymark-web
+    runtime: node
+    plan: free # owner decides: free (sleeps after 15 min idle) or 0.5c-512mb ($7/month, always on)
+    region: frankfurt
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @fle/web build
+    startCommand: pnpm --filter @fle/web start
+    healthCheckPath: /api/health
+    autoDeploy: false # deploys only when the owner (or an approved agent) triggers them
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      # Durable worlds (#9). DATABASE_URL comes from the chosen Postgres (Neon or Render), with sslmode=require.
+      - key: WORLD_STORE
+        value: postgres
+      - key: DATABASE_URL
+        sync: false
+      # Exact Origin allowlist for writes (ADR-0011): the service's https URL, set after the first deploy.
+      - key: APP_ORIGINS
+        sync: false
+      # AI tutor (ADR-0007). Without a key the app uses the TEST STAND-IN fake plus reviewed fallback.
+      - key: AI_PROVIDER
+        value: fake
+      - key: NEBIUS_API_BASE
+        value: https://api.tokenfactory.nebius.com/v1
+      - key: NEBIUS_API_KEY
+        sync: false
+      - key: AI_MODEL_TUTOR
+        sync: false
+      # PayPal SANDBOX only (#5). Live credentials must never be configured.
+      - key: PAYPAL_ENV
+        value: sandbox
+      - key: PAYPAL_API_BASE
+        value: https://api-m.sandbox.paypal.com
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+# A Render Postgres is deliberately NOT declared: the free one expires 30 days after creation, which
+# falls inside judging (1–15 Dec). Option A in docs/deploy/render.md adds it as a paid database.
