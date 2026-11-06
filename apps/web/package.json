@@ -1,0 +1,26 @@
+{
+  "name": "@fle/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Next.js (App Router) web shell: guest sessions, route handlers over @fle/server, plain functional UI (#10).",
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@fle/contracts": "workspace:*",
+    "@fle/persistence": "workspace:*",
+    "@fle/server": "workspace:*",
+    "next": "16.4.3",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0"
+  }
+}

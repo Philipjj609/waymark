@@ -57,7 +57,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec vitest run packages/persistence
+      - run: pnpm exec vitest run packages/persistence apps/web/test/persistence.test.ts
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
