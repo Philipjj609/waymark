@@ -57,9 +57,10 @@ export function imbalance(lines: readonly JournalLine[]): Map<CurrencyCode, bigi
 
 /** Recursively freeze plain data so posted entries cannot be mutated through any reference. */
 export function deepFreeze<T>(value: T): T {
-  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+  if (value !== null && typeof value === "object") {
+    // Recurse even when `value` is already frozen: its children may not be (review N5).
     for (const v of Object.values(value)) deepFreeze(v);
-    Object.freeze(value);
+    if (!Object.isFrozen(value)) Object.freeze(value);
   }
   return value;
 }

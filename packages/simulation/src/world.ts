@@ -16,7 +16,15 @@ import type {
   WorldId,
   WorldSnapshot,
 } from "@fle/contracts";
-import { deepFreeze, Ledger } from "@fle/domain";
+import {
+  AccountCodeSchema,
+  EntityIdSchema,
+  ObligationIdSchema,
+  ScheduleIdSchema,
+  WorldDaySchema,
+  WorldIdSchema,
+} from "@fle/contracts";
+import { accountClass, deepFreeze, Ledger } from "@fle/domain";
 import { chainHash, compareCodeUnits, GENESIS_HASH } from "./canonical.js";
 import type { EntityState, IncomeRule, ScheduledItem, WorldState } from "./state.js";
 
@@ -73,7 +81,43 @@ export function validateWorldConfig(config: WorldConfig): void {
     throw new WorldConfigError(`${config.worldId}: ${msg}`);
   };
   const start = config.startDay ?? 1;
-  if (!Number.isInteger(start) || start < 1) fail(`startDay ${start} must be an integer >= 1`);
+  if (!WorldDaySchema.safeParse(start).success) fail(`startDay ${start} is not a valid world day`);
+  if (!WorldIdSchema.safeParse(config.worldId).success) fail("worldId is malformed");
+  const ok = (
+    schema: { safeParse(v: unknown): { success: boolean } },
+    v: unknown,
+    what: string,
+  ) => {
+    if (!schema.safeParse(v).success) fail(`${what} "${String(v)}" is malformed`);
+  };
+  for (const e of config.entities) ok(EntityIdSchema, e.entityId, "entity id");
+  for (const o of config.obligations) {
+    ok(ObligationIdSchema, o.obligationId, "obligation id");
+    ok(WorldDaySchema, o.dueDay, `dueDay of ${o.obligationId}`);
+    // The settlement account is DEBITED against cash: only an expense, or a liability
+    // (paying down a payable), is valid. Cash or revenue would settle for free (review N1).
+    if (!AccountCodeSchema.safeParse(o.settlementAccount).success)
+      fail(`settlementAccount of ${o.obligationId} is malformed`);
+    if (!["EXPENSE", "LIABILITY"].includes(accountClass(o.settlementAccount)))
+      fail(`settlementAccount of ${o.obligationId} must be an EXPENSE or LIABILITY account`);
+  }
+  for (const i of config.incomes) {
+    ok(ScheduleIdSchema, i.scheduleId, "income schedule id");
+    ok(WorldDaySchema, i.day, `day of ${i.scheduleId}`);
+    if (i.scheduleId.startsWith("sch_obl_"))
+      fail(`income schedule id ${i.scheduleId} uses the reserved prefix sch_obl_`);
+  }
+  const lim = config.limits ?? {};
+  if (
+    lim.maxAdvanceDays !== undefined &&
+    (!Number.isInteger(lim.maxAdvanceDays) || lim.maxAdvanceDays < 1)
+  )
+    fail("limits.maxAdvanceDays must be a positive integer");
+  if (
+    lim.maxEventsPerCommand !== undefined &&
+    (!Number.isInteger(lim.maxEventsPerCommand) || lim.maxEventsPerCommand < 10)
+  )
+    fail("limits.maxEventsPerCommand must be an integer >= 10");
   const money = (m: Money, what: string, allowZero: boolean) => {
     if (m.currency !== config.currency)
       fail(`${what} is ${m.currency}, world currency is ${config.currency}`);

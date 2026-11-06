@@ -112,3 +112,15 @@ describe("webhook delivery dedup (T02)", () => {
     expect(dedupeDeliveries(new Set(["A"]), ["B", "A", "B", "C"])).toEqual(["B", "C"]);
   });
 });
+
+describe("review round 2", () => {
+  it("inherited property names are not currencies (M7)", () => {
+    expect(() => formatPayPalAmount({ amountMinor: 1, currency: "constructor" as never })).toThrow(
+      AmountFormatError,
+    );
+    expect(() => parsePayPalAmount("1.00", "toString")).toThrow(AmountFormatError);
+  });
+  it("accepts PayPal's '.5' form", () => {
+    expect(parsePayPalAmount(".5", "EUR").amountMinor).toBe(50);
+  });
+});

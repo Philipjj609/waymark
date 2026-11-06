@@ -318,3 +318,69 @@ describe("golden command-path hash", () => {
     );
   });
 });
+
+describe("second review round (N1–N6, M7 leftovers)", () => {
+  const base = fp30Config();
+  const withPatch = (
+    patch: (c: Record<string, unknown> & ReturnType<typeof fp30Config>) => void,
+  ) => {
+    const c = structuredClone(base) as Record<string, unknown> & ReturnType<typeof fp30Config>;
+    patch(c);
+    return () => createWorld(c);
+  };
+  it("N1 settlement account must be EXPENSE or LIABILITY (no free settlement via cash/revenue)", () => {
+    for (const acct of ["ASSET:Cash", "REVENUE:Wages", "nonsense"]) {
+      expect(
+        withPatch(
+          (c) => ((c.obligations[0] as { settlementAccount: string }).settlementAccount = acct),
+        ),
+      ).toThrow(WorldConfigError);
+    }
+  });
+  it("N2 provider commands need a well-formed actor id", () => {
+    const w = atPhoneDue();
+    const bad = {
+      ...asProvider(w, 10, capture(w, "CAPTURE_COMPLETED")),
+      actorId: "",
+    } as AuthorizedCommand;
+    expect(execute(w, bad).result.error?.code).toBe("SCHEMA_INVALID");
+  });
+  it("N3 malformed ids, days, reserved schedule prefix and limits are rejected", () => {
+    expect(withPatch((c) => ((c as { worldId: string }).worldId = "nope"))).toThrow(
+      WorldConfigError,
+    );
+    expect(withPatch((c) => ((c.obligations[0] as { dueDay: number }).dueDay = 200_000))).toThrow(
+      WorldConfigError,
+    );
+    expect(
+      withPatch((c) => ((c.incomes[0] as { scheduleId: string }).scheduleId = "sch_obl_x")),
+    ).toThrow(/reserved/);
+    expect(
+      withPatch((c) => ((c as { limits: unknown }).limits = { maxEventsPerCommand: 0 })),
+    ).toThrow(/maxEventsPerCommand/);
+    expect(withPatch((c) => ((c as { limits: unknown }).limits = { maxAdvanceDays: -5 }))).toThrow(
+      /maxAdvanceDays/,
+    );
+  });
+  it("N4 executing a command never freezes the caller's objects", () => {
+    const w = fp30();
+    const c = playerCommand(w, cmd(1), {
+      kind: "PURCHASE_ASSET",
+      payload: { entityId: PERSON, label: "x", cost: eur(10) },
+    });
+    execute(w, c);
+    expect(Object.isFrozen((c as { payload: { cost: object } }).payload.cost)).toBe(false);
+  });
+  it("N6 the same capture with a different verification method is a duplicate, not a conflict", () => {
+    let w = atPhoneDue();
+    const ev = capture(w, "CAPTURE_COMPLETED");
+    w = execute(w, asProvider(w, 10, ev)).state;
+    const viaWebhook = {
+      ...ev,
+      verification: { ...ev.verification, method: "WEBHOOK_SIGNATURE_POSTBACK" as const },
+    };
+    const again = execute(w, asProvider(w, 10, viaWebhook));
+    expect(again.duplicate).toBe(true);
+    expect(again.result.status).toBe("ACCEPTED");
+  });
+});

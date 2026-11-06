@@ -1,5 +1,6 @@
 import {
   type AccountCode,
+  ActorIdSchema,
   type AssetId,
   type AuthorizedCommand,
   type BlockingDecision,
@@ -70,7 +71,8 @@ export class Tx {
       causationCommandId: this.causation,
       actorId: this.actorId,
       ruleVersion: this.s.ruleVersion,
-      payload,
+      // Clone: freezing must never reach into the caller's command objects (review N4).
+      payload: structuredClone(payload),
     };
     if (this.emitted.length >= this.s.limits.maxEventsPerCommand) {
       throw new Reject(
@@ -420,7 +422,8 @@ export function execute(state: WorldState, cmd: AuthorizedCommand): ExecuteOutco
   // Re-validate at the engine boundary: never trust the caller's typing (L7).
   const { actorId, origin, ...envelope } = cmd;
   const parsed = CommandEnvelopeSchema.safeParse(envelope);
-  const originOk = OriginSchema.safeParse(origin).success && typeof actorId === "string";
+  const originOk =
+    OriginSchema.safeParse(origin).success && ActorIdSchema.safeParse(actorId).success;
   if (!parsed.success || !originOk) {
     const result: CommandResult = {
       commandId: cmd.commandId,
@@ -436,8 +439,13 @@ export function execute(state: WorldState, cmd: AuthorizedCommand): ExecuteOutco
   }
 
   // Idempotency is bound to the command's intent, not just its id (M1).
+  // For provider events the intent is the capture fact, not how it was verified (review N6).
+  const intent =
+    cmd.kind === "APPLY_VERIFIED_PROVIDER_EVENT"
+      ? { ...cmd.payload.event, verification: null }
+      : cmd.payload;
   const fingerprint = sha256Hex(
-    canonicalJson({ kind: cmd.kind, payload: cmd.payload, origin, actorId, worldId: cmd.worldId }),
+    canonicalJson({ kind: cmd.kind, intent, origin, actorId, worldId: cmd.worldId }),
   );
   const prior = state.results[cmd.commandId];
   if (prior) {

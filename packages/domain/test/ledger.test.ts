@@ -114,3 +114,18 @@ describe("ledger posting", () => {
     );
   });
 });
+
+describe("review round 2: object-property names are not currencies; deepFreeze recursion", () => {
+  it("rejects inherited property names as currencies (M7)", async () => {
+    const { money: m } = await import("../src/index.js");
+    expect(() => m(5, "toString" as never)).toThrow(MoneyError);
+    expect(() => m(5, "constructor" as never)).toThrow(MoneyError);
+  });
+  it("deepFreeze freezes children of an already-frozen parent (N5)", async () => {
+    const { deepFreeze } = await import("../src/index.js");
+    const inner = { a: 1 };
+    const outer = Object.freeze({ inner });
+    deepFreeze(outer);
+    expect(Object.isFrozen(inner)).toBe(true);
+  });
+});

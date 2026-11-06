@@ -43,10 +43,13 @@ export class AmountFormatError extends Error {
  * PayPal amounts are decimal strings ("30.00"). Convert exactly, without
  * floating point, using the currency's minor-unit exponent.
  */
-const MINOR_DIGITS: Readonly<Record<string, number>> = CURRENCY_MINOR_UNITS;
+const digitsOf = (currency: string): number | undefined =>
+  Object.hasOwn(CURRENCY_MINOR_UNITS, currency)
+    ? (CURRENCY_MINOR_UNITS as Readonly<Record<string, number>>)[currency]
+    : undefined; // own keys only: "constructor"/"toString" are not currencies (review M7)
 
 export function parsePayPalAmount(value: string, currency: string): Money {
-  const digits = MINOR_DIGITS[currency];
+  const digits = digitsOf(currency);
   if (digits === undefined) throw new AmountFormatError(`unsupported currency ${currency}`);
   // PayPal's pattern allows "30", "30.5", "30.50" and ".5": at least one digit overall.
   const m = /^(\d{0,15})(?:\.(\d+))?$/.exec(value);
@@ -62,7 +65,7 @@ export function parsePayPalAmount(value: string, currency: string): Money {
 }
 
 export function formatPayPalAmount(m: Money): { currency_code: string; value: string } {
-  const digits = MINOR_DIGITS[m.currency];
+  const digits = digitsOf(m.currency);
   if (digits === undefined) throw new AmountFormatError(`unsupported currency ${m.currency}`);
   if (!Number.isSafeInteger(m.amountMinor))
     throw new AmountFormatError(`amount ${m.amountMinor} is not a safe integer`);

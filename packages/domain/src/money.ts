@@ -12,7 +12,8 @@ function checkSafe(n: number): number {
 
 /** Construct money from integer minor units. */
 export function money(amountMinor: number, currency: CurrencyCode): Money {
-  if (!(currency in CURRENCY_MINOR_UNITS)) throw new MoneyError(`unsupported currency ${currency}`);
+  if (!Object.hasOwn(CURRENCY_MINOR_UNITS, currency))
+    throw new MoneyError(`unsupported currency ${currency}`);
   return { amountMinor: checkSafe(amountMinor), currency };
 }
 
@@ -56,7 +57,9 @@ export function equals(a: Money, b: Money): boolean {
 
 /** Human formatting for logs and the demo. UI formatting is locale-aware and lives in apps/web. */
 export function formatMoney(m: Money): string {
-  const digits = CURRENCY_MINOR_UNITS[m.currency] ?? 2;
+  const digits = Object.hasOwn(CURRENCY_MINOR_UNITS, m.currency)
+    ? CURRENCY_MINOR_UNITS[m.currency]
+    : 2;
   const sign = m.amountMinor < 0 ? "-" : "";
   const abs = Math.abs(m.amountMinor);
   const scale = 10 ** digits;
