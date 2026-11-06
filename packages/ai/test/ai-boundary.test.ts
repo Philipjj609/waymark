@@ -233,7 +233,9 @@ describe("providers", () => {
     );
     expect(out).toBe("{}");
     expect(seen?.url).toBe("https://example.test/v1/chat/completions");
-    expect((seen?.init?.headers as Record<string, string>).authorization).toBe("Bearer test-key");
+    expect((seen?.init.headers as Record<string, string> | undefined)?.authorization).toBe(
+      "Bearer test-key",
+    );
     expect(JSON.parse(String(seen?.init.body)).model).toBe("configured-model");
   });
 
