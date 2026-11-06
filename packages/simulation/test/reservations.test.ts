@@ -4,11 +4,14 @@
  * the active operation consumes the earmark and settles in one command, a verified ORDER_VOIDED
  * releases it. Matrix case T11 lives here (docs/architecture/test-matrix.md).
  */
+import { createHash } from "node:crypto";
 import {
   type AuthorizedCommand,
   type ObligationId,
   type ProviderOperationId,
+  ProviderOperationIdSchema,
   type VerifiedProviderEvent,
+  type WorldId,
   WorldSnapshotSchema,
 } from "@fle/contracts";
 import { eur, imbalance } from "@fle/domain";
@@ -17,6 +20,7 @@ import { describe, expect, it } from "vitest";
 import {
   availableCash,
   cmd,
+  createWorld,
   execute,
   fp30,
   fp30Config,
@@ -35,6 +39,19 @@ const avail = (s: WorldState) => availableCash(s, PERSON).amountMinor;
 const count = (s: WorldState, type: string) => s.events.filter((e) => e.eventType === type).length;
 const AMOUNT: Record<string, number> = { [PHONE]: 3000, [RENT]: 55000 };
 const opOf = (s: WorldState, o: ObligationId) => s.reservations[o]?.operationId;
+/** The most recently started operation for a bill, whatever its status (registry order). */
+const lastOp = (s: WorldState, o: ObligationId) =>
+  Object.values(s.operations)
+    .filter((r) => r.obligationId === o)
+    .at(-1)?.operationId;
+// Independent re-derivation of the engine's id rule (#12 review): pop_ + sha256(world NUL cmd).
+const NUL = String.fromCharCode(0);
+const opFor = (worldId: string, n: number) =>
+  `pop_${createHash("sha256")
+    .update(`${worldId}${NUL}${cmd(n)}`, "utf8")
+    .digest("hex")
+    .slice(0, 32)}`;
+const FP30 = fp30().worldId;
 
 function event(
   w: WorldState,
@@ -73,10 +90,13 @@ const checkout = (w: WorldState, n: number, o: ObligationId) =>
     playerCommand(w, cmd(n), { kind: "START_PROVIDER_CHECKOUT", payload: { obligationId: o } }),
   );
 
+const checkoutBody = (o: ObligationId) =>
+  ({ kind: "START_PROVIDER_CHECKOUT", payload: { obligationId: o } }) as const;
+
 const atPhoneDue = () =>
   run(fp30(), [[cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }]]);
 
-/** Day 8, phone bill due, its €30 checkout in flight (operation pop_<cmd(2)>). */
+/** Day 8, phone bill due, its €30 checkout in flight (operation opFor(FP30, 2)). */
 function phoneInFlight(): WorldState {
   const out = checkout(atPhoneDue(), 2, PHONE);
   expect(out.result.status).toBe("ACCEPTED");
@@ -98,7 +118,7 @@ describe("START_PROVIDER_CHECKOUT reserves, it does not pay (ADR-0008 step 1)", 
     expect(out.events.map((e) => e.eventType)).toEqual(["PROVIDER_CHECKOUT_STARTED"]);
     expect(out.events[0]?.payload).toEqual({
       obligationId: PHONE,
-      operationId: `pop_${cmd(2)}`,
+      operationId: opFor(FP30, 2),
       entityId: PERSON,
       amount: eur(30),
       realm: "PAYPAL_SANDBOX",
@@ -111,7 +131,7 @@ describe("START_PROVIDER_CHECKOUT reserves, it does not pay (ADR-0008 step 1)", 
     expect(snap.reservations).toEqual([
       {
         obligationId: PHONE,
-        operationId: `pop_${cmd(2)}`,
+        operationId: opFor(FP30, 2),
         entityId: PERSON,
         amount: eur(30),
         sinceDay: 8,
@@ -273,7 +293,7 @@ describe("T11: last cash reserved, then another bill is due: visible, refused, n
     // No hidden transfer: nothing posted, cash and the earmark untouched.
     expect(pay.state.ledger.size).toBe(journals);
     expect(cash(pay.state)).toBe(3000);
-    expect(opOf(pay.state, PHONE)).toBe(`pop_${cmd(3)}`);
+    expect(opOf(pay.state, PHONE)).toBe(opFor(FP30, 3));
     // REV-002 M6: the verified capture still settles from the reserved cash.
     w = pay.state;
     const cap = execute(w, deliver(w, event(w, PHONE, opOf(w, PHONE), "CAP-T11")));
@@ -343,7 +363,7 @@ describe("verified provider facts against an active checkout", () => {
     );
     expect(denied.result.error?.code).toBe("PROVIDER_EVENT_NOT_SETTLING");
     s = denied.state;
-    expect(opOf(s, PHONE)).toBe(`pop_${cmd(2)}`);
+    expect(opOf(s, PHONE)).toBe(opFor(FP30, 2));
     expect(avail(s)).toBe(77000);
     s = execute(s, deliver(s, event(s, PHONE, opOf(s, PHONE), "CAP-RETRY"))).state;
     expect(s.obligations[PHONE]?.state).toBe("SETTLED");
@@ -383,7 +403,7 @@ describe("verified provider facts against an active checkout", () => {
     expect(none.result.error?.code).toBe("PROVIDER_OPERATION_MISMATCH");
     // After release the player may pay another way, or start a fresh checkout.
     const fresh = checkout(s, 5, PHONE);
-    expect(opOf(fresh.state, PHONE)).toBe(`pop_${cmd(5)}`);
+    expect(opOf(fresh.state, PHONE)).toBe(opFor(FP30, 5));
     const paid = execute(
       s,
       playerCommand(s, cmd(6), { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } }),
@@ -422,6 +442,112 @@ describe("verified provider facts against an active checkout", () => {
   });
 });
 
+describe("operation ids and the operation registry (#12 review)", () => {
+  const worldWith = (id: string) => createWorld({ ...fp30Config(), worldId: id as WorldId });
+  const startIn = (w0: WorldState) => {
+    const w = run(w0, [[cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }]]);
+    return checkout(w, 2, PHONE).state;
+  };
+
+  it("two worlds, same commandId → different operation ids; replay reproduces each exactly", () => {
+    const a = startIn(worldWith("wld_alpha"));
+    const b = startIn(worldWith("wld_beta"));
+    const opA = opOf(a, PHONE);
+    const opB = opOf(b, PHONE);
+    expect(opA).toBe(opFor("wld_alpha", 2));
+    expect(opB).toBe(opFor("wld_beta", 2));
+    expect(opA).not.toBe(opB); // distinct PayPal-Request-Id stems, so no shared PayPal order
+    for (const op of [opA, opB]) {
+      expect(ProviderOperationIdSchema.safeParse(op).success).toBe(true);
+      expect(op).toMatch(/^pop_[0-9a-f]{32}$/);
+    }
+    const w0 = worldWith("wld_alpha");
+    const advance = playerCommand(w0, cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } });
+    const w1 = execute(w0, advance).state;
+    const start = playerCommand(w1, cmd(2), checkoutBody(PHONE));
+    const rebuilt = replay({ ...fp30Config(), worldId: "wld_alpha" as WorldId }, [advance, start]);
+    expect(opOf(rebuilt, PHONE)).toBe(opA);
+    expect(rebuilt.headHash).toBe(a.headHash);
+  });
+
+  it("registers every started operation: ACTIVE → VOIDED → CAPTURED, never removed", () => {
+    let s = phoneInFlight();
+    const op = opOf(s, PHONE) as string;
+    expect(s.operations[op]).toEqual({
+      operationId: op,
+      obligationId: PHONE,
+      entityId: PERSON,
+      amount: eur(30),
+      startedDay: 8,
+      status: "ACTIVE",
+    });
+    s = execute(s, deliver(s, event(s, PHONE, op, "VOID-REG", "ORDER_VOIDED"))).state;
+    expect(s.reservations).toEqual({});
+    expect(s.operations[op]?.status).toBe("VOIDED");
+    // Late capture of this bill's own voided operation, no newer checkout: settles as before.
+    const late = execute(s, deliver(s, event(s, PHONE, op, "CAP-REG")));
+    expect(late.result.status).toBe("ACCEPTED");
+    expect(late.state.obligations[PHONE]?.state).toBe("SETTLED");
+    expect(late.events[0]?.payload.reservationConsumed).toBeUndefined();
+    expect(late.state.operations[op]?.status).toBe("CAPTURED");
+    expect(Object.keys(late.state.operations)).toEqual([op]);
+  });
+
+  it("a capture or void whose operation was started for another bill is refused; nothing moves", () => {
+    // Phone checkout in flight and deferred; rent due on day 10 with its own checkout.
+    let s = run(phoneInFlight(), [
+      [cmd(3), { kind: "DEFER_OBLIGATION", payload: { obligationId: PHONE } }],
+      [cmd(4), { kind: "ADVANCE_TIME", payload: { targetDay: 10 } }],
+    ]);
+    s = checkout(s, 5, RENT).state;
+    const rentOp = opOf(s, RENT) as string;
+    const phoneOp = opOf(s, PHONE) as string;
+    for (const amountMinor of [3000, 55000]) {
+      const out = execute(
+        s,
+        deliver(s, event(s, PHONE, rentOp, `CAP-X-${amountMinor}`, undefined, amountMinor)),
+      );
+      expect(out.result.error?.code).toBe("PROVIDER_OPERATION_MISMATCH");
+      expect(out.result.error?.details).toEqual({
+        eventOperationId: rentOp,
+        registeredObligationId: RENT,
+      });
+      expect(out.state.obligations[PHONE]?.state).toBe("OVERDUE");
+      expect(out.state.obligations[RENT]?.state).toBe("DUE");
+      expect(out.state.reservations).toEqual(s.reservations);
+      expect(out.state.ledger.size).toBe(s.ledger.size);
+      expect(out.state.appliedProviderEvents).toEqual(s.appliedProviderEvents);
+    }
+    const crossVoid = execute(s, deliver(s, event(s, RENT, phoneOp, "VOID-X", "ORDER_VOIDED")));
+    expect(crossVoid.result.error?.code).toBe("PROVIDER_OPERATION_MISMATCH");
+    expect(crossVoid.state.reservations).toEqual(s.reservations);
+    // Even after the phone bill's own operation is voided, it still cannot settle the rent.
+    s = execute(s, deliver(s, event(s, PHONE, phoneOp, "VOID-PH", "ORDER_VOIDED"))).state;
+    expect(s.operations[phoneOp]?.status).toBe("VOIDED");
+    const stray = execute(s, deliver(s, event(s, RENT, phoneOp, "CAP-STRAY", undefined, 55000)));
+    expect(stray.result.error?.code).toBe("PROVIDER_OPERATION_MISMATCH");
+    expect(stray.state.obligations[RENT]?.state).toBe("DUE");
+  });
+
+  it("a capture or void for an operation never started in this world is refused", () => {
+    const w = atPhoneDue(); // no checkout at all
+    const foreign = opFor("wld_other", 2); // a well-formed id, but another world's
+    for (const op of [foreign, "pop_never_started"]) {
+      const cap = execute(w, deliver(w, event(w, PHONE, op, `CAP-U-${op}`)));
+      expect(cap.result.error?.code).toBe("PROVIDER_OPERATION_MISMATCH");
+      expect(cap.result.error?.details).toEqual({
+        eventOperationId: op,
+        registeredObligationId: null,
+      });
+      expect(cap.state.obligations[PHONE]?.state).toBe("DUE");
+      expect(cap.state.ledger.size).toBe(w.ledger.size);
+      expect(cap.state.appliedProviderEvents).toEqual([]);
+      const voided = execute(w, deliver(w, event(w, PHONE, op, `VOID-U-${op}`, "ORDER_VOIDED")));
+      expect(voided.result.error?.code).toBe("PROVIDER_OPERATION_MISMATCH");
+    }
+  });
+});
+
 describe("property: reservations never overdraw, and each bill settles at most once", () => {
   it("random checkout/pay/defer/advance/buy and capture/void/denied deliveries keep the invariants", () => {
     const bill = fc.constantFrom(PHONE, RENT);
@@ -434,8 +560,9 @@ describe("property: reservations never overdraw, and each bill settles at most o
       fc.record({
         k: fc.constantFrom("capture" as const, "void" as const, "denied" as const),
         o: bill,
-        // active = the reservation's operation (if any); stale = an operation that never existed.
-        op: fc.constantFrom("active" as const, "stale" as const),
+        // active = the reservation's operation (if any); known = the bill's latest registered
+        // operation, possibly voided or captured; stale = an operation that never existed.
+        op: fc.constantFrom("active" as const, "known" as const, "stale" as const),
         id: fc.constantFrom("A", "B"),
       }),
     );
@@ -450,7 +577,8 @@ describe("property: reservations never overdraw, and each bill settles at most o
         };
         for (const s of steps) {
           if (s.k === "capture" || s.k === "void" || s.k === "denied") {
-            const op = s.op === "active" ? opOf(w, s.o) : "pop_stale";
+            const op =
+              s.op === "active" ? opOf(w, s.o) : s.op === "known" ? lastOp(w, s.o) : "pop_stale";
             const type =
               s.k === "capture"
                 ? "CAPTURE_COMPLETED"
@@ -486,6 +614,10 @@ describe("property: reservations never overdraw, and each bill settles at most o
           expect(avail(w)).toBeGreaterThanOrEqual(0);
           for (const r of Object.values(w.reservations)) {
             expect(["DUE", "OVERDUE"]).toContain(w.obligations[r.obligationId]?.state);
+            expect(w.operations[r.operationId]).toMatchObject({
+              obligationId: r.obligationId,
+              status: "ACTIVE",
+            });
           }
         }
         const settlements = w.events.filter((e) => e.eventType === "OBLIGATION_SETTLED");
@@ -493,6 +625,14 @@ describe("property: reservations never overdraw, and each bill settles at most o
           expect(
             settlements.filter((e) => e.payload.obligationId === o).length,
           ).toBeLessThanOrEqual(1);
+        }
+        // Every sandbox settlement names an operation started for that very bill (#12 review).
+        for (const e of w.events.filter((x) => x.eventType === "PROVIDER_SETTLEMENT_APPLIED")) {
+          const op = w.operations[e.payload.operationId as string];
+          const settled = w.events.find(
+            (x) => x.eventType === "OBLIGATION_SETTLED" && x.sequence === e.sequence + 1,
+          );
+          expect(op?.obligationId).toBe(settled?.payload.obligationId);
         }
         // Cash leaves for each bill at most once.
         expect(w.ledger.balance(PERSON, "EXPENSE:Phone", "EUR").amountMinor).toBeLessThanOrEqual(

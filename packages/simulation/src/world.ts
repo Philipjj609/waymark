@@ -333,6 +333,7 @@ export function createWorld(config: WorldConfig): WorldState {
     schedule,
     blocking: [],
     reservations: {},
+    operations: {},
     ledger,
     events,
     headHash,

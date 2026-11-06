@@ -25,6 +25,16 @@ const cash = (s: WorldState) => s.ledger.balance(PERSON, "ASSET:Cash", "EUR").am
 const count = (s: WorldState, type: string) => s.events.filter((e) => e.eventType === type).length;
 const atPhoneDue = () =>
   run(fp30(), [[cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }]]);
+/** Day 8 with the phone bill's sandbox checkout started, so captures name a real operation. */
+const phoneInFlight = () =>
+  run(atPhoneDue(), [
+    [cmd(2), { kind: "START_PROVIDER_CHECKOUT", payload: { obligationId: PHONE } }],
+  ]);
+/** The bill's most recently started sandbox operation (#12 review: captures must name one). */
+const lastOp = (s: WorldState, o: ObligationId) =>
+  (Object.values(s.operations)
+    .filter((r) => r.obligationId === o)
+    .at(-1)?.operationId ?? "pop_never_started") as ProviderOperationId;
 
 function event(
   w: WorldState,
@@ -36,7 +46,7 @@ function event(
     schemaVersion: "provider.event.v1",
     provider: "PAYPAL_SANDBOX",
     providerEventId: id,
-    operationId: "pop_matrix" as ProviderOperationId,
+    operationId: lastOp(w, obligationId),
     eventType: type,
     amount: { amountMinor: 3000, currency: "EUR" },
     mapping: { worldId: w.worldId, obligationId },
@@ -75,7 +85,7 @@ describe("T01: repeat the same approved event 100 times → exactly one economic
   });
 
   it("the same verified provider event delivered 100 times (fresh command ids) settles once", () => {
-    let s = atPhoneDue();
+    let s = phoneInFlight();
     const ev = event(s, PHONE, "CAPTURE-T01");
     s = execute(s, deliver(s, ev)).state;
     const after = { size: s.ledger.size, cash: cash(s), settled: count(s, "OBLIGATION_SETTLED") };
@@ -113,7 +123,7 @@ describe("T02: duplicate provider events in any arrival order → state matches 
           maxLength: 12,
         }),
         (order) => {
-          let s = atPhoneDue();
+          let s = phoneInFlight();
           const start = { cash: cash(s), size: s.ledger.size };
           const captured = event(s, PHONE, "CAPTURE-T02");
           const denied = event(s, PHONE, "DENIED-T02", "CAPTURE_DENIED");

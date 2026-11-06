@@ -60,6 +60,20 @@ export interface Reservation {
   readonly sinceDay: WorldDay;
 }
 
+/**
+ * Every sandbox checkout operation ever started in this world, append-only (never deleted). A
+ * verified capture or void must name an operation from here that was started for the very
+ * obligation it maps to; anything else is PROVIDER_OPERATION_MISMATCH (#12 review).
+ */
+export interface ProviderOperation {
+  readonly operationId: ProviderOperationId;
+  readonly obligationId: ObligationId;
+  readonly entityId: EntityId;
+  readonly amount: Money;
+  readonly startedDay: WorldDay;
+  readonly status: "ACTIVE" | "CAPTURED" | "VOIDED";
+}
+
 export type ScheduledWork =
   | { readonly kind: "OBLIGATION_DUE"; readonly obligationId: ObligationId }
   | { readonly kind: "INCOME"; readonly scheduleId: ScheduleId };
@@ -96,6 +110,8 @@ export interface WorldState {
   readonly blocking: readonly BlockingDecision[];
   /** obligationId → its active sandbox checkout reservation (the in-flight lock, ADR-0008). */
   readonly reservations: Readonly<Record<string, Reservation>>;
+  /** operationId → the checkout it belongs to; append-only registry (status changes only). */
+  readonly operations: Readonly<Record<string, ProviderOperation>>;
   readonly ledger: Ledger;
   readonly events: readonly DomainEvent[];
   readonly headHash: string;

@@ -24,6 +24,13 @@ import {
 } from "../src/index.js";
 
 const cash = (s: WorldState) => s.ledger.balance(PERSON, "ASSET:Cash", "EUR").amountMinor;
+/** The bill's most recently started sandbox operation (#12 review: captures must name one). */
+const lastOp = (s: WorldState, o: ObligationId) =>
+  (Object.values(s.operations)
+    .filter((r) => r.obligationId === o)
+    .at(-1)?.operationId ?? "pop_never_started") as ProviderOperationId;
+const startCheckout = (o: ObligationId) =>
+  ({ kind: "START_PROVIDER_CHECKOUT", payload: { obligationId: o } }) as const;
 
 function capture(
   w: WorldState,
@@ -36,7 +43,7 @@ function capture(
     schemaVersion: "provider.event.v1",
     provider: "PAYPAL_SANDBOX",
     providerEventId: id,
-    operationId: "pop_inv" as ProviderOperationId,
+    operationId: lastOp(w, obligationId),
     eventType: type,
     amount: { amountMinor, currency: "EUR" },
     mapping: { worldId: w.worldId, obligationId },
@@ -78,8 +85,9 @@ describe("a pending payment can never trap the player (I-014, ADR-0008 N1)", () 
   it("a verified capture still settles a deferred (OVERDUE) obligation, at the current day", () => {
     let w = run(fp30(), [
       [cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }],
-      [cmd(2), { kind: "DEFER_OBLIGATION", payload: { obligationId: PHONE } }],
-      [cmd(3), { kind: "ADVANCE_TIME", payload: { targetDay: 10 } }],
+      [cmd(2), startCheckout(PHONE)],
+      [cmd(3), { kind: "DEFER_OBLIGATION", payload: { obligationId: PHONE } }],
+      [cmd(4), { kind: "ADVANCE_TIME", payload: { targetDay: 10 } }],
     ]);
     expect(w.obligations[PHONE]?.state).toBe("OVERDUE");
     const out = execute(w, provider(w, capture(w, PHONE, 3000, "CAP-LATE")));
@@ -92,10 +100,13 @@ describe("a pending payment can never trap the player (I-014, ADR-0008 N1)", () 
   });
 
   it("a capture after a fictional payment is a visible rejection (reconciliation), never a second debit", () => {
+    // Checkout started, then voided, then paid fictionally: the voided operation's late capture.
     let w = run(fp30(), [
       [cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }],
-      [cmd(2), { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } }],
+      [cmd(2), startCheckout(PHONE)],
     ]);
+    w = execute(w, provider(w, capture(w, PHONE, 3000, "VOID-AFTER", "ORDER_VOIDED"))).state;
+    w = run(w, [[cmd(3), { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } }]]);
     const before = cash(w);
     const out = execute(w, provider(w, capture(w, PHONE, 3000, "CAP-AFTER")));
     expect(out.result.error?.code).toBe("OBLIGATION_NOT_PAYABLE");
@@ -104,13 +115,17 @@ describe("a pending payment can never trap the player (I-014, ADR-0008 N1)", () 
   });
 
   it("refunds and denials never settle and are never swallowed, before or after a capture", () => {
-    let w = run(fp30(), [[cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }]]);
+    let w = run(fp30(), [
+      [cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }],
+      [cmd(2), startCheckout(PHONE)],
+    ]);
     for (const t of ["CAPTURE_DENIED", "CAPTURE_REFUNDED"] as const) {
       expect(execute(w, provider(w, capture(w, PHONE, 3000, "CAP-X", t))).result.error?.code).toBe(
         "PROVIDER_EVENT_NOT_SETTLING",
       );
     }
     w = execute(w, provider(w, capture(w, PHONE, 3000, "CAP-X"))).state;
+    expect(w.obligations[PHONE]?.state).toBe("SETTLED"); // the refund below follows a real capture
     const refund = execute(w, provider(w, capture(w, PHONE, 3000, "CAP-X", "CAPTURE_REFUNDED")));
     expect(refund.result.status).toBe("REJECTED");
   });
@@ -122,6 +137,7 @@ describe("property: any mix of player actions and (re)delivered captures settles
       fc.record({ k: fc.constant("advance" as const), d: fc.integer({ min: 1, max: 6 }) }),
       fc.record({ k: fc.constant("pay" as const), o: fc.constantFrom(PHONE, RENT) }),
       fc.record({ k: fc.constant("defer" as const), o: fc.constantFrom(PHONE, RENT) }),
+      fc.record({ k: fc.constant("checkout" as const), o: fc.constantFrom(PHONE, RENT) }),
       fc.record({
         k: fc.constant("capture" as const),
         o: fc.constantFrom(PHONE, RENT),
@@ -146,7 +162,9 @@ describe("property: any mix of player actions and (re)delivered captures settles
                 } as const)
               : s.k === "pay"
                 ? ({ kind: "PAY_OBLIGATION", payload: { obligationId: s.o } } as const)
-                : ({ kind: "DEFER_OBLIGATION", payload: { obligationId: s.o } } as const);
+                : s.k === "checkout"
+                  ? startCheckout(s.o)
+                  : ({ kind: "DEFER_OBLIGATION", payload: { obligationId: s.o } } as const);
           w = execute(w, playerCommand(w, cmd(n++), body)).state;
         }
         const settlements = w.events.filter((e) => e.eventType === "OBLIGATION_SETTLED");
