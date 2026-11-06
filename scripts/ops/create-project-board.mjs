@@ -65,7 +65,7 @@ const SELECTS = {
 const TEXTS = [
   "WP",
   "Agent",
-  "Reviewer",
+  "Peer reviewer",
   "Depends on",
   "Branch",
   "Related ADR/Drive",
@@ -73,6 +73,22 @@ const TEXTS = [
   "Next action",
   "Blocked reason",
 ];
+
+// Point-in-time progress notes keyed by issue/PR number (edit when re-syncing; issues stay the source of truth).
+const PROGRESS = {
+  7: "PR #37 reviewed (REV-001); CI green; awaiting owner merge approval",
+  37: "Reviewed; R-1/R-2 fixed; CI green; awaiting owner merge approval",
+  38: "PR #39 open, stacked on #37; CI green",
+  39: "Stacked on #37; retarget to main after #37 merges",
+  8: "Board created and synced (users/Philipjj609/projects/2); branch protection on main",
+};
+const AGENTS = {
+  7: "Claude (lead)",
+  37: "Claude (lead)",
+  38: "Claude (lead)",
+  39: "Claude (lead)",
+  8: "Claude (lead)",
+};
 
 function planFor(item) {
   const labels = item.labels.map((l) => l.name);
@@ -90,15 +106,20 @@ function planFor(item) {
     Phase: phaseIdx !== undefined ? SELECTS.Phase[Number(phaseIdx)] : "",
     Track: labels.find((l) => l.startsWith("track:"))?.slice(6) ?? "",
     WP: /^\[([^\]]+)\]/.exec(item.title)?.[1] ?? "",
-    Agent: "",
-    Reviewer: "",
+    Agent: AGENTS[item.number] ?? "",
+    "Peer reviewer": "",
     "Depends on": grab(/\*\*Depends on:\*\*\s*([^\n]+)/).replace(/\s*·.*$/, ""),
     Branch: item.headRefName ?? "",
     "Related ADR/Drive": grab(/\*\*Related ADRs \/ Drive docs:\*\*\s*([^\n]+)/),
-    "Latest progress":
-      item.number === 7 || item.isPR ? "PR #37 open; CI green (ubuntu+windows)" : "",
+    "Latest progress": PROGRESS[item.number] ?? "",
     "Next action":
-      status === "Blocked" ? "Resolve blocker" : status === "Ready" ? "Claim (AGENTS.md §2)" : "",
+      status === "Blocked"
+        ? "Resolve blocker"
+        : status === "Ready"
+          ? "Claim (docs/process/task-claiming.md)"
+          : status === "Triage"
+            ? "Waiting on prerequisites; becomes Ready when they close"
+            : "",
     "Blocked reason": grab(/>\s*\*\*BLOCKED:\*\*\s*([^\n]+)/),
   };
 }
