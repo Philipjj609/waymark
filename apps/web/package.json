@@ -11,12 +11,15 @@
   },
   "dependencies": {
     "@fle/contracts": "workspace:*",
+    "@fle/persistence": "workspace:*",
     "@fle/server": "workspace:*",
     "next": "16.4.3",
+    "pg": "8.23.1",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@types/pg": "8.23.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0"
   }

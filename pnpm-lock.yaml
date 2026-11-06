@@ -32,12 +32,18 @@ importers:
       '@fle/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@fle/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
       '@fle/server':
         specifier: workspace:*
         version: link:../../packages/server
       next:
         specifier: 16.4.3
         version: 16.4.3(@types/node@24.19.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      pg:
+        specifier: 8.23.1
+        version: 8.23.1
       react:
         specifier: 19.3.1
         version: 19.3.1
@@ -45,6 +51,9 @@ importers:
         specifier: 19.3.1
         version: 19.3.1(react@19.3.1)
     devDependencies:
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
       '@types/react':
         specifier: 19.3.0
         version: 19.3.0

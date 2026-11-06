@@ -2,7 +2,15 @@ import type { NextConfig } from "next";
 
 const config: NextConfig = {
   // Workspace packages ship TypeScript source (exports point at src/*.ts), so Next compiles them.
-  transpilePackages: ["@fle/contracts", "@fle/domain", "@fle/server", "@fle/simulation"],
+  transpilePackages: [
+    "@fle/contracts",
+    "@fle/domain",
+    "@fle/persistence",
+    "@fle/server",
+    "@fle/simulation",
+  ],
+  // node-postgres has optional native bindings; keep it a runtime require, not a bundled module.
+  serverExternalPackages: ["pg"],
   poweredByHeader: false,
   reactStrictMode: true,
   // Do not auto-write apps/web/AGENTS.md: agent rules live in the root AGENTS.md (AGENTS.md §1).
