@@ -26,7 +26,14 @@ import {
 } from "@fle/contracts";
 import { deepFreeze, PostingError } from "@fle/domain";
 import { canonicalJson, chainHash, compareCodeUnits, sha256Hex } from "./canonical.js";
-import type { AssetState, EntityState, Reservation, ScheduledItem, WorldState } from "./state.js";
+import type {
+  AssetState,
+  EntityState,
+  ProviderOperation,
+  Reservation,
+  ScheduledItem,
+  WorldState,
+} from "./state.js";
 import { availableCash } from "./world.js";
 
 /** Internal rejection signal. Never escapes `execute`; converted to a CommandResult. */
@@ -137,6 +144,12 @@ export class Tx {
   dropReservation(id: ObligationId): void {
     const { [id]: _dropped, ...rest } = this.s.reservations;
     this.s.reservations = rest;
+  }
+
+  /** Record an operation's new status. The registry entry itself is never removed. */
+  markOperation(id: ProviderOperationId, status: ProviderOperation["status"]): void {
+    const op = this.s.operations[id];
+    if (op) this.s.operations = { ...this.s.operations, [id]: { ...op, status } };
   }
 
   obligation(id: ObligationId): Obligation {
@@ -288,6 +301,11 @@ function processDay(tx: Tx, day: WorldDay): void {
   }
 }
 
+/** `pop_` + 32 hex chars of sha256(worldId NUL commandId): pure, replay-stable, world-unique. */
+export function deriveOperationId(worldId: string, commandId: string): ProviderOperationId {
+  return `pop_${sha256Hex(`${worldId}\u0000${commandId}`).slice(0, 32)}` as ProviderOperationId;
+}
+
 function rejectIfInFlight(tx: Tx, id: ObligationId): void {
   const r = tx.reservation(id);
   if (r) {
@@ -297,6 +315,30 @@ function rejectIfInFlight(tx: Tx, id: ObligationId): void {
       { operationId: r.operationId },
     );
   }
+}
+
+/**
+ * A verified provider fact must name an operation this world started for the very obligation
+ * the fact maps to. Unknown operations, or one started for another bill, never settle or
+ * release anything: otherwise a capture paid for bill A could settle bill B (#12 review).
+ */
+function requireRegisteredOperation(tx: Tx, ev: VerifiedProviderEvent): ProviderOperation {
+  const op = tx.s.operations[ev.operationId];
+  if (!op) {
+    throw new Reject(
+      "PROVIDER_OPERATION_MISMATCH",
+      `operation ${ev.operationId} was never started in this world`,
+      { eventOperationId: ev.operationId, registeredObligationId: null },
+    );
+  }
+  if (op.obligationId !== ev.mapping.obligationId) {
+    throw new Reject(
+      "PROVIDER_OPERATION_MISMATCH",
+      `operation ${ev.operationId} was started for ${op.obligationId}, not ${ev.mapping.obligationId}`,
+      { eventOperationId: ev.operationId, registeredObligationId: op.obligationId },
+    );
+  }
+  return op;
 }
 
 /**
@@ -312,6 +354,7 @@ function releaseOnVoid(tx: Tx, ev: VerifiedProviderEvent): void {
     throw new Reject("PROVIDER_EVENT_UNMAPPED", "event maps to another world");
   const o = tx.s.obligations[ev.mapping.obligationId];
   if (!o) throw new Reject("PROVIDER_EVENT_UNMAPPED", `no obligation ${ev.mapping.obligationId}`);
+  requireRegisteredOperation(tx, ev);
   const r = tx.reservation(o.obligationId);
   if (!r || r.operationId !== ev.operationId) {
     throw new Reject(
@@ -328,6 +371,7 @@ function releaseOnVoid(tx: Tx, ev: VerifiedProviderEvent): void {
   }
   tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, factKey];
   tx.dropReservation(o.obligationId);
+  tx.markOperation(r.operationId, "VOIDED");
   tx.emit("RESERVATION_RELEASED", {
     obligationId: o.obligationId,
     operationId: r.operationId,
@@ -411,9 +455,14 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
         { availableMinor: available.amountMinor, dueMinor: due.amountMinor },
       );
     }
-    // Derived from the commandId, never chosen by the client: unique per world (command ids
-    // are), deterministic on replay, and the stem of the PayPal-Request-Id (ADR-0008).
-    const operationId = `pop_${cmd.commandId}` as ProviderOperationId;
+    // Derived from world AND command, never chosen by the client. Command ids are unique only
+    // per world, and this id is the stem of the PayPal-Request-Id (ADR-0008), so two worlds
+    // must never share one. Deterministic on replay; 32 hex chars fit the id grammar.
+    const operationId = deriveOperationId(tx.s.worldId, cmd.commandId);
+    if (tx.s.operations[operationId]) {
+      // Unreachable short of a sha256 collision (command ids are single-use); fail loudly.
+      throw new Error(`operation id collision: ${operationId}`);
+    }
     const reservation: Reservation = {
       obligationId: o.obligationId,
       operationId,
@@ -422,6 +471,15 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
       sinceDay: tx.s.day,
     };
     tx.s.reservations = { ...tx.s.reservations, [o.obligationId]: reservation };
+    const operation: ProviderOperation = {
+      operationId,
+      obligationId: o.obligationId,
+      entityId: o.debtorEntityId,
+      amount: due,
+      startedDay: tx.s.day,
+      status: "ACTIVE",
+    };
+    tx.s.operations = { ...tx.s.operations, [operationId]: operation };
     // No journal: an earmark is not an expense and moves no money (ADR-0008 step 1).
     // The blocking decision stays open on purpose: pending is not paid, so time waits for the
     // verified capture, or for DEFER, which stays allowed while in flight (I-014).
@@ -504,6 +562,9 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
       throw new Reject("PROVIDER_EVENT_UNMAPPED", "event maps to another world");
     const o = tx.s.obligations[ev.mapping.obligationId];
     if (!o) throw new Reject("PROVIDER_EVENT_UNMAPPED", `no obligation ${ev.mapping.obligationId}`);
+    // The capture must belong to a checkout started for this very bill. A known operation of
+    // the same bill without a reservation (late capture after a void) still settles below.
+    requireRegisteredOperation(tx, ev);
     // State before amount, so an already-settled obligation reports the real reason.
     if (o.state !== "DUE" && o.state !== "OVERDUE") {
       throw new Reject(
@@ -512,7 +573,7 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
       );
     }
     // With an active checkout, only that operation's capture may consume its reservation.
-    // Without one (a late capture after a release, reconciliation) the pre-0.2.0 path applies.
+    // Without one (a late capture of this bill's voided operation) the pre-0.2.0 path applies.
     const reservation = tx.reservation(o.obligationId);
     if (reservation && reservation.operationId !== ev.operationId) {
       throw new Reject(
@@ -543,6 +604,7 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
     // Consume the earmark and settle in this same command (ADR-0008 5a). The reserved cash is
     // then exactly what settle() finds available, so a reserved capture can't be INSUFFICIENT_FUNDS.
     if (reservation) tx.dropReservation(o.obligationId);
+    tx.markOperation(ev.operationId, "CAPTURED");
     const applied = tx.emit("PROVIDER_SETTLEMENT_APPLIED", {
       provider: ev.provider,
       providerEventId: ev.providerEventId,
