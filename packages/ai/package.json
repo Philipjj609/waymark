@@ -1,0 +1,17 @@
+{
+  "name": "@fle/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Provider-neutral AI tutor boundary (ADR-0007): bounded context, model output validation, reviewed fallback. Models propose; deterministic code validates.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@fle/contracts": "workspace:*",
+    "@fle/learning": "workspace:*"
+  },
+  "devDependencies": {
+    "@fle/simulation": "workspace:*"
+  }
+}
