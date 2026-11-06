@@ -29,13 +29,17 @@ _intent_. Then open an issue labelled `type:reconciliation` to make them agree. 
    open PRs and your assigned or in-progress issues (when `gh` is signed in).
 2. **Identity check:** compare `identityVersion` in `config/project-identity.json` with GOV-001 in Drive.
    If they differ, stop identity-related work and escalate. Other work may continue.
-3. **Find your task:** the issue assigned to you, or the one whose `Agent:` field names you on the board.
-   Read the issue body, **its latest handoff comment**, linked ADRs and linked Drive docs.
-4. **Reconcile:** what merged since the last handoff (`git log origin/main --since=<handoff time>`)?
-   Did any file under `packages/contracts/` change? If so, re-read `docs/contracts/CHANGELOG.md`.
+3. **Read the live state, not your memory:** your issue (body, **latest handoff comment** and everything after it),
+   the board, open PRs touching your area, `docs/contracts/CHANGELOG.md`, linked ADRs, and recent Drive decisions
+   (`12 / 07 — Decisions & Announcements`).
+4. **Reconcile:** what merged since the last handoff (`git log origin/main --since=<handoff time>`)? Compare your
+   branch with `origin/main` both ways. If contracts changed, rebase before continuing.
 5. **Baseline:** `git fetch && git switch <your branch>` (or create it, see §4), `pnpm install`, `pnpm verify`.
    If baseline is red _before_ your change, record it on the issue. Do not build on red.
-6. **Claim:** set the issue to `In Progress`, fill `Agent`, `Branch`, and post "claimed" with your plan in 3 lines.
+6. **Claim exclusively** (new work only): follow `docs/process/task-claiming.md`. Check prerequisites and that
+   nobody owns it; assign your human supervisor; set In Progress; post the claim comment
+   (`docs/handoffs/CLAIM_TEMPLATE.md`); **re-check for an earlier claim right before coding**. Never silently
+   duplicate a claimed task.
 
 A fresh agent with no chat history must be able to do all of the above from GitHub alone. If it can't,
 the previous session's handoff was incomplete: say so on the issue.
@@ -102,9 +106,26 @@ pnpm demo               # FP-30 liquidity scenario trace
 pnpm contracts:generate # regenerate docs/contracts/schemas after a contract change
 ```
 
-## 9. Escalation
+## 9. Authority (ADR-0012)
 
-Ask the human owner (on the issue, label `needs-decision`) before: changing money or ledger semantics, the
-PayPal mapping, auth or permissions, licenses, making anything public, deploying, spending money, adding a
-paid service, or renaming the project. Everything else that is reversible and inside your issue: decide,
-document why, and move on.
+| Tier                                 | Examples                                                                                                                                                                                           | Who decides                        |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| Free, inside your claimed issue      | edits, tests and docs in your scope; your own branch; critiques, alternatives and new issues                                                                                                       | you; explain in the PR             |
+| RFC + review (`docs/process/rfc.md`) | `packages/contracts`, ADRs/architecture, another owner's module, cross-module behaviour, money/ledger semantics, the PayPal mapping                                                                | module owners, then the lead/owner |
+| Explicit human authorization         | repo visibility, collaborators/permissions, live payments, spending, production deploys, merges to `main`, security settings, history rewrites, destructive Drive changes, renames, major redesign | the owner (@Philipjj609)           |
+
+Drive history is preserved: revise by creating a new versioned doc and linking the old one. Never delete or overwrite.
+You are encouraged to propose missing systems, edge cases and better designs. Use an issue or an RFC; don't change
+them silently.
+
+## 10. Sub-agents
+
+You may delegate bounded research, review, test or implementation subtasks (`docs/process/subagents.md`). You
+remain the owner of the issue, the integration, the quality and the handoff. Sub-agents never claim issues, merge,
+change contracts or architecture, or touch files outside your declared scope. Project sub-agents:
+`.claude/agents/` (Claude Code) and `.codex/agents/` (Codex). Keep this file under 32 KiB, since Codex truncates beyond that.
+
+## 11. People
+
+Humans onboard with `docs/process/onboarding.md`. A message is received only when the recipient replies. Drive
+edits and mentions notify nobody automatically.

@@ -1,0 +1,46 @@
+name: RFC (design proposal)
+description: Cross-module, contract, architecture or behaviour change. See docs/process/rfc.md.
+labels: ["type:rfc", "status:triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      {
+        label: Problem,
+        description: What is wrong or missing? Evidence (file paths,
+        SHAs,
+        Drive docs).,
+      }
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes: { label: Proposal, description: Mechanism, data flow, state changes. }
+    validations: { required: true }
+  - type: textarea
+    id: alternatives
+    attributes:
+      {
+        label: Alternatives considered,
+        description: At least two when the choice is ambiguous; trade-offs.,
+      }
+    validations: { required: true }
+  - type: textarea
+    id: impact
+    attributes:
+      {
+        label: Impact per module,
+        description: "contracts / domain / simulation / payments / learning / ai / web; migration; security; UX.",
+      }
+  - type: textarea
+    id: tests
+    attributes: { label: Tests and acceptance criteria }
+  - type: input
+    id: decision
+    attributes: { label: Decision requested from, placeholder: "@Philipjj609 / module owners" }
+  - type: input
+    id: drive
+    attributes:
+      {
+        label: Drive write-up (optional),
+        placeholder: "05 — Cross-Agent Design Discussions / RFC-<n> v1",
+      }
