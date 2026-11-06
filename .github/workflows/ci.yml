@@ -32,6 +32,35 @@ jobs:
       - run: pnpm contracts:check
       - run: pnpm demo
 
+  # Real PostgreSQL (#9): the persistence tests against a real server, with separate connection
+  # pools racing for the same row. PGlite (in `verify`) is single-connection and can't show that.
+  # The image is pinned by digest (postgres 17.11-alpine, resolved 6 Nov 2026).
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run packages/persistence
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
   # Secret scanning (#11). GitHub's own secret scanning and dependency review need paid
   # GitHub Advanced Security on private repos (dependency-graph/compare returns 403 here), so we run
   # gitleaks (MIT) ourselves. The binary is pinned by version AND sha256, both taken from the
