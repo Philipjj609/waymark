@@ -232,7 +232,9 @@ describe("tutor read model (lib/tutor.ts)", () => {
       });
       if (!r.ok) throw new Error("expected a lesson");
       expect(r.lesson.validation.status).toBe("FALLBACK_REVIEWED");
-      expect(provenanceBadge(r.lesson.provenance).label).toBe("Reviewed content");
+      expect(provenanceBadge(r.lesson.provenance).label).toBe(
+        "Prepared content (draft, not yet reviewed)",
+      );
     }
     expect(await snapshotOf(g)).toEqual(before);
   });
@@ -242,7 +244,7 @@ describe("display helpers", () => {
   it("provenance badge comes only from provenance", () => {
     expect(
       provenanceBadge({ generator: "REVIEWED_STATIC", model: null, promptVersion: null }).kind,
-    ).toBe("REVIEWED");
+    ).toBe("PREPARED_FALLBACK");
     expect(
       provenanceBadge({
         generator: "MODEL",

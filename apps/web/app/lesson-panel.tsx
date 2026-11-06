@@ -12,7 +12,7 @@ export type ExplanationView =
 
 const BADGE_STYLE: Record<ProvenanceKind, { background: string; color: string }> = {
   TEST_STAND_IN: { background: "#fde68a", color: "#78350f" },
-  REVIEWED: { background: "#dbeafe", color: "#1e3a8a" },
+  PREPARED_FALLBACK: { background: "#dbeafe", color: "#1e3a8a" },
   AI_VALIDATED: { background: "#dcfce7", color: "#14532d" },
 };
 
