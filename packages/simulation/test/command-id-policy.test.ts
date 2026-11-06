@@ -71,3 +71,61 @@ describe("command-id policy", () => {
     expect(retry.duplicate).toBe(true);
   });
 });
+
+describe("answers to the #46 question from claude@Philipjj609/waymark-wp-27#5e2b", () => {
+  it("every recorded rejection is final, e.g. UNKNOWN_OBLIGATION, not only STALE", () => {
+    const w = atPhoneDue();
+    const bad = playerCommand(w, cmd(2), {
+      kind: "PAY_OBLIGATION",
+      payload: { obligationId: "obl_missing" as typeof PHONE },
+    });
+    const first = execute(w, bad);
+    expect(first.result.error?.code).toBe("UNKNOWN_OBLIGATION");
+    const again = execute(first.state, bad);
+    expect(again.duplicate).toBe(true);
+    expect(again.result.error?.code).toBe("UNKNOWN_OBLIGATION");
+  });
+
+  it("SCHEMA_INVALID and IDEMPOTENCY_CONFLICT are NOT recorded: the id stays usable", () => {
+    const w = atPhoneDue();
+    const malformed = {
+      ...playerCommand(w, cmd(2), { kind: "ADVANCE_TIME", payload: { targetDay: 9 } }),
+      payload: { targetDay: 0 },
+    } as unknown as Parameters<typeof execute>[1];
+    const r = execute(w, malformed);
+    expect(r.result.error?.code).toBe("SCHEMA_INVALID");
+    expect(r.state).toBe(w);
+    const fixed = execute(
+      w,
+      playerCommand(w, cmd(2), { kind: "DEFER_OBLIGATION", payload: { obligationId: PHONE } }),
+    );
+    expect(fixed.result.status).toBe("ACCEPTED");
+  });
+
+  it("the fingerprint includes the actor: same id from another actor is a conflict, not a duplicate", () => {
+    const w = run(atPhoneDue(), [
+      [cmd(2), { kind: "DEFER_OBLIGATION", payload: { obligationId: PHONE } }],
+    ]);
+    const other = {
+      ...playerCommand(w, cmd(2), { kind: "DEFER_OBLIGATION", payload: { obligationId: PHONE } }),
+      actorId: "act_other",
+    } as Parameters<typeof execute>[1];
+    expect(execute(w, other).result.error?.code).toBe("IDEMPOTENCY_CONFLICT");
+  });
+
+  it("T21: two devices, different ids, same expectedWorldVersion → only the first applies", () => {
+    const w = atPhoneDue();
+    const deviceA = playerCommand(w, cmd(10), {
+      kind: "PAY_OBLIGATION",
+      payload: { obligationId: PHONE },
+    });
+    const deviceB = playerCommand(w, cmd(11), {
+      kind: "DEFER_OBLIGATION",
+      payload: { obligationId: PHONE },
+    });
+    const a = execute(w, deviceA);
+    const b = execute(a.state, deviceB);
+    expect(a.result.status).toBe("ACCEPTED");
+    expect(b.result.error?.code).toBe("STALE_WORLD_VERSION");
+  });
+});

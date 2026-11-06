@@ -23,9 +23,12 @@ of the intent (kind, payload, origin, actor). This makes retries safe, and it me
 1. **One fresh UUID per user intent.** Generate it when the user acts (clicks "Pay"), not per HTTP attempt.
 2. **Network retry of the same intent → reuse the same id.** You get the stored outcome back (`duplicate: true`).
    `correlationId` and `expectedWorldVersion` are not part of the intent, so changing them still counts as a retry.
-3. **A rejected id is final.** After `STALE_WORLD_VERSION` (or any rejection), re-read the snapshot and, if the user
-   still wants it, send the command again with a **new** id and the current `expectedWorldVersion`.
-4. **Never reuse an id for a different intent.** That returns `IDEMPOTENCY_CONFLICT` and changes nothing.
+3. **A rejected id is final.** Every recorded rejection (e.g. `STALE_WORLD_VERSION`, `UNKNOWN_OBLIGATION`,
+   `INSUFFICIENT_FUNDS`) is stored under the id. Re-read the snapshot and, if the user still wants it, send the command
+   again with a **new** id and the current `expectedWorldVersion`. Two exceptions are **not** recorded, so the id stays
+   usable: `SCHEMA_INVALID` (the request never reached the engine) and `IDEMPOTENCY_CONFLICT`.
+4. **Never reuse an id for a different intent** (a different kind, payload, origin **or actor**). That returns
+   `IDEMPOTENCY_CONFLICT` and changes nothing.
 5. **Provider facts** (PayPal) use a server-only id space and a fresh id per attempt. The capture id, not the
    commandId, is their dedup key (ADR-0008, #48). Browsers can't submit them (`sim.player-command.v1`).
 
