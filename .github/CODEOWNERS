@@ -1,0 +1,7 @@
+# Shared contracts and governance need the owner's review (AGENTS.md §5).
+/packages/contracts/   @Philipjj609
+/docs/adr/             @Philipjj609
+/AGENTS.md             @Philipjj609
+/SECURITY.md           @Philipjj609
+/.github/              @Philipjj609
+/config/               @Philipjj609

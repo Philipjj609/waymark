@@ -1,0 +1,13 @@
+{
+  "name": "@fle/domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure money arithmetic and double-entry ledger: posting rules, balances, statements and consolidation. No I/O.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@fle/contracts": "workspace:*"
+  }
+}

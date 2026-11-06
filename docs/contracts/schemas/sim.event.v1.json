@@ -1,0 +1,102 @@
+{
+  "$id": "https://schemas.finance-learning-economy.invalid/sim.event.v1.json",
+  "title": "sim.event.v1",
+  "x-contracts-version": "0.1.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "sim.event.v1"
+    },
+    "eventId": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 128,
+      "pattern": "^evt_[A-Za-z0-9_.:-]+$"
+    },
+    "worldId": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 128,
+      "pattern": "^wld_[A-Za-z0-9_.:-]+$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "worldDay": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "eventType": {
+      "type": "string",
+      "enum": [
+        "WORLD_INITIALIZED",
+        "DOCUMENT_ISSUED",
+        "OBLIGATION_SCHEDULED",
+        "OBLIGATION_DUE",
+        "OBLIGATION_DEFERRED",
+        "OBLIGATION_OVERDUE",
+        "OBLIGATION_SETTLED",
+        "INCOME_RECEIVED",
+        "ASSET_ACQUIRED",
+        "JOURNAL_POSTED",
+        "DAY_ADVANCED",
+        "TIME_PAUSED",
+        "PROVIDER_SETTLEMENT_APPLIED"
+      ]
+    },
+    "causationCommandId": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "actorId": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 128,
+          "pattern": "^act_[A-Za-z0-9_.:-]+$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ruleVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "payload": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "worldId",
+    "sequence",
+    "worldDay",
+    "eventType",
+    "causationCommandId",
+    "actorId",
+    "ruleVersion",
+    "payload"
+  ],
+  "additionalProperties": false
+}

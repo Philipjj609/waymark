@@ -1,0 +1,41 @@
+name: Work package
+description: An implementable task with acceptance criteria (one DRI).
+labels: ["status:triage"]
+body:
+  - type: input
+    id: wp
+    attributes: { label: Work package id, description: "e.g. P2-A1", placeholder: P2-A1 }
+    validations: { required: true }
+  - type: textarea
+    id: outcome
+    attributes: { label: Outcome, description: What is observably true when this is done? }
+    validations: { required: true }
+  - type: textarea
+    id: acceptance
+    attributes:
+      {
+        label: Acceptance criteria,
+        description: Checkable items,
+        including the tests that prove them.,
+      }
+    validations: { required: true }
+  - type: textarea
+    id: scope
+    attributes:
+      {
+        label: Scope and files,
+        description: Paths this task may change; what is explicitly out of scope.,
+      }
+  - type: input
+    id: deps
+    attributes: { label: Depends on, placeholder: "#12, #14 or none" }
+  - type: input
+    id: refs
+    attributes: { label: Related ADRs / Drive docs, placeholder: "ADR-0008, SIM-001" }
+  - type: textarea
+    id: verify
+    attributes:
+      {
+        label: Verification evidence required,
+        description: "Exact commands/output, sandbox ids, screenshots.",
+      }

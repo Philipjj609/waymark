@@ -1,0 +1,14 @@
+{
+  "$comment": "Machine-readable mirror of GOV-001. The Drive doc is the human decision record; change both together, only on an owner-approved rename (identityVersion bump).",
+  "projectId": "finance-learning-economy",
+  "workingCodename": "Waymark",
+  "displayName": "Waymark (provisional)",
+  "nameStatus": "PROVISIONAL",
+  "finalBrandName": null,
+  "identityVersion": 1,
+  "githubRepository": "https://github.com/Philipjj609/waymark",
+  "githubRepositoryStatus": "PLANNED_PRIVATE",
+  "decisionRecord": "https://docs.google.com/document/d/1vUVzYbrRMPqGh6EJZnMQOW1hjaM09zNOUb_4-OCfR4Y/edit",
+  "lastDecision": "2026-11-06: use Waymark only as a temporary development codename; likely rename later.",
+  "renamePending": false
+}

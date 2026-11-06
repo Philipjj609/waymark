@@ -1,0 +1,202 @@
+{
+  "$id": "https://schemas.finance-learning-economy.invalid/learning.lesson.v1.json",
+  "title": "learning.lesson.v1",
+  "x-contracts-version": "0.1.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "learning.lesson.v1"
+    },
+    "lessonId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "curriculumVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "conceptIds": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 5,
+        "maxLength": 128,
+        "pattern": "^cpt_[A-Za-z0-9_.:-]+$"
+      }
+    },
+    "blocks": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "text"
+              },
+              "markdown": {
+                "type": "string",
+                "maxLength": 1200
+              }
+            },
+            "required": [
+              "type",
+              "markdown"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "visual"
+              },
+              "recipe": {
+                "type": "string",
+                "enum": [
+                  "CashFlowTimeline",
+                  "InvoiceAnatomy",
+                  "CommitmentCalendar",
+                  "BalanceSplit",
+                  "ProbabilityTree",
+                  "DecisionComparison",
+                  "InterestAccumulation",
+                  "BudgetAllocation",
+                  "ProfitVsCashFlow",
+                  "ContractTerms",
+                  "BalanceSheetComparison"
+                ]
+              },
+              "data": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "textEquivalent": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "type",
+              "recipe",
+              "data",
+              "textEquivalent"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "question"
+              },
+              "prompt": {
+                "type": "string",
+                "minLength": 1
+              },
+              "choices": {
+                "minItems": 2,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "rubricRef": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "type",
+              "prompt",
+              "rubricRef"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "sourceRefs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "VALIDATED",
+            "FALLBACK_REVIEWED",
+            "REJECTED"
+          ]
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "status",
+        "checks"
+      ],
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "generator": {
+          "type": "string",
+          "enum": [
+            "REVIEWED_STATIC",
+            "MODEL"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "promptVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "generator",
+        "model",
+        "promptVersion"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "lessonId",
+    "curriculumVersion",
+    "conceptIds",
+    "blocks",
+    "sourceRefs",
+    "validation",
+    "provenance"
+  ],
+  "additionalProperties": false
+}

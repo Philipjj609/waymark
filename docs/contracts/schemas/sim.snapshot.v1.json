@@ -1,0 +1,435 @@
+{
+  "$id": "https://schemas.finance-learning-economy.invalid/sim.snapshot.v1.json",
+  "title": "sim.snapshot.v1",
+  "x-contracts-version": "0.1.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "sim.snapshot.v1"
+    },
+    "worldId": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 128,
+      "pattern": "^wld_[A-Za-z0-9_.:-]+$"
+    },
+    "day": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "ruleVersion": {
+      "type": "string"
+    },
+    "balances": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "entityId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^ent_[A-Za-z0-9_.:-]+$"
+          },
+          "account": {
+            "type": "string",
+            "pattern": "^(ASSET|LIABILITY|EQUITY|REVENUE|EXPENSE):[A-Z][A-Za-z0-9]*$"
+          },
+          "balance": {
+            "type": "object",
+            "properties": {
+              "amountMinor": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              }
+            },
+            "required": [
+              "amountMinor",
+              "currency"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "entityId",
+          "account",
+          "balance"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "obligations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "obligationId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+          },
+          "debtorEntityId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^ent_[A-Za-z0-9_.:-]+$"
+          },
+          "creditorLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "creditorFidelity": {
+            "type": "string",
+            "enum": [
+              "L0_EXOGENOUS",
+              "L1_CONTRACTUAL",
+              "L2_OPERATIONAL",
+              "L3_ENTERPRISE"
+            ]
+          },
+          "amount": {
+            "type": "object",
+            "properties": {
+              "amountMinor": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              }
+            },
+            "required": [
+              "amountMinor",
+              "currency"
+            ],
+            "additionalProperties": false
+          },
+          "amountSettled": {
+            "type": "object",
+            "properties": {
+              "amountMinor": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              }
+            },
+            "required": [
+              "amountMinor",
+              "currency"
+            ],
+            "additionalProperties": false
+          },
+          "dueDay": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "SCHEDULED",
+              "DUE",
+              "PARTIALLY_SETTLED",
+              "SETTLED",
+              "OVERDUE",
+              "WAIVED",
+              "RESTRUCTURED",
+              "CANCELLED"
+            ]
+          },
+          "settlementAccount": {
+            "type": "string",
+            "pattern": "^(ASSET|LIABILITY|EQUITY|REVENUE|EXPENSE):[A-Z][A-Za-z0-9]*$"
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "originAgreementId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 128,
+                "pattern": "^agr_[A-Za-z0-9_.:-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "documentId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 128,
+                "pattern": "^doc_[A-Za-z0-9_.:-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "obligationId",
+          "debtorEntityId",
+          "creditorLabel",
+          "creditorFidelity",
+          "amount",
+          "amountSettled",
+          "dueDay",
+          "state",
+          "settlementAccount",
+          "blocking",
+          "originAgreementId",
+          "documentId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^doc_[A-Za-z0-9_.:-]+$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "BILL",
+              "INVOICE",
+              "RECEIPT",
+              "OFFER",
+              "AGREEMENT",
+              "STATEMENT"
+            ]
+          },
+          "realm": {
+            "type": "string",
+            "enum": [
+              "FICTIONAL",
+              "PAYPAL_SANDBOX"
+            ]
+          },
+          "issuerLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "recipientEntityId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^ent_[A-Za-z0-9_.:-]+$"
+          },
+          "issuedDay": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "dueDay": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total": {
+            "type": "object",
+            "properties": {
+              "amountMinor": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              }
+            },
+            "required": [
+              "amountMinor",
+              "currency"
+            ],
+            "additionalProperties": false
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 160
+          }
+        },
+        "required": [
+          "documentId",
+          "kind",
+          "realm",
+          "issuerLabel",
+          "recipientEntityId",
+          "issuedDay",
+          "dueDay",
+          "total",
+          "title"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "assetId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^ast_[A-Za-z0-9_.:-]+$"
+          },
+          "ownerEntityId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^ent_[A-Za-z0-9_.:-]+$"
+          },
+          "label": {
+            "type": "string"
+          },
+          "acquisitionCost": {
+            "type": "object",
+            "properties": {
+              "amountMinor": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              }
+            },
+            "required": [
+              "amountMinor",
+              "currency"
+            ],
+            "additionalProperties": false
+          },
+          "acquiredDay": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          }
+        },
+        "required": [
+          "assetId",
+          "ownerEntityId",
+          "label",
+          "acquisitionCost",
+          "acquiredDay"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "blockingDecisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "OBLIGATION_DUE"
+          },
+          "obligationId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+          },
+          "sinceDay": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "options": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "PAY_OBLIGATION",
+                "DEFER_OBLIGATION"
+              ]
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "obligationId",
+          "sinceDay",
+          "options"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "playerActorId": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 128,
+      "pattern": "^act_[A-Za-z0-9_.:-]+$"
+    },
+    "eventCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "stateHash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "worldId",
+    "day",
+    "version",
+    "ruleVersion",
+    "balances",
+    "obligations",
+    "documents",
+    "assets",
+    "blockingDecisions",
+    "playerActorId",
+    "eventCount",
+    "stateHash"
+  ],
+  "additionalProperties": false
+}
