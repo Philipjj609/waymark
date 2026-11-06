@@ -53,8 +53,11 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tgz" | sha256sum --check --strict
           tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
-      - name: Scan the full git history
-        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --no-banner --exit-code 1 .'
+      # Scan every commit reachable from the commit under test (the PR merge commit, or main),
+      # NOT --all: gitleaks defaults to `git log --all`, and with fetch-depth 0 that included other
+      # branches, so one branch's finding failed every PR (#11 follow-up).
+      - name: Scan the history of the commit under test
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --no-banner --exit-code 1 --log-opts="--full-history HEAD" .'
 
   # Dependency audit (#11): the free stand-in for dependency-review. It fails on high or critical
   # advisories in the lockfile.
@@ -69,4 +72,8 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
+          # setup-node v5 auto-enables pnpm caching (packageManager field). This job never installs,
+          # so the store path doesn't exist and the post-job cache save failed the job ("Path
+          # Validation Error"), flakily, depending on cache state. Audit reads only the lockfile.
+          package-manager-cache: false
       - run: pnpm audit --audit-level high
