@@ -1,6 +1,6 @@
 # Cross-agent communication, decisions and announcements
 
-Status: v1, 2026-11-06. Integrates the owner's **OPS-002 — Cross-Agent Coordination Inbox & Decision Authority**
+Status: v1.2, 2026-11-06 (in effect since 447275e). Integrates the owner's **OPS-002 — Cross-Agent Coordination Inbox & Decision Authority**
 (Drive: https://docs.google.com/document/d/1RDfFBQ73dyh-UWyz_Wxd77EEQPgO5it6Vx6DfIZCZaU/edit) with the existing
 GitHub process. It adds no second task system: **GitHub Issues stay the operational source of truth; Drive holds
 reasoning, ADR context, research and the fallback inbox for tools that can't reach GitHub.**
@@ -43,13 +43,13 @@ OPS-002's suggested labels map to these: `coordination/question` → `coord:ques
 
 ## 3. Decision authority (OPS-002 D0–D4 ↔ AGENTS.md §9)
 
-| Level | What                                                                                                                                                                                                                                | Who decides                                                                                                                                                     | Silence means    |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| D0    | Reversible detail inside your claimed task; no contract or API impact                                                                                                                                                               | the task-owning agent; note it in the PR                                                                                                                        | n/a              |
-| D1    | Cross-task dependency, assignment conflict, clarification within existing ADRs                                                                                                                                                      | the lead (a human, AGENTS.md §9) + the affected owners. Claude (lead orchestrator) or ChatGPT may propose an answer; it counts only once the owners acknowledge | **not agreed**   |
-| D2    | Shared schema, public behaviour, architecture, money/replay semantics, safety, privacy                                                                                                                                              | RFC + review by affected owners; **owner approval** for owner-tier items                                                                                        | **not approved** |
-| D3    | Owner-only list in AGENTS.md §9 (visibility, merges to main, permissions, live money, spending, deploys, security settings, history, Drive corpus, branding, money/ledger semantics, PayPal mapping, auth, licenses, paid services) | @Philipjj609 only                                                                                                                                               | **not approved** |
-| D4    | Security emergency                                                                                                                                                                                                                  | pause the affected integration; label `security`; tell the owner immediately; no risky "fixes"                                                                  | n/a              |
+| Level | What                                                                                                                                                                                                                                             | Who decides                                                                                                                                                     | Silence means    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| D0    | Reversible detail inside your claimed task; no contract or API impact                                                                                                                                                                            | the task-owning agent; note it in the PR                                                                                                                        | n/a              |
+| D1    | Cross-task dependency, assignment conflict, clarification within existing ADRs                                                                                                                                                                   | the lead (a human, AGENTS.md §9) + the affected owners. Claude (lead orchestrator) or ChatGPT may propose an answer; it counts only once the owners acknowledge | **not agreed**   |
+| D2    | Shared schema, public behaviour, architecture, money/replay semantics, safety, privacy                                                                                                                                                           | RFC + review by affected owners, then a human lead; **owner approval** for owner-tier items                                                                     | **not approved** |
+| D3    | Owner-only list in AGENTS.md §9 (visibility, merges to main, permissions, live money, spending, deploys, security settings, history, destructive Drive changes, branding, money/ledger semantics, PayPal mapping, auth, licenses, paid services) | @Philipjj609 only                                                                                                                                               | **not approved** |
+| D4    | Security emergency                                                                                                                                                                                                                               | pause the affected integration; label `security`; tell the owner immediately; no risky "fixes"                                                                  | n/a              |
 
 ChatGPT is a cross-agent architectural reviewer and coordinator. Claude is the lead engineering orchestrator. **Neither
 approves anything on the owner's behalf, and neither can override a GitHub claim.**
@@ -108,6 +108,19 @@ human permission needed for reversible branch work. A **merge proposal** is a PR
 actually run, reviewer findings, architectural implications and remaining risks. It goes to the authorized decider.
 Merging to `main` is D3. A positive review (including ChatGPT's) is evidence, never authorization.
 
+**I. No silent overwrites.** Agents share one human's GitHub account, so most of this is convention. It is
+recorded here honestly:
+
+| Enforced by GitHub (on `main`)                          | Convention only (everyone must follow it)                                                   |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| no direct pushes that skip the required `verify` checks | never push to, rebase or force-push **another task's branch**                               |
+| no force-push or deletion of `main`; linear history     | rebase only your own branch, with `git push --force-with-lease=<branch>:<old sha>`          |
+| PR branch must be up to date with `main` before merging | before editing a file another open PR touches, post a `[PROPOSAL]` (pattern C)              |
+|                                                         | the identity header can be forged; a claim with your id that you didn't post is a collision |
+
+Admins (the owner's account, which agents also use) can bypass branch protection (`enforce_admins` is off).
+Agents never use that bypass. Changing protection settings is D3.
+
 ## 5. Announcements (significant direction changes)
 
 `docs/ANNOUNCEMENTS.md` is the append-only, newest-first log. For each significant change to architecture, a shared
@@ -134,8 +147,10 @@ question only if something material changes.
 ChatGPT runs a scheduled check **every two hours** (owner-configured automation). As of 6 Nov its GitHub connector
 returned 404 for this private repository, so **today it can only see Drive**. Until the owner grants it repository
 access:
-- the lead keeps a short **coordination index** in the OPS-002 Drive doc (open D1–D3 requests, links, status) at
-  every session end;
+- the lead keeps **COORD-INDEX** (Drive hub 02,
+  https://docs.google.com/document/d/1A6rBnfGazxPAErtHC3j34u6Du788G5gVCGjcI3C3HVA/edit) current: open D1–D3
+  requests, decisions, blockers and handoffs, each with a UTC timestamp and a GitHub link. Update it whenever one of
+  those changes, and at least at every session end. ChatGPT reads it on its two-hourly check;
 - ChatGPT's answers count as proposals until a GitHub-side agent or human acknowledges them on the issue.
 
 ## 8. What is automated vs manual (honest inventory)

@@ -5,12 +5,31 @@ and before a PR (`pnpm session:start` prints the latest). Format and rules: `doc
 
 ---
 
+## ANN-004 — 2026-11-06 — Merged: protocol in effect, command-id policy, pinned CI actions
+
+- **What / why:** the owner authorized merging PRs #54, #55 and #57 on 6 Nov.
+  - #54 → `9baef7d`: CI actions are pinned to commit SHAs (SECURITY.md "CI supply chain").
+  - #55 → `3cc0541`: the command-id policy (`docs/contracts/README.md` → "Command ids").
+  - #57 → `447275e`: the communication protocol (ANN-003) is now **in effect**.
+- **Old → new:**
+  - Clients chose their own retry semantics → **one fresh commandId per intent; retries reuse it; recorded
+    rejections are final** (except `SCHEMA_INVALID` and `IDEMPOTENCY_CONFLICT`).
+  - Action tags → SHAs.
+- **Authority / status:** owner-approved merges (D3).
+- **Affected:**
+  - #10 web app: must implement rules 1–3; see the [DEPENDENCY] on #10.
+  - Anyone adding CI actions: they must be pinned.
+  - All agents: protocol v1.2 adds §4-I "No silent overwrites".
+- **Adapt existing work?** Yes for client code that sends commands. No for everything else.
+- **Authoritative spec:** `docs/contracts/README.md`, `SECURITY.md`, `docs/process/communication.md`.
+- **Ack required:** whoever claims #10, on the announcement issue.
+
 ## ANN-003 — 2026-11-06 — Cross-agent communication protocol v1 (integrates OPS-002)
 
 - **What / why:** a GitHub-native way for agents to ask, propose, escalate and acknowledge without humans relaying
   messages: identity header, D0–D4 authority, peer patterns A–H, announcements log.
 - **Old → new:** ad-hoc issue comments → structured `[TYPE]` messages with explicit `[ACK]`; OPS-002 is now mapped to GitHub labels.
-- **Authority / status:** owner direction of 6 Nov; procedures by the lead (D1). In effect once PR for #56 merges.
+- **Authority / status:** owner direction of 6 Nov; procedures by the lead (D1). In effect since `447275e` (PR #57, owner-approved merge).
 - **Affected:** all agents and humans; all modules.
 - **Adapt existing work?** Use the message header and the new labels from now on.
 - **Authoritative spec:** `docs/process/communication.md`; Drive OPS-002 (owner).
