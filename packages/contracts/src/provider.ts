@@ -22,7 +22,12 @@ export const VerifiedProviderEventSchema = z
      */
     providerEventId: z.string().min(1).max(128),
     operationId: ProviderOperationIdSchema,
-    eventType: z.enum(["CAPTURE_COMPLETED", "CAPTURE_DENIED", "CAPTURE_REFUNDED"]),
+    /**
+     * ORDER_VOIDED (0.2.0): the server verified the order can no longer be captured (VOIDED or
+     * expired with no capture, ADR-0008 step 5b). It releases the reservation; it never settles.
+     * A single CAPTURE_DENIED does NOT release it: the buyer may retry.
+     */
+    eventType: z.enum(["CAPTURE_COMPLETED", "CAPTURE_DENIED", "CAPTURE_REFUNDED", "ORDER_VOIDED"]),
     amount: PositiveMoneySchema,
     mapping: z
       .object({

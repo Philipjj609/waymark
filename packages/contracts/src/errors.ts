@@ -23,6 +23,10 @@ export const CommandErrorCodeSchema = z.enum([
   "PROVIDER_EVENT_NOT_SETTLING",
   /** Same commandId re-sent with a different intent (kind, payload, origin or actor). */
   "IDEMPOTENCY_CONFLICT",
+  /** 0.2.0: the obligation has an active PayPal sandbox checkout; pay/second checkout refused (ADR-0008). */
+  "PAYMENT_IN_FLIGHT",
+  /** 0.2.0: a provider event's operationId does not match the obligation's active checkout. */
+  "PROVIDER_OPERATION_MISMATCH",
 ]);
 export type CommandErrorCode = z.infer<typeof CommandErrorCodeSchema>;
 

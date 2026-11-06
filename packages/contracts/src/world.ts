@@ -6,12 +6,13 @@ import {
   DocumentIdSchema,
   EntityIdSchema,
   ObligationIdSchema,
+  ProviderOperationIdSchema,
   WorldDaySchema,
   WorldIdSchema,
   WorldVersionSchema,
 } from "./ids.js";
 import { AccountCodeSchema } from "./ledger.js";
-import { MoneySchema } from "./money.js";
+import { MoneySchema, PositiveMoneySchema } from "./money.js";
 
 /** How fully an actor is simulated (ECO-020 §1). */
 export const SimulationFidelitySchema = z.enum([
@@ -149,7 +150,9 @@ export const BlockingDecisionSchema = z
     kind: z.literal("OBLIGATION_DUE"),
     obligationId: ObligationIdSchema,
     sinceDay: WorldDaySchema,
-    options: z.array(z.enum(["PAY_OBLIGATION", "DEFER_OBLIGATION"])).min(1),
+    options: z
+      .array(z.enum(["PAY_OBLIGATION", "DEFER_OBLIGATION", "START_PROVIDER_CHECKOUT"]))
+      .min(1),
   })
   .strict();
 export type BlockingDecision = z.infer<typeof BlockingDecisionSchema>;
@@ -184,6 +187,23 @@ export const WorldSnapshotSchema = z
         .strict(),
     ),
     blockingDecisions: z.array(BlockingDecisionSchema),
+    /**
+     * 0.2.0 (ADR-0008): fictional cash earmarked for in-flight PayPal SANDBOX checkouts. A
+     * reservation is not an expense and posts no journal; it only lowers available cash.
+     */
+    reservations: z.array(
+      z
+        .object({
+          obligationId: ObligationIdSchema,
+          operationId: ProviderOperationIdSchema,
+          entityId: EntityIdSchema,
+          amount: PositiveMoneySchema,
+          sinceDay: WorldDaySchema,
+        })
+        .strict(),
+    ),
+    /** 0.2.0: per entity, cash minus reservations. The UI shows this; it never computes it. */
+    availableCash: z.array(z.object({ entityId: EntityIdSchema, amount: MoneySchema }).strict()),
     playerActorId: ActorIdSchema,
     eventCount: z.number().int().min(0),
     stateHash: z.string().regex(/^[0-9a-f]{64}$/),

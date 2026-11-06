@@ -1,7 +1,7 @@
 {
   "$id": "https://schemas.finance-learning-economy.invalid/learning.lesson.v1.json",
   "title": "learning.lesson.v1",
-  "x-contracts-version": "0.1.0",
+  "x-contracts-version": "0.2.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
