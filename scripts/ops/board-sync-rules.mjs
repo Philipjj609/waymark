@@ -145,7 +145,9 @@ export function planFor(item) {
 export function decideField(name, planned, existing) {
   const have = existing ?? "";
   if (TEAM_FIELDS.has(name)) {
-    if (have && !AUTO_VALUES.has(have)) return "keep";
+    // Only "Next action" ever holds auto text; in every other team field any text is human/agent-written.
+    const ours = name === "Next action" && AUTO_VALUES.has(have);
+    if (have && !ours) return "keep";
     if (!planned) return have ? "clear" : "keep";
     return have === planned ? "keep" : "set";
   }

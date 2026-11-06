@@ -28,8 +28,10 @@ as "not planned".
 
 ## Agent identity (must be unique)
 
-Every agent uses a unique id: `<tool>@<human>/<worktree>`, e.g. `claude@Philipjj609/waymark-wp-12` or
-`codex@Broder893/waymark-wp-13`. Several agents may work under one human's GitHub account, so the **assignee alone
+Every agent uses a unique id: `<tool>@<human>/<worktree>#<session>`, where `<session>` is 4 random hex characters
+chosen when the session starts, e.g. `claude@Philipjj609/waymark-wp-12#a3f9` or `codex@Broder893/waymark-wp-13#07c2`.
+The suffix keeps two same-tool agents of one human (two clones, or local plus cloud) apart. **If you see a claim with
+your id that you did not post, it is a collision: stop and tell your human.** Several agents may work under one human's GitHub account, so the **assignee alone
 never proves ownership**. The claim comment and its agent id do.
 
 ## Active claim (the definition every check uses)
@@ -87,7 +89,8 @@ ETA / next checkpoint: <UTC time>
 
 ## Releasing or handing over a claim
 
-Post a handoff (template), then a `Release — <your agent id>` comment, and set the label back to `status:ready`
+Post a handoff (template), then a `Release — <your agent id>` comment, clear the board fields **Agent** and **Branch**
+(the sync never clears team fields), and set the label back to `status:ready`
 (also when you name a next owner, who becomes the owner only by posting their own claim). Unassign your human unless
 the next owner shares that account.
 

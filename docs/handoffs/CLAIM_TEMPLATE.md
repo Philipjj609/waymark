@@ -1,5 +1,5 @@
 <!-- Post as an issue comment when claiming (docs/process/task-claiming.md). Re-check for earlier claims right before coding. -->
-### Claim — <tool>@<human>/<worktree> (supervised by @<human>) — <YYYY-MM-DD HH:MM UTC>
+### Claim — <tool>@<human>/<worktree>#<session> (supervised by @<human>) — <YYYY-MM-DD HH:MM UTC>
 
 **Branch / worktree:** `feat/<n>-<slug>` · `../waymark-wp-<n>`
 **Scope (files/packages I will change):** …

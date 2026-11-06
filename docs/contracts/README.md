@@ -19,7 +19,9 @@
 ## Changing a contract
 
 1. Open an issue labelled `contract-change`: what, why, consumers affected, additive or breaking.
-2. Owners of consuming modules acknowledge (or the lead decides near the deadline).
+2. Owners of consuming modules acknowledge. Near the deadline a **human** lead may decide after 12 h of silence, **except**
+   for owner-tier changes (money/ledger semantics, the PayPal mapping, auth, licenses, paid services), which always need
+   @Philipjj609 (AGENTS.md §9).
 3. One PR: edit zod → bump `CONTRACTS_VERSION` (minor = additive, major = breaking) → `pnpm contracts:generate`
    → add a line to `CHANGELOG.md` → update tests/golden values deliberately.
 4. Breaking changes also need an ADR and owner approval. Persisted events are never rewritten; add a new

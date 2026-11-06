@@ -63,3 +63,10 @@ describe("status derivation", () => {
     expect(p["Depends on"]).toBe("#7 (P1-1.1)");
   });
 });
+
+describe("auto values are only recognised in Next action", () => {
+  it("never clears an Agent that happens to equal an auto string", () => {
+    expect(decideField("Agent", "", "Resolve blocker")).toBe("keep");
+    expect(decideField("Next action", "", "Resolve blocker")).toBe("clear");
+  });
+});

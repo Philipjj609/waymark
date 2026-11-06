@@ -199,7 +199,8 @@ export function verifyCapture(
 /**
  * Webhook inbox dedup: PayPal may deliver the same event more than once and out
  * of order. Returns the ids to process now, in arrival order, once each. The
- * durable version is a unique index on provider_event_id (WP-05).
+ * durable version is a webhook inbox unique on the **webhook event id** (ADR-0008); verified
+ * facts are separately unique on (capture id, event type).
  */
 export function dedupeDeliveries(seen: ReadonlySet<string>, arrivals: readonly string[]): string[] {
   const out: string[] = [];

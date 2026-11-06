@@ -21,7 +21,7 @@ or agent acknowledges it on the issue (Drive registry: `12 / 01 — Agent Regist
 
 - **Code-specific:** GitHub issue/PR comments, with file paths and SHAs.
 - **Interface change:** open `contract-change` issue → tag the owners of every consuming module → wait for
-  acknowledgment (or 24h + lead decision near deadline) → single PR.
+  acknowledgment (or, near the deadline, 12 h of silence + a **human** lead decision; never for owner-tier items, AGENTS.md §9) → single PR.
 - **Design debate / alternatives:** Drive `05 — Cross-Agent Design Discussions` (RFC template), link from issue.
 - **Human decision needed:** label `needs-decision`, assign the owner, state options + recommendation.
 - **Blocked:** label `status:blocked`, fill `Blocked reason` on the board, name what unblocks it.

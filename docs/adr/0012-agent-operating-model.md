@@ -9,7 +9,7 @@ contracts under each other, unreviewed "done" claims, and state that only exists
 **Decision.**
 1. **The issue is the lock; the claim comment is the key.** A task is owned by the earliest _active_ claim comment:
    one not followed by a Release/Yield from the same agent, and not marked stale by a human lead. The claim names the
-   unique agent id (`<tool>@<human>/<worktree>`), the human supervisor, branch/worktree, scope and deliverables. The
+   unique agent id (`<tool>@<human>/<worktree>#<session>`), the human supervisor, branch/worktree, scope and deliverables. The
    assignee (the supervisor's account) and the `status:in-progress` label are visible signals, but several agents
    can share one account, so they never prove ownership on their own. Re-check just before coding; a later claimant
    yields without touching assignees or labels (`docs/process/task-claiming.md`).
@@ -20,7 +20,7 @@ contracts under each other, unreviewed "done" claims, and state that only exists
 3. **Authority tiers** (AGENTS.md §9; "lead" always means a human — agents recommend, humans decide): routine edits inside the claimed scope are free; shared contracts, architecture
    and other owners' modules need an RFC and review; money/ledger semantics, the PayPal mapping, auth, licenses and
    paid services need an RFC **and** owner approval; visibility, permissions, live money, destructive Drive or history
-   changes, security settings and merges need explicit human authorization.
+   changes, security settings, spending, production deploys and merges need explicit **owner (@Philipjj609)** authorization.
 4. **GitHub tracks work; Drive tracks thinking.** Drive history is preserved: revise by creating a new versioned
    document (`…v2`) and linking the old one, never by deleting or overwriting.
 5. **Messages need acknowledgment.** Nothing counts as received until the recipient replies on the issue or PR.

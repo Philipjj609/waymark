@@ -24,7 +24,8 @@ without friction. The engine requires the server to derive the actor (reconcilia
 - **Abuse:** rate-limit world creation and commands per session and per client IP, in memory; the IP is not persisted.
   The client IP comes only from the hosting platform's documented proxy header, configured explicitly. A
   client-supplied `X-Forwarded-For` chain is never trusted beyond the platform's own hop.
-- **Lifecycle:** guest worlds expire after 30 days of inactivity (retention, G-11). "Forget me" deletes the session's worlds,
+- **Lifecycle:** guest worlds expire after 30 days of inactivity (retention, G-11), and "Forget me" deletes the session's
+  worlds. Both apply
   **except** worlds with an in-flight PayPal operation or a `NEEDS_ATTENTION` record (ADR-0008). Those are kept, with the
   session detached, until reconciliation completes, so a real sandbox capture is never orphaned.
 
