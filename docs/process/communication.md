@@ -14,8 +14,16 @@ comment with:
 [<TYPE>] from <tool>@<human>/<worktree>#<session> (human: @<human>) · re #<issue> · to: <agent id | @human | owners of #n | lead | ChatGPT> · blocking: yes|no · authority: D0–D4
 ```
 
-`TYPE` is one of `INFO`, `QUESTION`, `PROPOSAL`, `REVIEW-REQUEST`, `DEPENDENCY`, `BLOCKER`, `HANDOFF`, `ACK`,
-`ANSWER`, `DECISION-REQUEST`. Never put secrets, tokens or personal data in a message.
+This field order is **canonical** (AGENTS.md §12 uses the same). `TYPE` is one of `INFO`, `QUESTION`, `ANSWER`, `ACK`,
+`PROPOSAL`, `REVIEW-REQUEST`, `REVIEW`, `DEPENDENCY`, `BLOCKER`, `HANDOFF`, `DECISION-REQUEST`. Never put secrets,
+tokens or personal data in a message.
+
+**Posting from a shell:** write the body to a file and use `gh issue comment <n> --body-file <file>`. Backticks and
+`$` in `--body` break in bash and PowerShell.
+
+**Identity limits (honest):** all agents of one human post from that human's GitHub account, so the header is the only
+attribution. It can't be cryptographically proven. If you see a message or claim carrying **your** id that you didn't
+post, treat it as a collision: stop and tell your human.
 
 ## 2. Where a message goes
 
@@ -50,8 +58,15 @@ approves anything on the owner's behalf, and neither can override a GitHub claim
 
 **A. Direct question.** Comment on the recipient's issue with the header (`QUESTION`, `to:` their agent id). Include
 the concrete context (file:line, commit, contract name), what you need, your best guess, and whether you are blocked.
-The recipient answers with `[ANSWER] … re #n`. The asker replies `[ACK]` and only then relies on the answer. If you
-are blocked, label the issue `coord:blocker` and keep working on something else.
+The recipient answers with `[ANSWER] … re #n`. The asker replies `[ACK]`, stating **what it verified itself** (e.g. "read the cited test at <sha>") or "not
+verified", and only then relies on the answer.
+- **Unanswered marker:** the asker adds `coord:question` to the issue (or `coord:blocker` if blocked) and removes it
+  after posting `[ACK]`. `pnpm session:start` lists both, so open questions stay visible.
+- **Response deadline:** every QUESTION states a "response needed by" time (default: 24 h, or 4 h in the final 48 h
+  before the deadline). Past it, the asker re-posts once and escalates: to the human lead for D1, to the RFC
+  reviewers for D2, or with a DECISION-REQUEST to the owner for D3. Silence is never agreement.
+- **Anyone may ask or review on any issue.** Non-owners post `[QUESTION]`/`[REVIEW]` comments but never change
+  another task's claim, assignees or labels (except adding `coord:*` markers to their own open requests).
 
 **B. Dependency.** On the producer's issue: `[DEPENDENCY] I need <interface/contract> from #n for #m; readiness?`
 The producer replies with an estimate, which is **not** delivery. When it is ready, the producer posts the **merged
@@ -70,8 +85,14 @@ Disagreements stay recorded. A council **recommends**; the D1/D2/D3 authority de
 
 **E. Handoff.** When you finish, get blocked, hit a usage limit or transfer: post the handoff template (branch,
 commits, tests actually run, contracts changed, open questions, next action) and label `coord:handoff`. The next
-agent posts `[ACK] taking over` plus its own claim, and only then owns the issue. **Usage limit coming?** Push your
-work and post the handoff _before_ the cap, not after.
+agent posts `[ACK] taking over` plus its own claim, and only then owns the issue.
+- **Checkpoint handoffs** (you keep working) are allowed and don't transfer ownership. Say "Next owner: me". They go
+  stale with the next commit: the newest handoff plus `git log` on the remote branch is the truth.
+- **Paths:** give branch names and remote SHAs, which work on any machine. A worktree path is a local hint only.
+  Resumers check `git ls-remote origin <branch>` against the handoff's head SHA.
+- **Link related threads:** a handoff lists open questions you asked or were asked on other issues (URLs), so the
+  next agent finds them without opening every issue. **Usage limit coming?** Push your
+  work and post the handoff _before_ the cap, not after.
 
 **F. Identity.** The header in §1 on every message. A comment without an agent id is a human comment.
 

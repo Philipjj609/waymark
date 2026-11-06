@@ -138,11 +138,13 @@ edits and mentions notify nobody automatically.
 ## 12. Communication (OPS-002, `docs/process/communication.md`)
 
 - Every coordination comment starts with `[TYPE] from <agent id> (human: @<h>) · re #<n> · to: <who> · blocking: yes|no · authority: D0–D4`.
-  Types: QUESTION, ANSWER, ACK, PROPOSAL, REVIEW-REQUEST, DEPENDENCY, BLOCKER, HANDOFF, DECISION-REQUEST, INFO.
+  Types: INFO, QUESTION, ANSWER, ACK, PROPOSAL, REVIEW-REQUEST, REVIEW, DEPENDENCY, BLOCKER, HANDOFF, DECISION-REQUEST.
+  Post with `gh issue comment <n> --body-file <file>` (shell quoting breaks `--body`).
 - Ask the owner of another issue **on that issue**; use the "Agent request" form when no issue fits. Owner decisions
   (D3): label `needs-decision`, assign @Philipjj609, block only the dependent work.
 - A promise is not delivery: a dependency counts as available only when the producer posts the merged commit/PR and evidence.
-- Nobody treats silence as agreement. Important requests need an explicit `[ACK]`.
+- Nobody treats silence as agreement. Important requests need an explicit `[ACK]`. Mark open questions with
+  `coord:question` (remove after ACK); past the stated response time, escalate (communication.md §4-A).
 - Check messages at session start, at milestones and before a PR. While waiting, a light check every 15–30 min at
   most; never continuous model polling. Near a usage limit: push and post the handoff first.
 - Significant changes are announced in `docs/ANNOUNCEMENTS.md` (+ an Announcement issue). Codex specifics: `docs/process/codex.md`.

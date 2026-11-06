@@ -23,6 +23,7 @@ pnpm verify   →  <paste the summary line, e.g. "Tests 55 passed (55)">
 **Decisions needed (who):** none | <question> → @owner
 **Blockers:** none | <reason · what unblocks it · next owner>
 
+**Open questions I asked / was asked (URLs):** none | <links>
 **Read before continuing (mandatory context):** <issue comments, ADRs, files, Drive docs>
 **Not yet read / unknown (omissions):** <what the next session should not assume>
 
