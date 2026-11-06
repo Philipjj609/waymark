@@ -25,10 +25,24 @@ on day 15. Buying a €300 laptop on day 1 makes the rent unaffordable on day 10
 You can defer the rent, let the salary arrive, then pay it. Every step is a balanced double-entry journal,
 and retrying a command id has no second effect.
 
+### Run the web app
+
+```bash
+pnpm dev        # Next.js shell (apps/web) on http://localhost:3000
+```
+
+Open the page and start an FP-30 world as a guest (an anonymous session cookie, no account). Worlds live in
+memory for now, so restarting the server forgets them; the Postgres store is #9. State-changing requests must
+send an allowed `Origin` and `Content-Type: application/json`. In development the only allowed origin is
+`http://localhost:3000`; on another port or host set `APP_ORIGINS` (comma-separated, exact origins), e.g.
+`PORT=3010 APP_ORIGINS=http://localhost:3010 pnpm dev`. Outside development `APP_ORIGINS` is required, or every
+write is refused. `CLIENT_IP_HEADER` (optional) names the hosting platform's client-IP header for per-IP rate limits.
+
 ## Repository map
 
 | Path                           | What                                                                                                                                                                                                                                                              |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web`                     | Next.js shell: guest session cookie, `/api/worlds` and `/api/commands` over `@fle/server`, plain functional UI                                                                                                                                                    |
 | `packages/contracts`           | Versioned zod schemas: money, ids, commands, events, journals, snapshots, PayPal-verified events, learning, director                                                                                                                                              |
 | `packages/domain`              | Exact money and the double-entry ledger, statements, consolidation (ECO-021 trace test)                                                                                                                                                                           |
 | `packages/simulation`          | Pure deterministic engine: commands, day phases, blocking decisions, idempotency, replay, hash chain                                                                                                                                                              |
