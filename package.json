@@ -9,6 +9,8 @@
   },
   "scripts": {
     "session:start": "node scripts/session-start.mjs",
+    "paypal:check": "node scripts/ops/check-paypal-sandbox.mjs",
+    "nebius:check": "node scripts/ops/check-nebius.mjs",
     "lint": "biome check .",
     "format": "biome check --write .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
