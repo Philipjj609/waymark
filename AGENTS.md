@@ -137,7 +137,7 @@ edits and mentions notify nobody automatically.
 
 ## 12. Communication (OPS-002, `docs/process/communication.md`)
 
-- Every coordination comment starts with `[TYPE] from <agent id> (human: @<h>) · re #<n> · to: <who> · blocking: yes|no · authority: D0–D4`.
+- Every coordination comment starts with `[TYPE] from <tool>@<human>/<worktree>#<session> (human: @<human>) · re #<n> · to: <who> · blocking: yes|no · authority: D0–D4`.
   Types: INFO, QUESTION, ANSWER, ACK, PROPOSAL, REVIEW-REQUEST, REVIEW, DEPENDENCY, BLOCKER, HANDOFF, DECISION-REQUEST.
   Post with `gh issue comment <n> --body-file <file>` (shell quoting breaks `--body`).
 - Ask the owner of another issue **on that issue**; use the "Agent request" form when no issue fits. Owner decisions

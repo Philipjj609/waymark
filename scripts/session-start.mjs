@@ -105,6 +105,7 @@ if (gh && sh(gh, ["auth", "status"])) {
     "coord:question",
     "coord:review-request",
     "coord:handoff",
+    "needs-review",
   ]) {
     const out = sh(gh, ["issue", "list", "--label", label, "--state", "open", "--limit", "20"]);
     if (out) console.log(`[${label}]\n${out}`);
