@@ -178,6 +178,29 @@ describe("CSRF (ADR-0011)", () => {
       env.NODE_ENV = saved.node;
     }
   });
+
+  it("on Render, defaults to the service's own https origin; APP_ORIGINS still wins", () => {
+    const env = process.env as Record<string, string | undefined>;
+    const saved = { origins: env.APP_ORIGINS, node: env.NODE_ENV, render: env.RENDER_EXTERNAL_URL };
+    try {
+      delete env.APP_ORIGINS;
+      env.NODE_ENV = "production";
+      env.RENDER_EXTERNAL_URL = "https://waymark-web.onrender.com";
+      expect(allowedOrigins()).toEqual(["https://waymark-web.onrender.com"]);
+      env.RENDER_EXTERNAL_URL = "http://waymark-web.onrender.com"; // never trust plain http
+      expect(allowedOrigins()).toEqual([]);
+      env.RENDER_EXTERNAL_URL = "not a url";
+      expect(allowedOrigins()).toEqual([]);
+      env.RENDER_EXTERNAL_URL = "https://waymark-web.onrender.com";
+      env.APP_ORIGINS = "https://waymark.example";
+      expect(allowedOrigins()).toEqual(["https://waymark.example"]);
+    } finally {
+      env.APP_ORIGINS = saved.origins;
+      env.NODE_ENV = saved.node;
+      if (saved.render === undefined) delete env.RENDER_EXTERNAL_URL;
+      else env.RENDER_EXTERNAL_URL = saved.render;
+    }
+  });
 });
 
 describe("POST /api/commands", () => {

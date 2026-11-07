@@ -1,9 +1,12 @@
 import { errorResponse } from "./http";
 
 /**
- * Allowed `Origin` values for state-changing requests (ADR-0011). `APP_ORIGINS` is a comma-separated
- * list of exact origins. Without it only development gets a default; every other environment fails
- * closed (no writes accepted) rather than guessing.
+ * Allowed `Origin` values for state-changing requests (ADR-0011), in order:
+ * 1. `APP_ORIGINS`: a comma-separated list of exact origins (set it for a custom domain);
+ * 2. on Render, the service's own https URL from `RENDER_EXTERNAL_URL`, which the platform sets,
+ *    so the deployed app needs no manual origin step;
+ * 3. development only: http://localhost:3000.
+ * Otherwise the list is empty and writes fail closed rather than guessing.
  */
 export function allowedOrigins(): readonly string[] {
   const raw = process.env.APP_ORIGINS;
@@ -13,7 +16,20 @@ export function allowedOrigins(): readonly string[] {
       .map((o) => o.trim())
       .filter((o) => o.length > 0);
   }
+  const render = renderOrigin(process.env.RENDER_EXTERNAL_URL);
+  if (render) return [render];
   return process.env.NODE_ENV === "development" ? ["http://localhost:3000"] : [];
+}
+
+/** Origin of an https Render URL, or null for anything else (never trust a non-https value). */
+function renderOrigin(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" ? u.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

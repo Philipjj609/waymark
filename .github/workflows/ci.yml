@@ -60,6 +60,16 @@ jobs:
       - run: pnpm exec vitest run packages/persistence apps/web/test/persistence.test.ts
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      # Render's preDeployCommand (#28): a fresh database migrates, a second run is a no-op.
+      - name: db:migrate on a fresh database, twice (idempotent)
+        run: |
+          psql "postgres://postgres:postgres@localhost:5432/postgres" -c "CREATE DATABASE predeploy"
+          pnpm db:migrate | tee first.txt
+          pnpm db:migrate | tee second.txt
+          grep -q "applied" first.txt
+          grep -q "up to date" second.txt
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/predeploy
 
   # Secret scanning (#11). GitHub's own secret scanning and dependency review need paid
   # GitHub Advanced Security on private repos (dependency-graph/compare returns 403 here), so we run
