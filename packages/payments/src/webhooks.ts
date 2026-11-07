@@ -26,9 +26,12 @@ import { isPayPalSandboxCertUrl, PAYPAL_SANDBOX_CERT_HOSTS } from "./paypal.js";
  *
  * Cost control (#97 review M1): every postback is a PayPal API call that shares our rate limit with
  * real Orders calls, so a forged delivery must be cheap to refuse. Before any postback: strict
- * local header checks (algorithm, cert URL, transmission time window), a per-event-id postback cap
- * and the route's REQUIRED `allowPostback()` limiter. The postback itself is one HTTP call, never
- * retried here; PayPal redelivers after our 503.
+ * local header checks (algorithm, cert URL, transmission time window), a per-event-id cap on
+ * PayPal's DEFINITE refusals, and the route's REQUIRED `allowPostback()` limiter. The postback
+ * itself is one HTTP call, never retried here; PayPal redelivers after our 503. None of these
+ * limits may refuse a genuine event forever because of OUR failures (#97 re-review N1): the time
+ * window spans PayPal's redelivery period, only definite refusals count toward the cap, an
+ * already-verified event is always a DUPLICATE, and `onRefused` lets the route alert.
  *
  * Refunds and reversals (#97 review L5): PAYMENT.CAPTURE.REFUNDED / REVERSED carry a refund-shaped
  * resource whose custom_id is often absent, so their hint is usually UNMAPPED. Refund handling is
@@ -317,10 +320,18 @@ export interface WebhookVerifierConfig {
   readonly webhookId: string;
   /** Epoch ms; injectable for tests. Default Date.now. */
   readonly now?: () => number;
-  /** Accepted distance between PAYPAL-TRANSMISSION-TIME and now(). Default 10 minutes. */
+  /**
+   * How old PAYPAL-TRANSMISSION-TIME may be. Default 4 days: PayPal redelivers for about 3 days and
+   * it is NOT yet observed whether a redelivery carries a fresh transmission time, so the window
+   * must not refuse a genuine late redelivery (#97 re-review N1a). Narrow it once Sandbox evidence
+   * shows fresh times per redelivery.
+   */
+  readonly maxTransmissionAgeMs?: number;
+  /** How far PAYPAL-TRANSMISSION-TIME may lie in the future (clock skew). Default 10 minutes. */
   readonly maxClockSkewMs?: number;
 }
 
+export const DEFAULT_WEBHOOK_MAX_AGE_MS = 4 * 24 * 60 * 60_000;
 export const DEFAULT_WEBHOOK_CLOCK_SKEW_MS = 10 * 60_000;
 
 export type NotVerifiedReason =
@@ -353,11 +364,13 @@ export type WebhookVerification =
       readonly debugId: string | null;
     };
 
-/** Every check that needs no network. null = a postback may be tried. */
-function localCheck(
+type Refusal = Extract<WebhookVerification, { status: "NOT_VERIFIED" }>;
+
+/** Header shape and configuration. null = fine. */
+function headerCheck(
   config: WebhookVerifierConfig,
   delivery: Extract<WebhookDelivery, { ok: true }>,
-): Extract<WebhookVerification, { status: "NOT_VERIFIED" }> | null {
+): Refusal | null {
   const t = delivery.transmission;
   if (!t.ok) return { status: "NOT_VERIFIED", reason: t.reason, detail: t.header, debugId: null };
   if (typeof config.webhookId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(config.webhookId))
@@ -367,10 +380,21 @@ function localCheck(
       detail: null,
       debugId: null,
     };
-  const skew = config.maxClockSkewMs ?? DEFAULT_WEBHOOK_CLOCK_SKEW_MS;
+  return null;
+}
+
+/** Transmission time within [now - maxAge, now + skew]. null = fine. */
+function timeCheck(
+  config: WebhookVerifierConfig,
+  delivery: Extract<WebhookDelivery, { ok: true }>,
+): Refusal | null {
+  const t = delivery.transmission;
+  if (!t.ok) return null; // headerCheck reports it
   const sent = Date.parse(t.headers.transmissionTime);
   const now = (config.now ?? Date.now)();
-  if (!Number.isFinite(sent) || Math.abs(now - sent) > skew)
+  const maxAge = config.maxTransmissionAgeMs ?? DEFAULT_WEBHOOK_MAX_AGE_MS;
+  const skew = config.maxClockSkewMs ?? DEFAULT_WEBHOOK_CLOCK_SKEW_MS;
+  if (!Number.isFinite(sent) || now - sent > maxAge || sent - now > skew)
     return {
       status: "NOT_VERIFIED",
       reason: "STALE_TRANSMISSION",
@@ -379,6 +403,12 @@ function localCheck(
     };
   return null;
 }
+
+/** Every check that needs no network. null = a postback may be tried. */
+const localCheck = (
+  config: WebhookVerifierConfig,
+  delivery: Extract<WebhookDelivery, { ok: true }>,
+): Refusal | null => headerCheck(config, delivery) ?? timeCheck(config, delivery);
 
 /**
  * Asks PayPal (postback) whether this delivery is authentic: at most ONE HTTP call. Bad or missing
@@ -486,7 +516,8 @@ export async function reconcileFromHint(
  * - VERIFIED: final. Later deliveries of the same event id are duplicates.
  * - NOT_VERIFIED / UNCERTAIN: a postback ran and did not verify. Not final: a later delivery of the
  *   same id may still verify (so a forged body sent first under a real event id cannot swallow the
- *   genuine delivery), up to `maxPostbacksPerEvent` postbacks per event id.
+ *   genuine delivery), until `maxFailuresPerEvent` DEFINITE refusals (FAILURE / 4xx) are recorded.
+ *   Our own failures (5xx, timeout, no token, 401/403/429, throttling) never count (#97 N1b).
  *
  * Deliveries refused locally (malformed, unsupported type, bad headers, stale time, throttled) are
  * never stored (#97 review M2): a row exists only for an event id we spent a postback on.
@@ -501,8 +532,10 @@ export interface WebhookInboxRecord {
   readonly receivedAt: string;
   readonly lastDeliveryAt: string;
   readonly deliveries: number;
-  /** Postbacks spent on this event id (capped by `maxPostbacksPerEvent`). */
+  /** Postbacks spent on this event id (information only). */
   readonly postbacks: number;
+  /** DEFINITE refusals by PayPal (FAILURE or a 4xx other than 401/403/429); capped. */
+  readonly failures: number;
   readonly verification: InboxVerification;
   /** Short reason/cause only; never a payload, header value or secret. */
   readonly verificationDetail: string | null;
@@ -599,24 +632,46 @@ export type WebhookReceipt =
       readonly respondWith: 200;
     };
 
-export const DEFAULT_MAX_POSTBACKS_PER_EVENT = 5;
+export const DEFAULT_MAX_FAILURES_PER_EVENT = 5;
+
+/** Refusals worth counting/alerting on (a wrong PAYPAL_WEBHOOK_ID shows as repeated FAILURE). */
+export interface WebhookRefusal {
+  readonly reason:
+    | "STALE_TRANSMISSION"
+    | "POSTBACK_LIMIT"
+    | "SIGNATURE_FAILURE"
+    | "REJECTED_BY_PAYPAL";
+  readonly eventId: string;
+  readonly eventType: string;
+  /** Definite refusals recorded for this event id so far (0 when nothing was stored). */
+  readonly failures: number;
+}
 
 export interface ReceiveWebhookDeps extends WebhookVerifierConfig {
   readonly inbox: WebhookInbox;
   /**
-   * REQUIRED. The route's global / per-source-IP rate limit and concurrency bound, asked right
-   * before each postback (after all local checks and dedup). `false` -> no PayPal call, no row, 503.
-   * Postbacks share PayPal's rate limit with real Orders calls, so the route MUST bound them.
+   * REQUIRED. The route's global / per-source-IP rate limit and concurrency bound, asked only
+   * right before a postback slot is reserved (after dedup, local checks and the read-only cap
+   * check). `false` -> no PayPal call, no row, 503. Postbacks share PayPal's rate limit with real
+   * Orders calls, so the route MUST bound them.
    */
   readonly allowPostback: () => boolean | Promise<boolean>;
-  /** Postbacks per webhook event id, ever. Default 5. */
-  readonly maxPostbacksPerEvent?: number;
+  /** Definite refusals (FAILURE / 4xx) per webhook event id before we stop asking. Default 5. */
+  readonly maxFailuresPerEvent?: number;
+  /**
+   * Optional alert hook (#97 re-review N1c): called for stale transmissions, the per-event cap and
+   * every definite refusal. The route keeps a small bounded counter and alerts on bursts. It must
+   * not throw (errors are swallowed) and must not block for long.
+   */
+  readonly onRefused?: (refusal: WebhookRefusal) => void;
 }
 
 /**
- * Receives one delivery: parse, local checks, dedupe on the event id, limits, verify by postback,
- * record. The returned hint (if any) is the ONLY follow-up allowed: `reconcileFromHint()`. Never
- * throws for hostile input; inbox/storage errors propagate (the route answers 5xx, PayPal redelivers).
+ * Receives one delivery. Order (#97 re-review N2/N3): parse; ignore unsupported types; header
+ * shape; dedup (a VERIFIED event id is ALWAYS a 200 DUPLICATE, whatever its age); configuration;
+ * time window; read-only failure cap; `allowPostback()`; reserve the slot; one postback; record.
+ * The returned hint (if any) is the ONLY follow-up allowed: `reconcileFromHint()`. Never throws for
+ * hostile input; inbox/storage errors propagate (the route answers 5xx, PayPal redelivers).
  */
 export async function receiveWebhook(
   input: { readonly rawBody: unknown; readonly headers: HeaderSource; readonly receivedAt: string },
@@ -626,26 +681,45 @@ export async function receiveWebhook(
   if (!delivery.ok) return { outcome: "MALFORMED", reason: delivery.reason, respondWith: 400 };
   const { event } = delivery;
   const eventId = event.eventId;
+  const refusedBy = (reason: WebhookRefusal["reason"], failures: number) => {
+    try {
+      deps.onRefused?.({ reason, eventId, eventType: event.eventType, failures });
+    } catch {
+      // alerting must never change the answer
+    }
+  };
   // Nothing below writes or calls PayPal until every local check has passed (#97 M1/M2).
   if (!event.supported) return { outcome: "IGNORED", eventId, respondWith: 200 };
-  const refused = localCheck(deps, delivery);
-  if (refused?.reason === "WEBHOOK_ID_NOT_CONFIGURED")
-    return { outcome: "DEFERRED", eventId, reason: "NOT_CONFIGURED", respondWith: 503 };
-  if (refused)
-    return { outcome: "NOT_VERIFIED", eventId, reason: refused.reason, respondWith: 400 };
+  const bad = delivery.transmission.ok ? null : headerCheck(deps, delivery);
+  if (bad) return { outcome: "NOT_VERIFIED", eventId, reason: bad.reason, respondWith: 400 };
 
-  const cap = deps.maxPostbacksPerEvent ?? DEFAULT_MAX_POSTBACKS_PER_EVENT;
   const existing = await deps.inbox.get(eventId);
   if (existing?.verification === "VERIFIED") {
     await deps.inbox.update(eventId, (c) => seen(c, input.receivedAt));
     return { outcome: "DUPLICATE", eventId, respondWith: 200 };
   }
-  if (existing && existing.postbacks >= cap)
-    return { outcome: "NOT_VERIFIED", eventId, reason: "POSTBACK_LIMIT", respondWith: 400 };
+  if (headerCheck(deps, delivery)?.reason === "WEBHOOK_ID_NOT_CONFIGURED")
+    return { outcome: "DEFERRED", eventId, reason: "NOT_CONFIGURED", respondWith: 503 };
+  const stale = timeCheck(deps, delivery);
+  if (stale) {
+    refusedBy("STALE_TRANSMISSION", existing?.failures ?? 0);
+    return { outcome: "NOT_VERIFIED", eventId, reason: stale.reason, respondWith: 400 };
+  }
+  const cap = deps.maxFailuresPerEvent ?? DEFAULT_MAX_FAILURES_PER_EVENT;
+  const overCap = () => {
+    refusedBy("POSTBACK_LIMIT", cap);
+    return {
+      outcome: "NOT_VERIFIED",
+      eventId,
+      reason: "POSTBACK_LIMIT",
+      respondWith: 400,
+    } as const;
+  };
+  if (existing && existing.failures >= cap) return overCap();
   if (!(await deps.allowPostback()))
     return { outcome: "DEFERRED", eventId, reason: "THROTTLED", respondWith: 503 };
 
-  // Reserve one postback for this event id atomically (the cap holds under concurrency).
+  // Reserve the postback (re-checking dedup and cap under the row lock).
   const ins = await deps.inbox.insertIfAbsent({
     eventId,
     eventType: event.eventType,
@@ -653,6 +727,7 @@ export async function receiveWebhook(
     lastDeliveryAt: input.receivedAt,
     deliveries: 1,
     postbacks: 1,
+    failures: 0,
     verification: "PENDING",
     verificationDetail: null,
     hint: null,
@@ -665,7 +740,7 @@ export async function receiveWebhook(
         verdict = "DUPLICATE";
         return seen(c, input.receivedAt);
       }
-      if (c.postbacks >= cap) {
+      if (c.failures >= cap) {
         verdict = "LIMIT";
         return c;
       }
@@ -673,11 +748,14 @@ export async function receiveWebhook(
       return { ...seen(c, input.receivedAt), postbacks: c.postbacks + 1 };
     });
     if (verdict === "DUPLICATE") return { outcome: "DUPLICATE", eventId, respondWith: 200 };
-    if (verdict === "LIMIT")
-      return { outcome: "NOT_VERIFIED", eventId, reason: "POSTBACK_LIMIT", respondWith: 400 };
+    if (verdict === "LIMIT") return overCap();
   }
 
   const v = await verifyWebhookSignature(deps, delivery);
+  // Only PayPal's definite refusals count toward the cap; our failures never do (N1b).
+  const definite =
+    v.status === "NOT_VERIFIED" &&
+    (v.reason === "SIGNATURE_FAILURE" || v.reason === "REJECTED_BY_PAYPAL");
   let won = false;
   const after = await deps.inbox.update(eventId, (c) => {
     if (c.verification === "VERIFIED") return c; // a concurrent delivery already verified it
@@ -694,6 +772,7 @@ export async function receiveWebhook(
     }
     return {
       ...c,
+      failures: definite ? c.failures + 1 : c.failures,
       verification: v.status,
       verificationDetail: v.status === "NOT_VERIFIED" ? v.reason : v.cause.slice(0, 64),
     };
@@ -702,8 +781,10 @@ export async function receiveWebhook(
     return won
       ? { outcome: "VERIFIED", eventId, hint: after.hint, respondWith: 200 }
       : { outcome: "DUPLICATE", eventId, respondWith: 200 };
-  if (v.status === "NOT_VERIFIED")
+  if (v.status === "NOT_VERIFIED") {
+    if (definite) refusedBy(v.reason as WebhookRefusal["reason"], after.failures);
     return { outcome: "NOT_VERIFIED", eventId, reason: v.reason, respondWith: 400 };
+  }
   return { outcome: "UNCERTAIN", eventId, respondWith: 503 };
 }
 

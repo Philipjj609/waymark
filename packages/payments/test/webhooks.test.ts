@@ -538,12 +538,14 @@ describe("verifyWebhookSignature (postback)", () => {
     });
   });
 
-  it("transmission time outside the window is refused without network (#97 M1)", async () => {
+  it("transmission time outside [now - 4 days, now + 10 min] is refused without network (#97 M1, N1a)", async () => {
     const minutes = (m: number) => new Date(NOW + m * 60_000).toISOString();
+    const DAY = 24 * 60;
     for (const [t, ok] of [
-      [minutes(-11), false],
+      [minutes(-4 * DAY - 1), false],
       [minutes(11), false],
-      [minutes(-9), true],
+      [minutes(-3 * DAY), true],
+      [minutes(-11), true],
       [minutes(9), true],
     ] as const) {
       const fake = new FakePayPal();
@@ -557,13 +559,18 @@ describe("verifyWebhookSignature (postback)", () => {
         expect(fake.requests).toHaveLength(0);
       }
     }
-    // The window is configurable.
+    // Both bounds are configurable.
     const fake = new FakePayPal();
-    const wide = await verifyWebhookSignature(
-      { ...cfg(fake), maxClockSkewMs: 60 * 60_000 },
-      delivery(RAW, fake.genuine(RAW, { "PAYPAL-TRANSMISSION-TIME": minutes(-30) })),
+    const narrow = await verifyWebhookSignature(
+      { ...cfg(fake), maxTransmissionAgeMs: 60 * 60_000 },
+      delivery(RAW, fake.genuine(RAW, { "PAYPAL-TRANSMISSION-TIME": minutes(-120) })),
     );
-    expect(wide.status).toBe("VERIFIED");
+    expect(narrow).toMatchObject({ reason: "STALE_TRANSMISSION" });
+    const ahead = await verifyWebhookSignature(
+      { ...cfg(fake), maxClockSkewMs: 60 * 60_000 },
+      delivery(RAW, fake.genuine(RAW, { "PAYPAL-TRANSMISSION-TIME": minutes(30) })),
+    );
+    expect(ahead.status).toBe("VERIFIED");
   });
 });
 
@@ -707,9 +714,15 @@ describe("receiveWebhook + inbox", () => {
     expect(fake.requests).toHaveLength(0);
   });
 
-  it("postbacks per event id are capped (default 5), then refused without network (#97 M1)", async () => {
+  it("5 definite FAILUREs per event id, then a 6th forged delivery -> POSTBACK_LIMIT, no call (#97 M1, N1b)", async () => {
     const fake = new FakePayPal();
-    const d = deps(fake);
+    let asked = 0;
+    const d = deps(fake, {
+      allowPostback: () => {
+        asked++;
+        return true;
+      },
+    });
     const outcomes = [];
     for (let i = 0; i < 8; i++)
       outcomes.push(await receiveWebhook({ rawBody: RAW, headers: FORGED, receivedAt: at(i) }, d));
@@ -719,16 +732,105 @@ describe("receiveWebhook + inbox", () => {
       "POSTBACK_LIMIT",
       "POSTBACK_LIMIT",
     ]);
-    expect(await d.inbox.get(EVENT_ID)).toMatchObject({ postbacks: 5 });
-    // The cap holds under concurrency too.
+    expect(await d.inbox.get(EVENT_ID)).toMatchObject({ failures: 5, postbacks: 5 });
+    expect(asked).toBe(5); // the limiter is not consulted for over-cap deliveries (N3)
+    // Concurrent forged deliveries are bounded by allowPostback(); afterwards the cap holds.
     const fake2 = new FakePayPal();
-    const d2 = deps(fake2, { maxPostbacksPerEvent: 2 });
+    const d2 = deps(fake2, { maxFailuresPerEvent: 2 });
     await Promise.all(
-      [0, 1, 2, 3, 4, 5].map((i) =>
+      [0, 1, 2].map((i) =>
         receiveWebhook({ rawBody: RAW, headers: FORGED, receivedAt: at(i) }, d2),
       ),
     );
-    expect(fake2.verifyCalls).toHaveLength(2);
+    const calls = fake2.verifyCalls.length;
+    const next = await receiveWebhook({ rawBody: RAW, headers: FORGED, receivedAt: at(9) }, d2);
+    expect(next).toMatchObject({ reason: "POSTBACK_LIMIT" });
+    expect(fake2.verifyCalls).toHaveLength(calls);
+  });
+
+  it("our own failures never consume the cap: 5 x 5xx/timeout/429/401 then genuine -> VERIFIED (#97 N1b)", async () => {
+    const fake = new FakePayPal();
+    fake.faults = ["500", "timeout", "429", "401", "500"];
+    const d = deps(fake);
+    for (let i = 0; i < 5; i++)
+      expect(
+        (await receiveWebhook({ rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(i) }, d))
+          .outcome,
+      ).toBe("UNCERTAIN");
+    expect(await d.inbox.get(EVENT_ID)).toMatchObject({ failures: 0, postbacks: 5 });
+    const r = await receiveWebhook(
+      { rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(6) },
+      d,
+    );
+    expect(r.outcome).toBe("VERIFIED");
+  });
+
+  it("throttled at T0, genuine redelivery (same transmission time) at T0+15 min and T0+2 days verifies (#97 N1a)", async () => {
+    for (const laterMs of [15 * 60_000, 2 * 24 * 60 * 60_000]) {
+      const fake = new FakePayPal();
+      let now = NOW;
+      let allow = false;
+      const d = deps(fake, { now: () => now, allowPostback: () => allow });
+      const h = fake.genuine(RAW); // transmission time T0 on every redelivery: the worst case
+      const r1 = await receiveWebhook({ rawBody: RAW, headers: h, receivedAt: at(0) }, d);
+      expect(r1).toMatchObject({ outcome: "DEFERRED", reason: "THROTTLED", respondWith: 503 });
+      now = NOW + laterMs;
+      allow = true;
+      const r2 = await receiveWebhook({ rawBody: RAW, headers: h, receivedAt: at(1) }, d);
+      expect(r2.outcome).toBe("VERIFIED");
+    }
+  });
+
+  it("a verified event redelivered 3 or 5 days later is a 200 DUPLICATE: no call, no limiter (#97 N2, N3)", async () => {
+    for (const days of [3, 5]) {
+      const fake = new FakePayPal();
+      let now = NOW;
+      let asked = 0;
+      const d = deps(fake, {
+        now: () => now,
+        allowPostback: () => {
+          asked++;
+          return true;
+        },
+      });
+      const h = fake.genuine(RAW);
+      expect(
+        (await receiveWebhook({ rawBody: RAW, headers: h, receivedAt: at(0) }, d)).outcome,
+      ).toBe("VERIFIED");
+      now = NOW + days * 24 * 60 * 60_000; // 5 days is outside the time window: dedup comes first
+      const r = await receiveWebhook({ rawBody: RAW, headers: h, receivedAt: at(1) }, d);
+      expect(r).toEqual({ outcome: "DUPLICATE", eventId: EVENT_ID, respondWith: 200 });
+      expect(fake.verifyCalls).toHaveLength(1);
+      expect(asked).toBe(1);
+    }
+  });
+
+  it("onRefused is called for STALE, definite FAILURE and POSTBACK_LIMIT, and its errors are swallowed (#97 N1c)", async () => {
+    const fake = new FakePayPal();
+    const seenReasons: string[] = [];
+    const d = deps(fake, {
+      maxFailuresPerEvent: 1,
+      onRefused: (r) => {
+        seenReasons.push(`${r.reason}:${r.failures}`);
+        throw new Error("alerting is down");
+      },
+    });
+    const stale = { ...FORGED, "PAYPAL-TRANSMISSION-TIME": "2026-11-01T10:00:00Z" };
+    await receiveWebhook({ rawBody: RAW, headers: stale, receivedAt: at(0) }, d);
+    const failure = await receiveWebhook({ rawBody: RAW, headers: FORGED, receivedAt: at(1) }, d);
+    expect(failure).toMatchObject({ outcome: "NOT_VERIFIED", reason: "SIGNATURE_FAILURE" });
+    await receiveWebhook({ rawBody: RAW, headers: FORGED, receivedAt: at(2) }, d);
+    expect(seenReasons).toEqual([
+      "STALE_TRANSMISSION:0",
+      "SIGNATURE_FAILURE:1",
+      "POSTBACK_LIMIT:1",
+    ]);
+    // Header-less noise and our own failures are not reported as refusals.
+    fake.faults = ["500"];
+    await receiveWebhook({ rawBody: RAW, headers: {}, receivedAt: at(3) }, d);
+    const other = JSON.stringify(captureEvent({ id: "WH-OTHER" }));
+    await receiveWebhook({ rawBody: other, headers: fake.genuine(other), receivedAt: at(4) }, d);
+    expect(seenReasons).toHaveLength(3);
   });
 
   it("allowPostback() = false -> DEFERRED 503, no network call, no row (#97 M1)", async () => {
