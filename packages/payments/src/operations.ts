@@ -109,9 +109,21 @@ const stepState = (r: PayPalResult<unknown>): StepState | null => {
       return "REFUSED"; // REJECTED, NOT_APPROVED, DECLINED, CONFLICT: definite
   }
 };
-/** A confirmed step is never downgraded by a later, racing or stale answer (#95 review M3). */
-const merge = (prev: StepState, next: StepState | null): StepState =>
-  next === null || prev === "CONFIRMED" ? prev : next;
+/**
+ * Monotonic step updates (#95 review M3, re-review N1/N2):
+ * - CONFIRMED is final;
+ * - STARTED only marks a step that had not started (it never hides what PayPal already said);
+ * - a refusal never hides money that may be in flight or captured (PENDING, CAPTURED_ELSEWHERE).
+ */
+const merge = (prev: StepState, next: StepState | null): StepState => {
+  if (next === null || prev === "CONFIRMED") return prev;
+  if (next === "STARTED") return prev === "NOT_STARTED" ? "STARTED" : prev;
+  if (next === "REFUSED" && (prev === "PENDING" || prev === "CAPTURED_ELSEWHERE")) return prev;
+  return next;
+};
+/** NOT_SENT: undo only our own STARTED marker; never touch what someone else recorded meanwhile. */
+const unsent = (now: StepState, before: StepState): StepState =>
+  now === "STARTED" && before === "NOT_STARTED" ? "NOT_STARTED" : now;
 const summary = (r: PayPalResult<unknown>): string =>
   "issue" in r && r.issue ? `${r.kind}:${r.issue}` : "cause" in r ? `${r.kind}:${r.cause}` : r.kind;
 const orderOf = (r: PayPalResult<ObservedOrder>): ObservedOrder | null =>
@@ -183,8 +195,11 @@ export class SandboxCheckout {
     const order = orderOf(r);
     await this.store.update(rec.operationId, (c) => ({
       ...c,
-      // NOT_SENT: back to where we were before this call (nothing reached PayPal).
-      createState: r.kind === "NOT_SENT" ? rec.createState : merge(c.createState, stepState(r)),
+      // NOT_SENT: nothing reached PayPal, so only our STARTED marker is undone.
+      createState:
+        r.kind === "NOT_SENT"
+          ? unsent(c.createState, rec.createState)
+          : merge(c.createState, stepState(r)),
       lastResult: summary(r),
       // An order id, once known, is never replaced.
       paypalOrderId: c.paypalOrderId ?? order?.orderId ?? null,
@@ -208,16 +223,23 @@ export class SandboxCheckout {
     const r = await this.client.captureOrder(rec.paypalOrderId, rec.captureRequestId);
     const rotate = DEFINITE_CAPTURE_REFUSALS.has(r.kind);
     const fresh = rotate ? this.newRequestId() : null;
-    await this.store.update(operationId, (c) => ({
-      ...c,
-      captureState: r.kind === "NOT_SENT" ? rec.captureState : merge(c.captureState, stepState(r)),
-      lastResult: summary(r),
-      // Rotate only if nobody else rotated or confirmed meanwhile.
-      captureRequestId:
-        fresh && c.captureRequestId === rec.captureRequestId && c.captureState !== "CONFIRMED"
-          ? fresh
-          : c.captureRequestId,
-    }));
+    await this.store.update(operationId, (c) => {
+      // A late answer for a capture id that has since been rotated is stale: it may describe an
+      // older attempt, so it must not overwrite the state of the current one (#95 re-review N2).
+      if (c.captureRequestId !== rec.captureRequestId)
+        return { ...c, lastResult: `stale:${summary(r)}` };
+      const captureState =
+        r.kind === "NOT_SENT"
+          ? unsent(c.captureState, rec.captureState)
+          : merge(c.captureState, stepState(r));
+      return {
+        ...c,
+        captureState,
+        lastResult: summary(r),
+        // Rotate only after a definite refusal that is now the recorded state.
+        captureRequestId: fresh && captureState === "REFUSED" ? fresh : c.captureRequestId,
+      };
+    });
     return r;
   }
 

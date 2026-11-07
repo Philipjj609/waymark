@@ -213,7 +213,12 @@ export class PayPalSandboxClient {
       throw new ClientConfigError("maxAttempts must be an integer between 1 and 5");
     this.#returnOrigins = new Set(
       this.#cfg.allowedReturnOrigins.map((o) => {
-        const u = new URL(o);
+        let u: URL;
+        try {
+          u = new URL(o);
+        } catch {
+          throw new ClientConfigError(`invalid return origin: ${o}`);
+        }
         if (u.protocol !== "https:" && u.hostname !== "localhost")
           throw new ClientConfigError(`return origin must be https (or localhost): ${o}`);
         return u.origin;
@@ -301,18 +306,15 @@ export class PayPalSandboxClient {
         continue;
       }
       const debugId = res.headers.get("paypal-debug-id");
-      let text = await res.text().catch(() => null);
-      if (text !== null && text.length > MAX_RESPONSE_CHARS) {
-        if (res.status < 300)
-          return {
-            kind: "UNCERTAIN",
-            cause: "MALFORMED_RESPONSE",
-            attempts: attempt,
-            httpStatus: res.status,
-            debugId,
-          };
-        text = null;
-      }
+      const text = await readCapped(res);
+      if (text === TOO_LARGE && res.status < 300)
+        return {
+          kind: "UNCERTAIN",
+          cause: "MALFORMED_RESPONSE",
+          attempts: attempt,
+          httpStatus: res.status,
+          debugId,
+        };
       if (res.status >= 500 || res.status === 429) {
         last = {
           kind: "UNCERTAIN",
@@ -326,18 +328,21 @@ export class PayPalSandboxClient {
       }
       let json: unknown = null;
       try {
-        json = text ? JSON.parse(text) : null;
+        json = typeof text === "string" && text ? JSON.parse(text) : null;
       } catch {
-        // A 2xx we cannot read may still have taken effect.
-        if (res.status < 300)
-          return {
-            kind: "UNCERTAIN",
-            cause: "MALFORMED_RESPONSE",
-            attempts: attempt,
-            httpStatus: res.status,
-            debugId,
-          };
+        json = null;
       }
+      // A response we cannot read says nothing definite: a 2xx may have taken effect, and an
+      // unreadable 4xx might have been ORDER_ALREADY_CAPTURED (#95 re-review N5). 401 stays readable
+      // as "not processed" by its status alone.
+      if (json === null && res.status !== 401 && res.status !== 204)
+        return {
+          kind: "UNCERTAIN",
+          cause: "MALFORMED_RESPONSE",
+          attempts: attempt,
+          httpStatus: res.status,
+          debugId,
+        };
       return { ok: true, status: res.status, json, debugId, afterUncertain: maybeReached };
     }
     return last;
@@ -515,11 +520,15 @@ export class PayPalSandboxClient {
     };
     if (order.captures.length === 0)
       return captureCall ? unclear : { kind: "OK", value: order, replayed, debugId };
-    if (order.captures.length > 1) return unclear;
-    const cap = order.captures[0] as ObservedOrderCapture;
+    // Declined/failed attempts can stay on the order next to a later successful one (#95 N3).
+    const live = liveCaptures(order);
+    if (live.length > 1) return unclear;
+    const cap = live[0];
+    if (!cap) {
+      const dead = order.captures.at(-1) as ObservedOrderCapture;
+      return { kind: "DECLINED", issue: dead.reason ?? dead.status, order, debugId };
+    }
     if (cap.status === "COMPLETED") return { kind: "OK", value: order, replayed, debugId };
-    if (cap.status === "DECLINED" || cap.status === "FAILED")
-      return { kind: "DECLINED", issue: cap.reason ?? cap.status, order, debugId };
     if (cap.status === "PENDING") return { kind: "PENDING", order, debugId };
     return unclear;
   }
@@ -529,7 +538,11 @@ export class PayPalSandboxClient {
     const name = typeof j.name === "string" ? j.name : null;
     const first = Array.isArray(j.details) ? j.details[0] : undefined;
     const issue = typeof first?.issue === "string" ? first.issue : null;
-    if (raw.status === 409 || issue === "PREVIOUS_REQUEST_IN_PROGRESS")
+    if (
+      raw.status === 409 ||
+      issue === "PREVIOUS_REQUEST_IN_PROGRESS" ||
+      issue === "ORDER_COMPLETION_IN_PROGRESS"
+    )
       return {
         kind: "UNCERTAIN",
         cause: "IN_PROGRESS",
@@ -557,6 +570,39 @@ export class PayPalSandboxClient {
 }
 
 // ------------------------------------------------------------------------------ parsing
+
+/** Captures that hold or may hold money: everything except DECLINED and FAILED attempts. */
+function liveCaptures(order: ObservedOrder): ObservedOrderCapture[] {
+  return order.captures.filter((c) => c.status !== "DECLINED" && c.status !== "FAILED");
+}
+
+const TOO_LARGE = Symbol("too large");
+/** Reads the body as text, stopping at MAX_RESPONSE_CHARS without buffering more (#95 re-review). */
+async function readCapped(res: Response): Promise<string | null | typeof TOO_LARGE> {
+  const declared = Number(res.headers.get("content-length") ?? "0");
+  if (declared > MAX_RESPONSE_CHARS) {
+    await res.body?.cancel().catch(() => {});
+    return TOO_LARGE;
+  }
+  if (!res.body) return res.text().catch(() => null);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let out = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out += decoder.decode(value, { stream: true });
+      if (out.length > MAX_RESPONSE_CHARS) {
+        await reader.cancel().catch(() => {});
+        return TOO_LARGE;
+      }
+    }
+    return out + decoder.decode();
+  } catch {
+    return null;
+  }
+}
 
 function originOf(u: string): string {
   try {
@@ -653,8 +699,11 @@ function parseOrderUnsafe(json: unknown): ObservedOrder | null {
  * guessed.
  */
 export function observedCaptureOf(order: ObservedOrder): ObservedCapture | null {
-  if (order.captures.length > 1) return null;
-  const cap = order.captures[0];
+  // A declined attempt next to the capture that later succeeded is not ambiguous (#95 N3);
+  // two live (completed/pending/refunded) captures are.
+  const live = liveCaptures(order);
+  if (live.length > 1) return null;
+  const cap = live[0] ?? order.captures.at(-1);
   return {
     paypalOrderId: order.orderId,
     orderStatus: order.status,

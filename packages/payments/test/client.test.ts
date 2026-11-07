@@ -6,6 +6,7 @@
 import type { ObligationId, ProviderOperationId, WorldId } from "@fle/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  ClientConfigError,
   InMemoryOperationStore,
   observedCaptureOf,
   PayPalSandboxClient,
@@ -875,7 +876,8 @@ describe("independent review of #95: uncertain outcomes, capture ids, hostile in
     const cases: Array<[unknown[], string]> = [
       [[cap("COMPLETED")], "OK"],
       [[], "UNCERTAIN"],
-      [[cap("DECLINED"), cap("PENDING")], "UNCERTAIN"],
+      [[cap("DECLINED"), cap("PENDING")], "PENDING"], // declined attempt ignored (N3)
+      [[cap("COMPLETED"), cap("COMPLETED")], "UNCERTAIN"],
       [[cap("PENDING")], "PENDING"],
       [[cap("DECLINED")], "DECLINED"],
       [[cap("REFUNDED")], "UNCERTAIN"],
@@ -1027,5 +1029,215 @@ describe("independent review of #95: uncertain outcomes, capture ids, hostile in
       });
       expect(JSON.stringify(r)).not.toMatch(/tok\d|s3cr3t|sandbox-client-id/);
     }
+  });
+});
+
+describe("re-review of #95: stale answers, declined-then-paid, in-progress, unreadable 4xx", () => {
+  const base = { worldId: "wld_demo" as WorldId, obligationId: "obl_phone_d8" as ObligationId };
+  let n = 700;
+  const nextRid = () => RID(++n);
+
+  it("N2: a late answer for a rotated capture id does not overwrite the current attempt's state", async () => {
+    const store = new InMemoryOperationStore();
+    const opId = "pop_n2" as ProviderOperationId;
+    await store.begin({
+      operationId: opId,
+      ...base,
+      expected: EUR(3000),
+      createRequestId: RID(1),
+      captureRequestId: RID(2),
+      paypalOrderId: "O1",
+      createState: "CONFIRMED",
+      captureState: "NOT_STARTED",
+      lastResult: null,
+    });
+    // Call A sends RID(2); meanwhile the id rotated to RID(3) and that attempt is PENDING.
+    let release: (r: Response) => void = () => {};
+    const pending = new Promise<Response>((r) => {
+      release = r;
+    });
+    const pp = new FakePayPal();
+    const f: typeof fetch = async (u, i = {}) =>
+      String(u).endsWith("/capture") ? pending : pp.fetch(String(u), i);
+    const co = new SandboxCheckout(
+      new PayPalSandboxClient({ clientId: CLIENT_ID, clientSecret: SECRET, fetch: f }),
+      store,
+      nextRid,
+    );
+    const a = co.capture(opId);
+    await new Promise((r) => setTimeout(r, 10));
+    await store.update(opId, (c) => ({ ...c, captureRequestId: RID(3), captureState: "PENDING" }));
+    release(
+      json(422, { name: "UNPROCESSABLE_ENTITY", details: [{ issue: "ORDER_NOT_APPROVED" }] }),
+    );
+    expect((await a).kind).toBe("NOT_APPROVED");
+    expect(await store.get(opId)).toMatchObject({
+      captureState: "PENDING",
+      captureRequestId: RID(3),
+    });
+    expect((await store.get(opId))?.lastResult).toMatch(/^stale:/);
+  });
+
+  it("N2: a refusal never hides PENDING or CAPTURED_ELSEWHERE money", async () => {
+    const store = new InMemoryOperationStore();
+    const opId = "pop_n2b" as ProviderOperationId;
+    await store.begin({
+      operationId: opId,
+      ...base,
+      expected: EUR(3000),
+      createRequestId: RID(4),
+      captureRequestId: RID(5),
+      paypalOrderId: "O1",
+      createState: "CONFIRMED",
+      captureState: "PENDING",
+      lastResult: null,
+    });
+    const pp = new FakePayPal();
+    const f: typeof fetch = async (u, i = {}) =>
+      String(u).endsWith("/capture")
+        ? json(422, { name: "UNPROCESSABLE_ENTITY", details: [{ issue: "INSTRUMENT_DECLINED" }] })
+        : pp.fetch(String(u), i);
+    const co = new SandboxCheckout(
+      new PayPalSandboxClient({ clientId: CLIENT_ID, clientSecret: SECRET, fetch: f }),
+      store,
+      nextRid,
+    );
+    expect((await co.capture(opId)).kind).toBe("DECLINED");
+    expect(await store.get(opId)).toMatchObject({
+      captureState: "PENDING",
+      captureRequestId: RID(5),
+    });
+  });
+
+  it("N1: a late NOT_SENT never undoes a concurrent CONFIRMED", async () => {
+    const store = new InMemoryOperationStore();
+    const opId = "pop_n1" as ProviderOperationId;
+    let failToken: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      failToken = r;
+    });
+    const pp = new FakePayPal();
+    const slowNoToken: typeof fetch = async (u, i = {}) => {
+      if (String(u).endsWith("/oauth2/token")) {
+        await gate;
+        return json(503, {});
+      }
+      return pp.fetch(String(u), i);
+    };
+    const slow = new SandboxCheckout(
+      new PayPalSandboxClient({
+        clientId: CLIENT_ID,
+        clientSecret: SECRET,
+        fetch: slowNoToken,
+        maxAttempts: 1,
+      }),
+      store,
+      nextRid,
+    );
+    const fast = new SandboxCheckout(
+      new PayPalSandboxClient({
+        clientId: CLIENT_ID,
+        clientSecret: SECRET,
+        fetch: pp.fetch as typeof fetch,
+      }),
+      store,
+      nextRid,
+    );
+    const a = slow.start({ operationId: opId, ...base, amount: EUR(3000) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect((await fast.start({ operationId: opId, ...base, amount: EUR(3000) })).kind).toBe("OK");
+    failToken();
+    expect((await a).kind).toBe("NOT_SENT");
+    expect((await store.get(opId))?.createState).toBe("CONFIRMED");
+  });
+
+  it("N3: a declined attempt next to a later completed capture still verifies", async () => {
+    const pp = new FakePayPal();
+    const store = new InMemoryOperationStore();
+    const client = new PayPalSandboxClient({
+      clientId: CLIENT_ID,
+      clientSecret: SECRET,
+      fetch: pp.fetch as typeof fetch,
+    });
+    const co = new SandboxCheckout(client, store, nextRid);
+    const opId = "pop_n3" as ProviderOperationId;
+    const s = await co.start({ operationId: opId, ...base, amount: EUR(3000) });
+    const id = s.kind === "OK" ? s.value.orderId : "";
+    pp.approve(id);
+    expect((await co.capture(opId)).kind).toBe("OK");
+    const o = pp.orders.get(id) as Record<string, unknown>;
+    const unit = (o.purchase_units as Array<Record<string, unknown>>)[0] as Record<string, unknown>;
+    const payments = unit.payments as { captures: unknown[] };
+    payments.captures.unshift({
+      id: "CAPDECLINED",
+      status: "DECLINED",
+      amount: { currency_code: "EUR", value: "30.00" },
+    });
+    expect(await co.verify(opId, "2026-11-07T11:00:00Z")).toMatchObject({ ok: true });
+    payments.captures.push({
+      id: "CAPSECOND",
+      status: "COMPLETED",
+      amount: { currency_code: "EUR", value: "30.00" },
+    });
+    expect(await co.verify(opId, "2026-11-07T11:00:00Z")).toMatchObject({
+      ok: false,
+      reason: "MULTIPLE_CAPTURES",
+    });
+  });
+
+  it("N4: 422 ORDER_COMPLETION_IN_PROGRESS is UNCERTAIN, not a refusal (no id rotation)", async () => {
+    const pp = new FakePayPal();
+    const f: typeof fetch = async (u, i = {}) =>
+      String(u).endsWith("/capture")
+        ? json(422, {
+            name: "UNPROCESSABLE_ENTITY",
+            details: [{ issue: "ORDER_COMPLETION_IN_PROGRESS" }],
+          })
+        : pp.fetch(String(u), i);
+    const c = new PayPalSandboxClient({ clientId: CLIENT_ID, clientSecret: SECRET, fetch: f });
+    expect(await c.captureOrder("O1", RID(30))).toMatchObject({
+      kind: "UNCERTAIN",
+      cause: "IN_PROGRESS",
+    });
+  });
+
+  it("N5: an unreadable 4xx is UNCERTAIN (it might have been ORDER_ALREADY_CAPTURED)", async () => {
+    const pp = new FakePayPal();
+    const f: typeof fetch = async (u, i = {}) =>
+      String(u).endsWith("/capture")
+        ? new Response("<html>bad gateway-ish</html>", { status: 422 })
+        : pp.fetch(String(u), i);
+    const c = new PayPalSandboxClient({ clientId: CLIENT_ID, clientSecret: SECRET, fetch: f });
+    expect(await c.captureOrder("O1", RID(31))).toMatchObject({
+      kind: "UNCERTAIN",
+      cause: "MALFORMED_RESPONSE",
+    });
+  });
+
+  it("N6: an invalid return origin is a ClientConfigError", () => {
+    expect(
+      () =>
+        new PayPalSandboxClient({
+          clientId: "a",
+          clientSecret: "b",
+          allowedReturnOrigins: ["not a url"],
+        }),
+    ).toThrow(ClientConfigError);
+  });
+
+  it("oversized responses are not buffered beyond the cap", async () => {
+    const pp = new FakePayPal();
+    const huge = new ReadableStream<Uint8Array>({
+      pull(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode("x".repeat(64 * 1024)));
+      },
+    });
+    const f: typeof fetch = async (u, i = {}) =>
+      String(u).includes("/v2/") ? new Response(huge, { status: 200 }) : pp.fetch(String(u), i);
+    const c = new PayPalSandboxClient({ clientId: CLIENT_ID, clientSecret: SECRET, fetch: f });
+    expect(await c.getOrder("O1")).toMatchObject({
+      kind: "UNCERTAIN",
+      cause: "MALFORMED_RESPONSE",
+    });
   });
 });
