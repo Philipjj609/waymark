@@ -363,7 +363,7 @@ describe("the model never writes figures (#84 review): placeholders only", () =>
       curriculumVersion: "seed.draft.v1",
       conceptIds: [ctx.concepts[0]?.conceptId],
       blocks: [
-        { type: "text", markdown: t.markdown ?? "You hold {{cash}}." },
+        { type: "text", markdown: t.markdown ?? "Think about the cash you hold." },
         {
           type: "visual",
           recipe: "CashFlowTimeline",
@@ -465,7 +465,7 @@ describe("the model never writes figures (#84 review): placeholders only", () =>
       "Acme Lending wants it back.",
       "Your landlord is waiting.",
       "Ask the lender.",
-      "A loan could help.",
+      "Pay ACME LTD.",
     ])
       expect(codes(reply(ctx, { markdown: text }), ctx), text).toContain("UNSOURCED_NAME");
   });
@@ -476,7 +476,9 @@ describe("the model never writes figures (#84 review): placeholders only", () =>
       ["You hold {{balance}}.", "UNKNOWN_PLACEHOLDER"],
       ["You hold {{ cash }}.", "UNKNOWN_PLACEHOLDER"],
       [`It is {{bill:${RENT}.colour}}.`, "UNKNOWN_PLACEHOLDER"],
-      ["You owe {{bill:obl_ghost_bank.remaining}}.", "UNKNOWN_OBLIGATION"],
+      ["You owe {{bill:obl_ghost_bank.creditor}}.", "UNKNOWN_OBLIGATION"],
+      ["You hold {{cash}}.", "FIGURE_IN_PROSE"],
+      [`Rent is {{bill:${RENT}.remaining}}.`, "FIGURE_IN_PROSE"],
       ["You hold {cash}.", "PLACEHOLDER_MALFORMED"],
       ["You hold {{cash}.", "PLACEHOLDER_MALFORMED"],
       ["You hold {{{cash}}}.", "PLACEHOLDER_MALFORMED"],
@@ -485,14 +487,14 @@ describe("the model never writes figures (#84 review): placeholders only", () =>
       expect(codes(reply(ctx, { markdown: text }), ctx), text).toContain(code);
   });
 
-  it("a valid placeholder lesson is substituted with the exact snapshot values, after validation", () => {
+  it("a valid lesson's name placeholders are substituted from the context, after validation", () => {
     const ctx = ctxOf();
     const r = validateModelOutput(
       reply(ctx, {
-        markdown: `You hold {{cash}} after paying {{bill:${PHONE}.amount}} to {{bill:${PHONE}.creditor}}. {{bill:${RENT}.creditor}} is owed {{bill:${RENT}.remaining}}, due on {{bill:${RENT}.dueDay}}; today is {{day}}.`,
-        textEquivalent: "Cash {{cash}} against {{owedTotal}} still owed.",
-        prompt: `What would you do before {{bill:${RENT}.dueDay}}?`,
-        choices: [`Pay {{bill:${RENT}.remaining}}`, "Wait"],
+        markdown: `{{bill:${PHONE}.creditor}} has been paid, and you deferred {{decision.creditor}}.`,
+        textEquivalent: "Your cash compared with what {{nextBill.creditor}} is still owed.",
+        prompt: "What would you do about {{nextBill.creditor}}?",
+        choices: ["Pay {{nextBill.creditor}}", "Wait"],
       }),
       ctx,
       { model: "m" },
@@ -501,26 +503,25 @@ describe("the model never writes figures (#84 review): placeholders only", () =>
     const [text, visual, question] = r.lesson.blocks;
     expect(text).toEqual({
       type: "text",
-      markdown:
-        "You hold 770.00 EUR (fictional) after paying 30.00 EUR (fictional) to Phone provider (fictional). Landlord (fictional) is owed 550.00 EUR (fictional), due on day 10; today is day 10.",
+      markdown: "Phone provider (fictional) has been paid, and you deferred Landlord (fictional).",
     });
     expect(visual).toMatchObject({
       data: {},
-      textEquivalent: "Cash 770.00 EUR (fictional) against 550.00 EUR (fictional) still owed.",
+      textEquivalent: "Your cash compared with what Landlord (fictional) is still owed.",
     });
     expect(question).toMatchObject({
-      prompt: "What would you do before day 10?",
-      choices: ["Pay 550.00 EUR (fictional)", "Wait"],
+      prompt: "What would you do about Landlord (fictional)?",
+      choices: ["Pay Landlord (fictional)", "Wait"],
     });
-    // The substituted values contain digits, currency codes and creditor nouns: fine, they are
-    // the server's, and the checks ran on the raw text. The result is still contract-valid.
     expect(LessonResponseSchema.safeParse(r.lesson).success).toBe(true);
     expect(r.lesson.validation.checks).toContain("placeholders-rendered");
   });
 
   it("substituted text that outgrows the contract limit is rejected, not truncated", () => {
-    const ctx = ctxOf();
-    const markdown = "You hold {{cash}}. ".repeat(60); // raw fits 1200 chars, the rendered text does not
+    const base = ctxOf();
+    const nextBill = base.nextBill && { ...base.nextBill, creditor: "x".repeat(100) };
+    const ctx = { ...base, nextBill };
+    const markdown = "Plan for {{nextBill.creditor}}. ".repeat(30); // raw fits 1200 chars, rendered does not
     expect(markdown.length).toBeLessThanOrEqual(1200);
     expect(codes(reply(ctx, { markdown }), ctx)).toEqual(["SCHEMA_INVALID"]);
   });

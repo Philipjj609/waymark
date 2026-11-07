@@ -1,6 +1,6 @@
 import type { DomainEvent, LessonResponse, WorldSnapshot } from "@fle/contracts";
 import type { LearnerState } from "@fle/learning";
-import { buildTutorContext, type TutorContext } from "./context.js";
+import { buildTutorContext, modelView, type TutorContext } from "./context.js";
 import { LESSON_DRAFT_JSON_SCHEMA } from "./draft-schema.js";
 import { FACTS_CHECK, factsBlock } from "./facts.js";
 import { fallbackLesson } from "./fallback.js";
@@ -12,22 +12,13 @@ export const DEFAULT_TIMEOUT_MS = 8000;
 const SYSTEM_PROMPT = [
   "You are a financial-education tutor inside a simulation with fictional money.",
   "Reply with ONE JSON object matching learning.lesson.v1 WITHOUT the `validation` and `provenance` fields.",
-  "The app already shows the learner the exact facts (what they decided, cash before and after, cash now, the next bill) from the world's records.",
-  "Your job is INTERPRETATION and REFLECTION: explain what the decision means for them and ask one reflection question. Do not just repeat the facts.",
-  "Use only facts from the provided context.",
-  "NEVER write a figure yourself: no digits, no number words (one, two, half, twice, fifth, percent...), no currency symbols, codes or names (EUR, euro, $...).",
-  "Write every amount, day and creditor ONLY as a placeholder, which the server fills in from the context. Each placeholder has ONE meaning in time; pick the one that matches your sentence:",
-  "{{cash}} = cash held NOW (present tense only: 'you now hold {{cash}}'; never with had/held/was/before);",
-  "{{cash.before}} = cash right BEFORE the last decision ('before paying you had {{cash.before}}');",
-  "{{cash.after}} = cash right AFTER the last decision ('paying left you with {{cash.after}}');",
-  "{{cash.change}} = size of that change, no sign ('your cash fell by {{cash.change}}': say fell or rose correctly);",
-  "{{decision.amount}}, {{decision.creditor}}, {{decision.item}}, {{decision.day}}, {{decision.dueDay}} = the decision itself (context.decision);",
-  "{{nextBill.creditor}}, {{nextBill.remaining}}, {{nextBill.dueDay}} = the next bill still owed, a FUTURE obligation (context.nextBill);",
-  "{{day}} = today; {{owedTotal}} = total still owed now;",
-  "{{bill:<obligationId>.amount|remaining|dueDay|creditor}} for any other bill in context.obligations.",
-  "Keep each figure in a sentence about ITS bill: never put one bill's amount next to another bill's creditor. A settled bill is not owed; what is owed is .remaining, not .amount.",
-  "Decision and nextBill placeholders exist only when context.decision / context.nextBill are not null.",
-  "Do not name creditors or other parties in your own words (no 'bank', 'lender', 'loan', 'landlord', 'provider', no capitalised names): use the creditor placeholders. Write in plain English, sentence case.",
+  "The app already shows the learner the exact facts from the world's records, right above your text: what they decided, cash before and after, cash now, and the next bill.",
+  "Your job is INTERPRETATION and REFLECTION: explain what the decision means and why it matters, then ask one reflection question. Do not restate the facts.",
+  "Write NO figures at all: no digits, no number words (two, half, twice, fifth, percent, tomorrow...), no amounts, no days, no currency symbols, codes or names. Refer to amounts in words like 'the bill', 'your cash', 'what you still owe'.",
+  "Name parties ONLY with these placeholders, which the server fills in: {{decision.creditor}} (the bill just paid or deferred), {{decision.item}} (what was just bought), {{nextBill.creditor}} (the next bill still owed), {{bill:<obligationId>.creditor}} (any bill in context.obligations).",
+  "Use {{decision.*}} only when context.decision is not null, {{nextBill.creditor}} only when context.nextBill is not null.",
+  "Every claim must match the context: what was paid, deferred or bought (context.decision.action), whether a bill is still owed or overdue (context.obligations), and whether cash rose, fell or stayed the same (context.decision.cashBeforeMinor vs cashAfterMinor). When you say a bill was paid or deferred, name it with its creditor placeholder.",
+  "Do not name creditors or other parties in your own words (no 'bank', 'lender', 'landlord', 'provider', no capitalised names). Write in plain English, sentence case.",
   "Blocks are typed: text, visual (recipe must be one of the allowed recipe names, data must be {}), question.",
   "sourceRefs must be chosen from context.allowedSourceRefs; conceptIds from context.concepts.",
   "Never judge the learner as wrong; describe what happened and what to consider.",
@@ -45,7 +36,7 @@ const request = (
     task: stage === "generate" ? "explain_outcome" : "repair_previous_output",
     promptVersion: PROMPT_VERSION,
     ...(errors ? { errors: errors.map((e) => ({ code: e.code, detail: e.detail })) } : {}),
-    context,
+    context: modelView(context),
   }),
 });
 

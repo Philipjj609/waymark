@@ -2,54 +2,36 @@ import { CURRENCY_MINOR_UNITS } from "@fle/contracts";
 import type { TutorContext } from "./context.js";
 
 /**
- * "The model never writes figures" (#84 review). Model-authored lesson text may carry figures and
- * creditor names ONLY as placeholders; the server resolves them from the bounded `TutorContext`
- * (built from the snapshot and engine events) AFTER validation. So a wrong amount, unit, separator,
- * day, or a figure attached to a ghost bill cannot be expressed at all.
+ * What the MODEL may write (#84, #88).
  *
- * #88: an authoritative figure can still sit in the WRONG sentence ("You held {{cash}} before
- * paying" printed cash NOW as cash BEFORE). So every placeholder also carries its MEANING: the
- * moment it describes (before the decision, right after it, now) and the obligation it belongs to.
- * `semanticIssues` checks the words around it against that meaning.
+ * #84: the model never writes a figure itself. #88 (production, 7 Nov, and the adversarial review
+ * of PR #93): even server-resolved figures go wrong in model prose. "You held {{cash}} before paying"
+ * printed cash NOW as cash BEFORE; "went from {{cash.after}} to {{cash.before}}" reversed a change;
+ * "Your phone bill is {{nextBill.remaining}}" gave one bill another bill's amount. A sentence check
+ * over open prose leaves holes both ways.
  *
- * Grammar (no whitespace inside the braces; anything else is rejected):
+ * So figures (amounts and days) appear ONLY in the deterministic facts block (facts.ts), which the
+ * server writes from the context. Model prose is figure-free interpretation and reflection. It may
+ * name parties only through these placeholders, which the server fills in after validation:
  *
- *   {{cash}} = {{cash.now}}        cash held NOW                     -> "770.00 EUR (fictional)"
- *   {{cash.before}}                cash right BEFORE the last decision
- *   {{cash.after}}                 cash right AFTER the last decision (later events may have moved it)
- *   {{cash.change}}                size of the decision's cash change (no sign; say "fell"/"rose")
- *   {{day}}                        today                              -> "day 10"
- *   {{owedTotal}}                  sum still owed on all bills, now
- *   {{decision.amount}}            paid amount / deferred bill's remaining amount / purchase cost
- *   {{decision.creditor}}          creditor of the decided bill
- *   {{decision.item}}              what was bought (purchase only)
- *   {{decision.day}}               the day of the decision
- *   {{decision.dueDay}}            due day of the decided bill
- *   {{nextBill.creditor|amount|remaining|dueDay}}  the next bill still owed (a FUTURE obligation)
- *   {{bill:<obligationId>.amount|remaining|dueDay|creditor}}  any bill in context.obligations
+ *   {{decision.creditor}}            creditor of the bill the learner just paid or deferred
+ *   {{decision.item}}                what the learner just bought
+ *   {{nextBill.creditor}}            creditor of the next bill still owed
+ *   {{bill:<obligationId>.creditor}} creditor of any bill in context.obligations
  *
- * Adding a name here is a product decision: keep the set small, give every value a deterministic
- * formatter and a meaning below.
+ * Any figure placeholder ({{cash}}, {{day}}, {{bill:x.amount}}, ...) is rejected as FIGURE_IN_PROSE.
+ * Adding a placeholder is a product decision.
  */
-export const PLACEHOLDER_NAMES = [
-  "cash",
-  "cash.now",
-  "cash.before",
-  "cash.after",
-  "cash.change",
-  "day",
-  "owedTotal",
-  "decision.amount",
+export const PROSE_PLACEHOLDERS = [
   "decision.creditor",
   "decision.item",
-  "decision.day",
-  "decision.dueDay",
   "nextBill.creditor",
-  "nextBill.amount",
-  "nextBill.remaining",
-  "nextBill.dueDay",
+  "bill:<obligationId>.creditor",
 ] as const;
-export const BILL_FIELDS = ["amount", "remaining", "dueDay", "creditor"] as const;
+
+/** Figure placeholders of earlier prompt versions: recognised so the repair message is precise. */
+const FIGURE_PLACEHOLDER =
+  /^(?:cash(?:\.(?:now|before|after|change))?|day|owedTotal|decision\.(?:amount|day|dueDay)|nextBill\.(?:amount|remaining|dueDay)|bill:[A-Za-z0-9_-]{1,128}\.(?:amount|remaining|dueDay))$/;
 
 export type PlaceholderErrorCode =
   | "PLACEHOLDER_MALFORMED"
@@ -57,42 +39,27 @@ export type PlaceholderErrorCode =
   | "UNKNOWN_OBLIGATION"
   | "NO_DECISION"
   | "NO_NEXT_BILL"
+  | "FIGURE_IN_PROSE"
   | "FIGURE_OUTSIDE_PLACEHOLDER"
   | "NUMBER_WORD"
   | "CURRENCY_OUTSIDE_PLACEHOLDER"
   | "UNSOURCED_NAME"
   | "INVISIBLE_CHARACTER"
   | "NON_LATIN_SCRIPT"
-  // #88 semantic checks: the figure is authoritative, the sentence around it is not.
-  | "TEMPORAL_MISMATCH"
-  | "OBLIGATION_MISMATCH"
-  | "SETTLED_AS_OWED"
-  | "AMOUNT_NOT_REMAINING"
+  // #88: qualitative claims that contradict the world's records.
   | "ACTION_MISMATCH"
-  | "DIRECTION_MISMATCH"
-  | "MISPLACED_FIGURE";
+  | "UNANCHORED_ACTION"
+  | "SETTLED_AS_OWED"
+  | "OVERDUE_MISMATCH"
+  | "DIRECTION_MISMATCH";
 
 export interface TextIssue {
   readonly code: PlaceholderErrorCode;
   readonly detail: string;
 }
 
-/** The moment a cash figure describes. */
-export type Moment = "NOW" | "BEFORE" | "AFTER";
-type Role = "cash" | "change" | "money" | "day" | "creditor" | "item";
-type BillField = "amount" | "remaining" | "paid" | "cost";
-
-/** What a resolved placeholder MEANS, used by the semantic checks. */
-export interface PlaceholderMeaning {
-  readonly role: Role;
-  readonly moment?: Moment;
-  /** The obligation the value belongs to, if any. */
-  readonly bill?: string;
-  readonly field?: BillField;
-}
-
 const PLACEHOLDER = /\{\{([^{}]*)\}\}/g;
-const BILL = /^bill:([A-Za-z0-9_-]{1,128})\.([A-Za-z]+)$/;
+const BILL_CREDITOR = /^bill:([A-Za-z0-9_-]{1,128})\.creditor$/;
 
 /** Integer-only money formatting with the fictional label (invariants 1 and 7). */
 export function formatFictionalAmount(amountMinor: number, currency: string): string {
@@ -105,113 +72,51 @@ export function formatFictionalAmount(amountMinor: number, currency: string): st
 
 export const formatDay = (day: number): string => `day ${day}`;
 
-type Resolved =
-  | { readonly ok: true; readonly value: string; readonly meaning: PlaceholderMeaning }
-  | ({ readonly ok: false } & TextIssue);
+/** A name placeholder: the party it names and (for creditors) the bill it belongs to. */
+interface Named {
+  readonly value: string;
+  readonly bill: string | null;
+  readonly role: "creditor" | "item";
+}
+type Resolved = ({ readonly ok: true } & Named) | ({ readonly ok: false } & TextIssue);
 
-const ok = (value: string, meaning: PlaceholderMeaning): Resolved => ({ ok: true, value, meaning });
 const bad = (code: PlaceholderErrorCode, detail: string): Resolved => ({ ok: false, code, detail });
 
 /** Resolves the inside of one `{{…}}` against the context. Pure; never throws. */
 export function resolvePlaceholder(inner: string, ctx: TutorContext): Resolved {
-  const money = (minor: number) => formatFictionalAmount(minor, ctx.currency);
   const d = ctx.decision;
-  const n = ctx.nextBill;
   switch (inner) {
-    case "cash":
-    case "cash.now":
-      return ok(money(ctx.cashMinor), { role: "cash", moment: "NOW" });
-    case "day":
-      return ok(formatDay(ctx.day), { role: "day" });
-    case "owedTotal":
-      return ok(money(ctx.obligations.reduce((s, o) => s + Math.max(0, o.remainingMinor), 0)), {
-        role: "money",
-      });
+    case "decision.creditor":
+      if (!d?.obligationId || d.creditor === null)
+        return bad(
+          "NO_DECISION",
+          "{{decision.creditor}} used, but the last decision concerned no bill",
+        );
+      return { ok: true, value: d.creditor, bill: d.obligationId, role: "creditor" };
+    case "decision.item":
+      if (!d || d.item === null)
+        return bad("NO_DECISION", "{{decision.item}} used, but the last decision bought nothing");
+      return { ok: true, value: d.item, bill: null, role: "item" };
+    case "nextBill.creditor":
+      if (!ctx.nextBill)
+        return bad("NO_NEXT_BILL", "{{nextBill.creditor}} used, but no bill is still owed");
+      return {
+        ok: true,
+        value: ctx.nextBill.creditor,
+        bill: ctx.nextBill.obligationId,
+        role: "creditor",
+      };
   }
-  if (inner.startsWith("cash.") || inner.startsWith("decision.")) {
-    if (!PLACEHOLDER_NAMES.includes(inner as (typeof PLACEHOLDER_NAMES)[number]))
-      return bad("UNKNOWN_PLACEHOLDER", `unknown placeholder {{${inner}}}`);
-    if (!d) return bad("NO_DECISION", `{{${inner}}} used but there is no recent decision`);
-    const bill = d.obligationId ?? undefined;
-    switch (inner) {
-      case "cash.before":
-        return ok(money(d.cashBeforeMinor), { role: "cash", moment: "BEFORE" });
-      case "cash.after":
-        return ok(money(d.cashAfterMinor), { role: "cash", moment: "AFTER" });
-      case "cash.change":
-        return ok(money(Math.abs(d.cashAfterMinor - d.cashBeforeMinor)), { role: "change" });
-      case "decision.day":
-        return ok(formatDay(d.day), { role: "day" });
-      case "decision.amount":
-        if (d.amountMinor === null) return bad("NO_DECISION", "the decision has no amount");
-        return ok(money(d.amountMinor), {
-          role: "money",
-          ...(bill ? { bill } : {}),
-          field:
-            d.action === "PAY_OBLIGATION"
-              ? "paid"
-              : d.action === "DEFER_OBLIGATION"
-                ? "remaining"
-                : "cost",
-        });
-      case "decision.creditor":
-        if (d.creditor === null || !bill) return bad("NO_DECISION", "the decision has no creditor");
-        return ok(d.creditor, { role: "creditor", bill });
-      case "decision.dueDay":
-        if (d.dueDay === null || !bill) return bad("NO_DECISION", "the decision has no due day");
-        return ok(formatDay(d.dueDay), { role: "day", bill });
-      default: // decision.item
-        if (d.item === null) return bad("NO_DECISION", "the decision bought nothing");
-        return ok(d.item, { role: "item" });
-    }
-  }
-  if (inner.startsWith("nextBill.")) {
-    const field = inner.slice("nextBill.".length);
-    if (!(BILL_FIELDS as readonly string[]).includes(field))
-      return bad("UNKNOWN_PLACEHOLDER", `unknown placeholder {{${inner}}}`);
-    if (!n) return bad("NO_NEXT_BILL", `{{${inner}}} used but no bill is still owed`);
-    return billValue(n, field, ctx);
-  }
-  const m = inner.match(BILL);
+  if (FIGURE_PLACEHOLDER.test(inner))
+    return bad(
+      "FIGURE_IN_PROSE",
+      `{{${inner}}} is a figure: figures are shown in the facts block, write the explanation without them`,
+    );
+  const m = inner.match(BILL_CREDITOR);
   if (!m) return bad("UNKNOWN_PLACEHOLDER", `unknown placeholder {{${inner}}}`);
-  const [, id, field] = m as unknown as [string, string, string];
-  const bill = ctx.obligations.find((o) => o.obligationId === id);
-  if (!bill) return bad("UNKNOWN_OBLIGATION", `obligation ${id} is not in the context`);
-  return billValue(bill, field, ctx);
-}
-
-function billValue(
-  b: {
-    obligationId: string;
-    creditor: string;
-    amountMinor: number;
-    remainingMinor: number;
-    dueDay: number;
-  },
-  field: string,
-  ctx: TutorContext,
-): Resolved {
-  const bill = b.obligationId;
-  switch (field) {
-    case "amount":
-      return ok(formatFictionalAmount(b.amountMinor, ctx.currency), {
-        role: "money",
-        bill,
-        field: "amount",
-      });
-    case "remaining":
-      return ok(formatFictionalAmount(b.remainingMinor, ctx.currency), {
-        role: "money",
-        bill,
-        field: "remaining",
-      });
-    case "dueDay":
-      return ok(formatDay(b.dueDay), { role: "day", bill });
-    case "creditor":
-      return ok(b.creditor, { role: "creditor", bill });
-    default:
-      return bad("UNKNOWN_PLACEHOLDER", `unknown bill field .${field}`);
-  }
+  const bill = ctx.obligations.find((o) => o.obligationId === m[1]);
+  if (!bill) return bad("UNKNOWN_OBLIGATION", `obligation ${m[1]} is not in the context`);
+  return { ok: true, value: bill.creditor, bill: bill.obligationId, role: "creditor" };
 }
 
 /** Any numeric character in any script (ASCII digits, "٣", "½", "Ⅻ", superscripts...). */
@@ -221,7 +126,6 @@ const words = (list: readonly string[], suffix = "") =>
 const NUMBER_WORDS = words(
   [
     "zero",
-    "one",
     "two",
     "three",
     "four",
@@ -254,12 +158,13 @@ const NUMBER_WORDS = words(
     "billion",
     "half",
     "halves",
+    "halve",
+    "halved",
     "dozen",
     "couple",
-    // #88: multipliers and fractions imply an amount without a numeral.
     "twice",
     "thrice",
-    "double",
+    "double(?!-?check)",
     "doubled",
     "triple",
     "tripled",
@@ -268,7 +173,12 @@ const NUMBER_WORDS = words(
     "percent",
     "percentage",
     "per\\s+cent",
-    // #88: common non-English number words ("dos días").
+    "plus",
+    "minus",
+    "fortnight",
+    "yesterday",
+    "tomorrow",
+    // Common non-English number words ("dos días").
     "dos",
     "tres",
     "cuatro",
@@ -299,6 +209,9 @@ const NUMBER_WORDS = words(
   ],
   "s?",
 );
+/** "one" is ordinary prose ("one way to see it"); it is a figure only next to a countable noun. */
+const ONE_COUNT =
+  /\bone\s+(?:more\s+|extra\s+|single\s+)?(?:days?|weeks?|months?|bills?|payments?|euros?|instal?lments?)\b/i;
 /** Ordinals imply a day or a count ("the fifth day"). "first/second" only next to a countable noun. */
 const ORDINAL =
   /\b(?:third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|thirtieth|hundredth|thousandth)\b|\b(?:first|second)\s+(?:\w+\s+)?(?:days?|weeks?|months?|bills?|payments?|instal?lments?|of\s+the\s+month)\b/i;
@@ -359,9 +272,13 @@ const CURRENCY_WORD = words([
   "satoshis?",
   "bitcoins?",
 ]);
-/** Creditors come only from {{bill:…creditor}}: generic creditor nouns are not free text. */
-const CREDITOR_WORD = /\b(?:banks?|lenders?|loans?|landlords?|providers?)\b/i;
-/** Two or more consecutive Capitalised words ("Ghost Bank", "Acme Lending Ltd") = a proper name. */
+/**
+ * Creditors come only from the creditor placeholders: generic creditor nouns are not free text.
+ * "bank balance" / "bank account" are ordinary money words, not a creditor.
+ */
+const CREDITOR_WORD =
+  /\b(?:banks?(?!\s+(?:balance|account)s?\b)|lenders?|landlords?|providers?)\b/i;
+/** Two or more consecutive Capitalised words ("Ghost Bank", "Acme Lending") = a proper name. */
 const PROPER_NAME = /\b[A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+)+\b/;
 /** All-caps names ("ACME LTD") and company suffixes ("Acme Ltd"). */
 const CAPS_NAME = /\b[A-Z]{2,}(?:[ \t]+[A-Z]{2,})+\b/;
@@ -375,16 +292,12 @@ export function figureIssues(text: string): TextIssue[] {
   if (digit)
     out.push({
       code: "FIGURE_OUTSIDE_PLACEHOLDER",
-      detail: `numeral "${digit}" outside a placeholder`,
+      detail: `numeral "${digit}": figures are shown in the facts block, not in the explanation`,
     });
-  const word = hit(NUMBER_WORDS) ?? hit(ORDINAL) ?? hit(PERCENT_SIGN);
-  if (word) out.push({ code: "NUMBER_WORD", detail: `number word "${word}"` });
+  const word = hit(NUMBER_WORDS) ?? hit(ONE_COUNT) ?? hit(ORDINAL) ?? hit(PERCENT_SIGN);
+  if (word) out.push({ code: "NUMBER_WORD", detail: `number or time word "${word}"` });
   const cur = hit(CURRENCY_SYMBOL) ?? hit(CURRENCY_WORD);
-  if (cur)
-    out.push({
-      code: "CURRENCY_OUTSIDE_PLACEHOLDER",
-      detail: `currency "${cur}" outside a placeholder`,
-    });
+  if (cur) out.push({ code: "CURRENCY_OUTSIDE_PLACEHOLDER", detail: `currency "${cur}"` });
   return out;
 }
 
@@ -395,7 +308,7 @@ export function nameIssues(text: string): TextIssue[] {
   if (noun)
     out.push({
       code: "UNSOURCED_NAME",
-      detail: `creditor word "${noun}" outside {{bill:…creditor}}`,
+      detail: `creditor word "${noun}": use a creditor placeholder`,
     });
   const name =
     text.match(PROPER_NAME)?.[0] ?? text.match(CAPS_NAME)?.[0] ?? text.match(COMPANY_SUFFIX)?.[0];
@@ -405,9 +318,9 @@ export function nameIssues(text: string): TextIssue[] {
 }
 
 /**
- * #88 evasions of the word lists: zero-width and other format characters ("sev<U+200B>en"),
- * combining marks, and look-alike letters from other scripts ("ѕeven" with a Cyrillic ѕ).
- * Model text must be plain Latin-script prose; anything else is rejected, not cleaned up.
+ * Evasions of the word lists (#88, from the #86 re-review): zero-width and other format characters
+ * ("sev<U+200B>en"), combining marks, and look-alike letters from other scripts ("ѕeven" with a
+ * Cyrillic ѕ). Model text must be plain Latin-script prose; anything else is rejected.
  */
 export function scriptIssues(text: string): TextIssue[] {
   const out: TextIssue[] = [];
@@ -422,7 +335,7 @@ export function scriptIssues(text: string): TextIssue[] {
   return out;
 }
 
-/** NFKC plus combining marks removed, so the word lists see what a reader sees. */
+/** NFKC, format characters and combining marks removed, so the word lists see what a reader sees. */
 const normalise = (s: string) =>
   s
     .normalize("NFKC")
@@ -432,91 +345,81 @@ const normalise = (s: string) =>
     .normalize("NFC");
 
 /* ---------------------------------------------------------------------------------------------
- * #88 semantic checks. Text is split into clauses; inside a clause, each cue word is attached to
- * the NEAREST placeholder it can describe, and must agree with that placeholder's meaning.
- * Heuristic by design: a false positive costs one repair or a safe fallback; a false negative
- * shows a learner a wrong sentence. So the cue lists err on the strict side.
+ * #88: figure-free prose can still CLAIM something false ("You did not pay {{decision.creditor}}",
+ * "Your cash rose" after a payment). These checks compare such claims with the records. They are
+ * a second line: the facts block above the prose always states the truth.
  * ------------------------------------------------------------------------------------------- */
 
-interface Slot {
+interface Slot extends Named {
   readonly start: number;
   readonly end: number;
   readonly inner: string;
-  readonly meaning: PlaceholderMeaning;
 }
 interface Cue {
   readonly start: number;
   readonly end: number;
   readonly text: string;
+  readonly negated: boolean;
 }
 
-/** Clause boundaries: sentence ends, semicolons, colons, dashes, and conjunctions that start a new clause. */
+/** Clause boundaries: sentence ends, semicolons, colons, dashes, line breaks, contrast words. */
 const CLAUSE_SPLIT =
-  /[.!?;:]+(?:\s+|$)|\n+|\s[–—-]\s|,?\s+(?=(?:but|while|whereas|although|though|yet|so|which|because|since then)\b)|,\s+(?=(?:and|then)\b)|\s+and\s+(?=(?:now|then|today|later|still|currently|afterwards|you|your|it|this|that|the)\b|§)/gi;
+  /[.!?;:]+(?:\s+|$)|\n+|\s[–—-]\s|,?\s+(?=(?:but|while|whereas|although|though|yet|so|because)\b)|,\s+(?=(?:and|then)\b)|\s+and\s+(?=(?:now|then|you|your|it|this|that|the)\b|§)/gi;
 
 const re = (src: string) => new RegExp(src, "gi");
 const CUES = {
-  /** Points at the state BEFORE the decision. */
-  beforeDecision: re(
-    "\\b(?:before|prior\\s+to)\\s+(?:you\\s+|your\\s+|the\\s+|this\\s+|that\\s+|making\\s+)?(?:paid|paying|pay|payment|bought|buying|buy|purchas\\w*|deferr?\\w*|decid\\w*|decision|chose|choosing|choice|it|that|then)\\b|\\bpreviously\\b|\\bearlier\\b|\\boriginally\\b|\\bbeforehand\\b|\\bat\\s+first\\b|\\bat\\s+the\\s+start\\b|\\bstarted\\s+(?:with|out)\\b|\\bused\\s+to\\b|\\bto\\s+begin\\s+with\\b",
+  paid: re(
+    "\\b(?:pay|paid(?:\\s+off)?|settled|cleared|covered|handled|dealt\\s+with|took\\s+care\\s+of|taken\\s+care\\s+of)\\b",
   ),
-  /** Past-tense state verbs: wrong for a NOW figure ("You held {{cash}}"). */
-  pastState: re("\\b(?:had|held|was|were|owned|kept)\\b"),
-  /** Present: wrong for a BEFORE figure. */
-  now: re(
-    "\\b(?:now|currently|today|at\\s+the\\s+moment|right\\s+now|at\\s+present|still|so\\s+far)\\b|\\b(?:you|you've)\\s+(?:have|hold|own|keep)\\b|\\bleft\\s+over\\b",
+  deferred: re(
+    "\\b(?:defer|deferred|postponed|delayed|put\\s+off|pushed\\s+back|skipped|held\\s+off\\s+on|left\\s+unpaid)\\b",
   ),
-  /** Points at the moment right AFTER the decision. */
-  after: re(
-    "\\bafter(?:wards)?\\b|\\b(?:left|leaves|leaving)\\s+you\\b|\\b(?:went|go|goes)\\s+(?:down\\s+|up\\s+)?to\\b|\\b(?:dropped|fell|rose|climbed|grew|shrank)\\s+to\\b|\\bdown\\s+to\\b|\\bas\\s+a\\s+result\\b|\\bended\\s+(?:up\\s+)?with\\b",
-  ),
-  /** The clause claims money is owed. */
+  bought: re("\\b(?:bought|purchased|acquired|buy)\\b"),
   owed: re(
-    "\\b(?:owe[sd]?|owing|outstanding|unpaid|overdue|still\\s+due|left\\s+to\\s+pay|yet\\s+to\\s+(?:be\\s+)?pa(?:y|id)|to\\s+be\\s+paid|remaining)\\b",
+    "\\b(?:owe[sd]?|owing|outstanding|unpaid|still\\s+due|left\\s+to\\s+pay|(?:need|needs|have|has|must)\\s+to\\s+pay|must\\s+pay|still\\s+(?:to\\s+)?pay)\\b",
   ),
-  paid: re("\\b(?:paid|settled|cleared|paid\\s+off)\\b"),
-  deferred: re("\\b(?:deferred|postponed|delayed|put\\s+off|skipped|held\\s+off\\s+on)\\b"),
-  bought: re("\\b(?:bought|purchased|acquired)\\b"),
-  up: re("\\b(?:rose|risen|increased|grew|grown|gained|went\\s+up|up\\s+by|climbed)\\b"),
+  overdue: re("\\b(?:overdue|late|past\\s+due|missed)\\b"),
+  /** Direction words count only in a clause about the learner's cash. */
+  cashSubject: re("\\b(?:cash|balance|money|funds|savings|wallet)\\b"),
+  up: re(
+    "\\b(?:rose|risen|rise|increased?|grew|grown|grow|gained|(?:went|go|goes)\\s+up|boosted|improved|more\\s+than\\s+before)\\b",
+  ),
   down: re(
-    "\\b(?:fell|fallen|dropped|decreased|shrank|went\\s+down|down\\s+by|lost|spent|reduced|cost\\s+you)\\b",
+    "\\b(?:fell|fallen|fall|dropped|drop|decreased?|shrank|shrink|(?:went|go|goes)\\s+down|lowered|reduced|less\\s+than\\s+before)\\b",
   ),
-  /** Words that make a cash figure about YOUR cash (otherwise "Your rent is {{cash}}"). */
-  cashSubject: re(
-    "\\b(?:cash|money|balance|funds|savings|wallet|hold|holds|held|have|has|had|kept|keep|left|leaves|leaving|remain(?:s|ed)?|went|go|goes|dropped|fell|rose|grew|ended|started|changed|from|to)\\b",
+  same: re(
+    "\\b(?:unchanged|stayed\\s+the\\s+same|the\\s+same\\s+as\\s+before|did\\s+not\\s+change|didn't\\s+change)\\b",
   ),
 } as const;
-const NEGATION = /\b(?:not|never|n't|no|didn't|haven't|hasn't|wasn't|yet\s+to)\s+(?:\w+\s+){0,2}$/i;
+const NEGATION =
+  /\b(?:not|never|no\s+longer|no|nothing|didn't|haven't|hasn't|wasn't|isn't|don't|doesn't|won't|yet\s+to|from\s+(?:becoming|going|being)|avoid\w*|prevent\w*)\s+(?:\w+\s+){0,3}$/i;
+/** Hypotheticals and questions about alternatives assert nothing about the records. */
+const HYPOTHETICAL =
+  /\b(?:if|would|could|should|might|whether|suppose|imagine|instead|alternatively)\b/i;
 
-function cuesIn(unit: string, base: number, pattern: RegExp): Cue[] {
+function cuesIn(text: string, start: number, unit: string, pattern: RegExp): Cue[] {
   const out: Cue[] = [];
-  for (const m of unit.matchAll(new RegExp(pattern.source, pattern.flags)))
+  for (const m of unit.matchAll(new RegExp(pattern.source, pattern.flags))) {
+    const s = start + (m.index ?? 0);
     out.push({
-      start: base + (m.index ?? 0),
-      end: base + (m.index ?? 0) + m[0].length,
+      start: s,
+      end: s + m[0].length,
       text: m[0],
+      negated: NEGATION.test(text.slice(Math.max(0, s - 32), s)),
     });
+  }
   return out;
 }
 
 const gap = (a: { start: number; end: number }, b: { start: number; end: number }) =>
   a.end <= b.start ? b.start - a.end : a.start >= b.end ? a.start - b.end : 0;
 
-/** Nearest slot to the cue among those passing `filter`; ties go to the slot BEFORE the cue. */
-function nearest(cue: Cue, slots: readonly Slot[], filter: (s: Slot) => boolean): Slot | undefined {
+function nearest(cue: Cue, slots: readonly Slot[]): Slot | undefined {
   let best: Slot | undefined;
-  for (const s of slots.filter(filter)) {
-    if (!best) best = s;
-    else {
-      const d = gap(cue, s);
-      const bd = gap(cue, best);
-      if (d < bd || (d === bd && s.end <= cue.start)) best = s;
-    }
-  }
+  for (const s of slots) if (!best || gap(cue, s) < gap(cue, best)) best = s;
   return best;
 }
 
-/** Clauses of `text` as [start offset, clause] pairs. */
 function clauses(text: string): Array<[number, string]> {
   const out: Array<[number, string]> = [];
   let last = 0;
@@ -529,11 +432,8 @@ function clauses(text: string): Array<[number, string]> {
   return out;
 }
 
-/**
- * #88: checks that each placeholder is used in a sentence that matches its meaning. Call only on
- * text whose placeholders all resolve (unresolvable ones are reported by `checkModelText`).
- */
-export function semanticIssues(text: string, ctx: TutorContext): TextIssue[] {
+/** Claims in figure-free prose checked against the records. Text must already pass the other checks. */
+export function claimIssues(text: string, ctx: TutorContext): TextIssue[] {
   const out: TextIssue[] = [];
   const issue = (code: PlaceholderErrorCode, detail: string) => {
     if (!out.some((o) => o.code === code && o.detail === detail)) out.push({ code, detail });
@@ -543,138 +443,119 @@ export function semanticIssues(text: string, ctx: TutorContext): TextIssue[] {
     const r = resolvePlaceholder(m[1] as string, ctx);
     if (r.ok)
       slotsAll.push({
+        ...r,
         start: m.index ?? 0,
         end: (m.index ?? 0) + m[0].length,
         inner: m[1] as string,
-        meaning: r.meaning,
       });
   }
-  const billOf = (id: string | undefined) => ctx.obligations.find((o) => o.obligationId === id);
-  const decisionBill = ctx.decision?.obligationId ?? null;
-  // Placeholders are masked with "§" (same length, not a word character), so "{{cash.before}}" is
-  // neither the cue word "before" nor a sentence end, and offsets still line up with `slotsAll`.
-  const blank = text.replace(PLACEHOLDER, (m) => "§".repeat(m.length));
+  const billOf = (id: string | null) => ctx.obligations.find((o) => o.obligationId === id);
+  const d = ctx.decision;
+  // Placeholders masked with "§" (same length, not a word character): offsets stay aligned.
+  const masked = text.replace(PLACEHOLDER, (m) => "§".repeat(m.length));
 
-  for (const [base, unit] of clauses(blank)) {
+  for (const [base, unit] of clauses(masked)) {
+    if (HYPOTHETICAL.test(unit) || /\?\s*$/.test(text.slice(base, base + unit.length + 1)))
+      continue;
     const slots = slotsAll.filter((s) => s.start >= base && s.end <= base + unit.length);
-    if (slots.length === 0) continue;
-    const cues = (p: RegExp) =>
-      cuesIn(unit, base, p).filter(
-        (c) => !NEGATION.test(blank.slice(Math.max(0, c.start - 24), c.start)),
-      );
-    const quote = (c: Cue, s: Slot) => `"${c.text.trim()}" next to {{${s.inner}}}`;
-    const isCash = (s: Slot) => s.meaning.role === "cash";
-    const isMoney = (s: Slot) => s.meaning.role === "money" || s.meaning.role === "cash";
-    const hasBill = (s: Slot) => s.meaning.bill !== undefined;
+    const cues = (p: RegExp) => cuesIn(masked, base, unit, p);
+    const what = (c: Cue, s?: Slot) =>
+      `"${c.negated ? "not … " : ""}${c.text.trim()}"${s ? ` about {{${s.inner}}}` : ""}`;
 
-    // 1. Temporal: the moment of a cash figure must match the words around it.
-    const changedSince = ctx.decision !== null && ctx.decision.cashAfterMinor !== ctx.cashMinor;
-    const temporal = (p: RegExp, wrong: (m: Moment) => boolean, what: string) => {
+    // 1. Paid / deferred / bought: must name the bill, and must match what happened to it.
+    const action = (p: RegExp, truth: (s: Slot) => boolean | undefined, claim: string) => {
       for (const c of cues(p)) {
-        const s = nearest(c, slots, isCash);
-        if (s?.meaning.moment && wrong(s.meaning.moment))
-          issue("TEMPORAL_MISMATCH", `${quote(c, s)}: ${what}`);
-      }
-    };
-    temporal(
-      CUES.beforeDecision,
-      (m) => m !== "BEFORE",
-      "the state before the decision needs {{cash.before}}",
-    );
-    temporal(
-      CUES.pastState,
-      (m) => m === "NOW",
-      "past-tense wording needs {{cash.before}} or {{cash.after}}",
-    );
-    temporal(
-      CUES.now,
-      (m) => m === "BEFORE" || (m === "AFTER" && changedSince),
-      "present-tense wording needs {{cash}}",
-    );
-    temporal(
-      CUES.after,
-      (m) => m === "BEFORE" || (m === "NOW" && changedSince),
-      "the state after the decision needs {{cash.after}}",
-    );
-
-    // 2. A cash figure must be about the learner's cash ("Your rent is {{cash}}" is false).
-    if (cues(CUES.cashSubject).length === 0)
-      for (const s of slots.filter(isCash))
-        issue("MISPLACED_FIGURE", `{{${s.inner}}} is cash, but the clause is not about your cash`);
-
-    // 3. Obligation identity: a bill's figure must not be attributed to another bill's creditor.
-    const creditors = slots.filter((s) => s.meaning.role === "creditor");
-    for (const s of slots.filter((x) => hasBill(x) && x.meaning.role !== "creditor")) {
-      const c = nearest({ start: s.start, end: s.end, text: "" }, creditors, () => true);
-      if (c && c.meaning.bill !== s.meaning.bill)
-        issue(
-          "OBLIGATION_MISMATCH",
-          `{{${s.inner}}} belongs to ${s.meaning.bill}, but sits with {{${c.inner}}} (${c.meaning.bill})`,
-        );
-    }
-
-    // 4. Owed wording must use a figure that is still owed.
-    for (const c of cues(CUES.owed)) {
-      const s = nearest(c, slots, isMoney);
-      if (!s) continue;
-      if (s.meaning.role === "cash") {
-        issue("MISPLACED_FIGURE", `${quote(c, s)}: cash is not an amount owed`);
-        continue;
-      }
-      const b = billOf(s.meaning.bill);
-      if (!b) continue;
-      if (b.remainingMinor <= 0)
-        issue("SETTLED_AS_OWED", `${quote(c, s)}: ${b.obligationId} is settled, nothing is owed`);
-      else if (
-        (s.meaning.field === "amount" || s.meaning.field === "paid") &&
-        b.remainingMinor !== b.amountMinor
-      )
-        issue("AMOUNT_NOT_REMAINING", `${quote(c, s)}: what is owed is .remaining, not .amount`);
-    }
-
-    // 5. Action words must match what happened to that bill.
-    const action = (p: RegExp, claim: string, wrong: (s: Slot) => boolean) => {
-      for (const c of cues(p)) {
-        const s = nearest(c, slots, (x) => hasBill(x) || x.meaning.role === "item");
-        if (s && wrong(s)) issue("ACTION_MISMATCH", `${quote(c, s)}: ${claim}`);
+        // Base forms ("pay") claim nothing ("you must pay X"); only negated ones do ("did not pay X").
+        if (!c.negated && /^(?:pay|defer|buy)$/i.test(c.text)) continue;
+        const s = nearest(c, slots);
+        if (!s) {
+          // Only unambiguous verbs need an anchor ("this lesson covered" is not a payment claim).
+          if (!c.negated && /^(?:paid|settled|deferred|postponed|bought|purchased)\b/i.test(c.text))
+            issue("UNANCHORED_ACTION", `${what(c)}: name the bill with a creditor placeholder`);
+          continue;
+        }
+        const t = truth(s);
+        if (t !== undefined && t === c.negated)
+          issue(
+            "ACTION_MISMATCH",
+            `${what(c, s)}: the records say it was ${t ? "" : "not "}${claim}`,
+          );
       }
     };
     const isDecided = (s: Slot) =>
-      s.meaning.role === "item" || (decisionBill !== null && s.meaning.bill === decisionBill);
-    const act = ctx.decision?.action;
-    action(CUES.paid, "that bill was not paid", (s) => {
-      const b = billOf(s.meaning.bill);
-      return (
-        (isDecided(s) && act !== "PAY_OBLIGATION") ||
-        (b !== undefined && b.remainingMinor === b.amountMinor)
-      );
-    });
-    action(CUES.deferred, "that bill was not deferred", (s) => {
-      const b = billOf(s.meaning.bill);
-      return (
-        (isDecided(s) && act !== "DEFER_OBLIGATION") || (b !== undefined && b.remainingMinor <= 0)
-      );
-    });
-    action(CUES.bought, "nothing was bought", (s) => !(isDecided(s) && act === "PURCHASE_ASSET"));
+      s.role === "item" || (d?.obligationId != null && s.bill === d.obligationId);
+    action(
+      CUES.paid,
+      (s) => {
+        if (s.role === "item") return undefined;
+        if (isDecided(s)) return d?.action === "PAY_OBLIGATION";
+        const b = billOf(s.bill);
+        return b ? b.remainingMinor < b.amountMinor : undefined;
+      },
+      "paid",
+    );
+    action(
+      CUES.deferred,
+      (s) => {
+        if (s.role === "item") return undefined;
+        if (isDecided(s)) return d?.action === "DEFER_OBLIGATION";
+        return billOf(s.bill)?.state === "OVERDUE" ? undefined : false;
+      },
+      "deferred",
+    );
+    action(CUES.bought, (s) => isDecided(s) && d?.action === "PURCHASE_ASSET", "bought");
 
-    // 6. Direction of the cash change.
-    const delta = ctx.decision ? ctx.decision.cashAfterMinor - ctx.decision.cashBeforeMinor : 0;
-    const direction = (p: RegExp, wrong: boolean, what: string) => {
-      for (const c of cues(p)) {
-        const s = nearest(c, slots, (x) => x.meaning.role === "change");
-        if (s && wrong) issue("DIRECTION_MISMATCH", `${quote(c, s)}: ${what}`);
-      }
-    };
-    direction(CUES.up, delta <= 0, "your cash did not rise");
-    direction(CUES.down, delta >= 0, "your cash did not fall");
+    // 2. Owed / overdue must match the bill's state.
+    for (const c of cues(CUES.owed)) {
+      const s = nearest(
+        c,
+        slots.filter((x) => x.role === "creditor"),
+      );
+      const b = s && billOf(s.bill);
+      if (!s || !b) continue;
+      const owed = b.remainingMinor > 0;
+      if (owed === c.negated)
+        issue(
+          owed ? "ACTION_MISMATCH" : "SETTLED_AS_OWED",
+          `${what(c, s)}: the records say ${owed ? "it is still owed" : "it is settled"}`,
+        );
+    }
+    for (const c of cues(CUES.overdue)) {
+      const s = nearest(
+        c,
+        slots.filter((x) => x.role === "creditor"),
+      );
+      const b = s && billOf(s.bill);
+      if (!s || !b) continue;
+      const overdue = b.state === "OVERDUE" || (b.remainingMinor > 0 && b.dueDay < ctx.day);
+      if (overdue === c.negated)
+        issue(
+          "OVERDUE_MISMATCH",
+          `${what(c, s)}: the records say it is ${overdue ? "" : "not "}overdue`,
+        );
+    }
+
+    // 3. Direction of the decision's cash change, in clauses about the learner's cash.
+    if (d && cues(CUES.cashSubject).length > 0) {
+      const delta = d.cashAfterMinor - d.cashBeforeMinor;
+      const actual = delta > 0 ? "rose" : delta < 0 ? "fell" : "stayed the same";
+      const check = (p: RegExp, claimed: "rose" | "fell" | "stayed the same") => {
+        for (const c of cues(p))
+          if ((claimed === actual) === c.negated)
+            issue("DIRECTION_MISMATCH", `${what(c)}: your cash ${actual} with the last decision`);
+      };
+      check(CUES.up, "rose");
+      check(CUES.down, "fell");
+      check(CUES.same, "stayed the same");
+    }
   }
   return out;
 }
 
 /**
- * Checks ONE raw model-authored string: every placeholder must resolve, the text left once
- * placeholders are removed must hold no figure, number word, currency, stray brace, name or
- * look-alike character, and (#88) every placeholder must sit in a sentence that matches its meaning.
+ * Checks ONE raw model-authored string: only name placeholders, all resolvable; no figure, number
+ * word, currency, stray brace, unsourced name or look-alike character in the rest; and (#88) no
+ * claim that contradicts the records.
  */
 export function checkModelText(text: string, ctx: TutorContext): TextIssue[] {
   const out: TextIssue[] = [];
@@ -691,7 +572,7 @@ export function checkModelText(text: string, ctx: TutorContext): TextIssue[] {
     });
   const plain = normalise(residual);
   out.push(...scriptIssues(residual), ...figureIssues(plain), ...nameIssues(plain));
-  if (out.length === 0) out.push(...semanticIssues(text, ctx));
+  if (out.length === 0) out.push(...claimIssues(text, ctx));
   return out;
 }
 

@@ -8,9 +8,10 @@ import {
 } from "@fle/learning";
 
 /**
- * The ONLY thing a model ever sees (invariant 3, ADR-0007). Built field by field from
- * an allowlist: no world/actor/learner/session ids, no cookies, no free text typed by the
- * learner, no state hash. Adding a field here is a privacy decision; see context.test.ts.
+ * What the tutor knows (invariant 3, ADR-0007). Built field by field from an allowlist: no
+ * world/actor/learner/session ids, no cookies, no state hash. Adding a field here is a privacy
+ * decision; see context.test.ts. Labels the LEARNER typed (asset names) are kept here for the
+ * server's own text but are redacted in `modelView` before anything reaches a model (#88 review).
  */
 export interface TutorContext {
   readonly day: number;
@@ -39,8 +40,10 @@ export interface TutorContext {
     readonly amountMinor: number | null;
     /** Creditor label of the decided bill (from the snapshot), or null. */
     readonly creditor: string | null;
-    /** Label of the bought asset (PURCHASE_ASSET only), from the event payload. */
+    /** Label of the bought asset (PURCHASE_ASSET only), from the event payload. Learner-typed. */
     readonly item: string | null;
+    /** Settlement realm of a payment: PAYPAL_SANDBOX payments are labelled as such (invariant 7). */
+    readonly realm: "FICTIONAL" | "PAYPAL_SANDBOX" | null;
     readonly dueDay: number | null;
     readonly cashBeforeMinor: number;
     readonly cashAfterMinor: number;
@@ -139,6 +142,10 @@ export function buildTutorContext(input: {
       amountMinor,
       creditor: bill?.creditor ?? null,
       item: typeof choice.payload.label === "string" ? choice.payload.label : null,
+      realm:
+        choice.payload.realm === "PAYPAL_SANDBOX" || choice.payload.realm === "FICTIONAL"
+          ? choice.payload.realm
+          : null,
       dueDay: bill?.dueDay ?? null,
       cashBeforeMinor,
       cashAfterMinor: cashBeforeMinor + cashEffect(choice),
@@ -181,5 +188,23 @@ export function buildTutorContext(input: {
       learnerStatus: conceptView(learnerState, c.conceptId as ConceptId).status,
     })),
     allowedSourceRefs: recent.map((e) => e.eventId as string),
+  };
+}
+
+const LEARNER_NAMED = "(named by the learner)";
+
+/**
+ * The context as a MODEL sees it: learner-typed labels are replaced, so a learner cannot smuggle
+ * instructions into the prompt through an asset name. The model refers to the bought item only
+ * as {{decision.item}}; the server fills in the real label after validation.
+ */
+export function modelView(ctx: TutorContext): TutorContext {
+  return {
+    ...ctx,
+    assets: ctx.assets.map((a) => ({ ...a, label: LEARNER_NAMED })),
+    decision: ctx.decision && {
+      ...ctx.decision,
+      item: ctx.decision.item === null ? null : LEARNER_NAMED,
+    },
   };
 }

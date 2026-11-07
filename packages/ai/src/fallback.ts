@@ -35,10 +35,15 @@ const GENERIC = {
   prompt: "What did your last choice change in your cash and your upcoming bills?",
 };
 
+const NO_BILLS_PROMPT =
+  "Every bill is settled for now. What would you set aside before the next bills arrive?";
+
 export function fallbackLesson(ctx: TutorContext, reason: string): LessonResponse {
   const concept = ctx.concepts[0];
   const conceptId = (concept?.conceptId ?? SEED_CONCEPTS[0]?.conceptId) as ConceptId;
-  const text = FALLBACK_TEXT[conceptId] ?? GENERIC;
+  const base = FALLBACK_TEXT[conceptId] ?? GENERIC;
+  // With nothing left to pay, a prompt about "the next bill" would describe a world that is not there.
+  const text = ctx.nextBill ? base : { ...base, prompt: NO_BILLS_PROMPT };
   return LessonResponseSchema.parse({
     schemaVersion: "learning.lesson.v1",
     lessonId: `les_fallback_${conceptId}_d${ctx.day}`,
@@ -50,7 +55,10 @@ export function fallbackLesson(ctx: TutorContext, reason: string): LessonRespons
       { type: "text", markdown: text.body },
       { type: "question", prompt: text.prompt, rubricRef: `rubric:${conceptId}:reflection` },
     ],
-    sourceRefs: [...ctx.allowedSourceRefs.slice(-1), `fallback:${conceptId}`],
+    sourceRefs: [
+      ctx.decision?.sourceRef ?? ctx.allowedSourceRefs.at(-1),
+      `fallback:${conceptId}`,
+    ].filter((r): r is string => typeof r === "string"),
     validation: { status: "FALLBACK_REVIEWED", checks: [FACTS_CHECK, `fallback-reason:${reason}`] },
     provenance: { generator: "REVIEWED_STATIC", model: null, promptVersion: null },
   });

@@ -20,7 +20,13 @@ export function factsText(ctx: TutorContext): string {
     const on = `On ${formatDay(d.day)}`;
     switch (d.action) {
       case "PAY_OBLIGATION":
-        lines.push(`${on} you paid ${d.creditor ?? "a bill"}${amount ? ` ${amount}` : ""}.`);
+        lines.push(
+          `${on} you paid ${d.creditor ?? "a bill"}${amount ? ` ${amount}` : ""}${
+            d.realm === "PAYPAL_SANDBOX"
+              ? " through the PayPal sandbox (a test payment: no real money moved)"
+              : ""
+          }.`,
+        );
         break;
       case "DEFER_OBLIGATION":
         lines.push(
@@ -49,7 +55,9 @@ export function factsText(ctx: TutorContext): string {
       ? `Next bill: ${n.creditor} is owed ${money(n.remainingMinor)}, ${
           n.dueDay < ctx.day ||
           ctx.obligations.find((o) => o.obligationId === n.obligationId)?.state === "OVERDUE"
-            ? `overdue (it was due on ${formatDay(n.dueDay)})`
+            ? n.dueDay === ctx.day
+              ? "overdue (it was due today)"
+              : `overdue (it was due on ${formatDay(n.dueDay)})`
             : n.dueDay === ctx.day
               ? "due today"
               : `due on ${formatDay(n.dueDay)}`

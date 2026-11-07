@@ -223,7 +223,9 @@ describe("POST /api/worlds/[worldId]/explain", () => {
     // #88: the deterministic facts block comes first and says before AND after correctly.
     expect(body.lesson.validation.checks[0]).toBe("facts:deterministic");
     expect(shown).toContain("Your cash went from 800.00 EUR (fictional) to 770.00 EUR (fictional)");
-    expect(shown).toContain("You now hold 770.00 EUR (fictional)");
+    expect(shown).toContain(
+      "You paid Phone provider (fictional), so your cash went down by that bill.",
+    );
     expect(shown).toContain("is owed 550.00 EUR (fictional), due on day 10");
     expect(shown).not.toContain("{{");
     // Grounded in the world: a concept of the payment, citing the latest event (the payment).
