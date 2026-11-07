@@ -76,6 +76,9 @@ importers:
         specifier: workspace:*
         version: link:../learning
     devDependencies:
+      '@fle/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@fle/simulation':
         specifier: workspace:*
         version: link:../simulation

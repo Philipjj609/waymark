@@ -7,6 +7,8 @@ export interface TutorRequest {
   readonly system: string;
   /** JSON string: { task, context, errors? }. Contains only the bounded context. */
   readonly user: string;
+  /** JSON Schema the output must follow; providers with structured outputs enforce it. */
+  readonly responseSchema?: Readonly<Record<string, unknown>>;
 }
 
 export interface TutorProvider {

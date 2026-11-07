@@ -1,0 +1,309 @@
+/**
+ * #6 capability probe (ADR-0007 gate): run the REAL tutor path (`explainOutcome`: placeholders,
+ * deterministic validation, one repair, reviewed fallback) against candidate Nebius models and
+ * report first-try validity, final validity, fallback rate, latency and token cost.
+ *
+ *   pnpm exec tsx packages/ai/scripts/probe-models.ts [model ...] [--runs N] [--out file.json]
+ *
+ * Reads NEBIUS_API_BASE / NEBIUS_API_KEY from the repo's .env or the environment. Never prints the
+ * key or model output containing it. Financial values in every accepted lesson come from the
+ * snapshot via placeholders, so a model cannot affect money; this probe measures how often a model
+ * produces lessons the validator accepts, and what that costs.
+ */
+import { writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import type { DomainEvent, LearnerId } from "@fle/contracts";
+import { eur } from "@fle/domain";
+import {
+  createLearnerState,
+  interpretFact,
+  type LearnerState,
+  recordObservation,
+} from "@fle/learning";
+import {
+  cmd,
+  execute,
+  fp30,
+  PERSON,
+  PHONE,
+  playerCommand,
+  RENT,
+  snapshot,
+  type WorldState,
+} from "@fle/simulation";
+import { DEFAULT_MAX_TOKENS, explainOutcome, NebiusTutorProvider } from "../src/index.js";
+
+type Body = Parameters<typeof playerCommand>[2];
+const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const { loadEnv } = (await import(pathToFileURL(join(root, "scripts/ops/env.mjs")).href)) as {
+  loadEnv: () => Record<string, string | undefined>;
+};
+
+const SCENARIOS: Record<string, Body[]> = {
+  "paid-phone-day8": [
+    { kind: "ADVANCE_TIME", payload: { targetDay: 8 } },
+    { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } },
+  ],
+  "deferred-rent-day10": [
+    { kind: "ADVANCE_TIME", payload: { targetDay: 8 } },
+    { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } },
+    { kind: "ADVANCE_TIME", payload: { targetDay: 10 } },
+    { kind: "DEFER_OBLIGATION", payload: { obligationId: RENT } },
+  ],
+  "paid-rent-day10": [
+    { kind: "ADVANCE_TIME", payload: { targetDay: 8 } },
+    { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } },
+    { kind: "ADVANCE_TIME", payload: { targetDay: 10 } },
+    { kind: "PAY_OBLIGATION", payload: { obligationId: RENT } },
+  ],
+  "laptop-then-rent-short-day10": [
+    { kind: "PURCHASE_ASSET", payload: { entityId: PERSON, label: "Laptop", cost: eur(300) } },
+    { kind: "ADVANCE_TIME", payload: { targetDay: 8 } },
+    { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } },
+    { kind: "ADVANCE_TIME", payload: { targetDay: 10 } },
+    { kind: "DEFER_OBLIGATION", payload: { obligationId: RENT } },
+  ],
+  "salary-day15": [
+    { kind: "ADVANCE_TIME", payload: { targetDay: 8 } },
+    { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } },
+    { kind: "ADVANCE_TIME", payload: { targetDay: 10 } },
+    { kind: "PAY_OBLIGATION", payload: { obligationId: RENT } },
+    { kind: "ADVANCE_TIME", payload: { targetDay: 15 } },
+  ],
+};
+
+function build(script: Body[]) {
+  let state: WorldState = fp30();
+  const events: DomainEvent[] = [];
+  script.forEach((body, i) => {
+    const out = execute(state, playerCommand(state, cmd(i + 1), body));
+    if (out.result.status !== "ACCEPTED") throw new Error(`scenario step ${i} rejected`);
+    state = out.state;
+    events.push(...out.events);
+  });
+  const learnerId = "lrn_probe" as LearnerId;
+  let learner: LearnerState = createLearnerState(learnerId);
+  for (const event of events) {
+    const r = interpretFact(
+      { kind: "EVENT", event },
+      { learnerId, worldId: state.worldId, worldVersion: state.version as never },
+    );
+    if (r) learner = recordObservation(learner, r.observation);
+  }
+  return { snap: snapshot(state), events: events.slice(-4), learner };
+}
+
+const args = process.argv.slice(2);
+const runs = args.includes("--runs") ? Number(args[args.indexOf("--runs") + 1]) : 4;
+if (!Number.isInteger(runs) || runs < 1 || runs > 10) throw new Error("--runs must be 1..10");
+/**
+ * Spending guard: the probe refuses to start if its WORST-CASE cost (every lesson needing a repair,
+ * at a pessimistic token count, priced from the account's own /models) exceeds --max-usd
+ * (default 0.25), and stops mid-run if the measured spend crosses it.
+ */
+const maxUsd = args.includes("--max-usd") ? Number(args[args.indexOf("--max-usd") + 1]) : 0.25;
+if (!(maxUsd > 0 && maxUsd <= 5)) throw new Error("--max-usd must be in (0, 5]");
+// Input is our own bounded context (measured <1.2k); output is hard-capped by max_tokens.
+const WORST_IN_TOKENS = 3000;
+const WORST_OUT_TOKENS = DEFAULT_MAX_TOKENS;
+const outFile = args.includes("--out") ? args[args.indexOf("--out") + 1] : undefined;
+const models = args.filter(
+  (a, i) =>
+    !a.startsWith("--") &&
+    args[i - 1] !== "--runs" &&
+    args[i - 1] !== "--out" &&
+    args[i - 1] !== "--debug" &&
+    args[i - 1] !== "--max-usd",
+);
+if (!models.length) throw new Error("pass at least one model id");
+
+const env = loadEnv();
+if (!env.NEBIUS_API_KEY || /^replace-with/.test(env.NEBIUS_API_KEY))
+  throw new Error("NEBIUS_API_KEY not set");
+const baseUrl = (env.NEBIUS_API_BASE ?? "https://api.tokenfactory.nebius.com/v1").replace(
+  /\/+$/,
+  "",
+);
+const priceRes = await fetch(`${baseUrl}/models?verbose=true`, {
+  headers: { Authorization: `Bearer ${env.NEBIUS_API_KEY}` },
+});
+const catalog = (
+  (await priceRes.json()) as {
+    data: Array<{
+      id: string;
+      pricing: { prompt: string; completion: string };
+      supported_features?: string[];
+    }>;
+  }
+).data;
+const prices = new Map<string, { in: number; out: number }>(
+  catalog.map((m) => [m.id, { in: Number(m.pricing.prompt), out: Number(m.pricing.completion) }]),
+);
+const structured = new Map(
+  catalog.map((m) => [m.id, (m.supported_features ?? []).includes("structured_outputs")]),
+);
+
+const pct = (xs: number[], p: number) => {
+  const s = [...xs].sort((a, b) => a - b);
+  return s.length ? (s[Math.min(s.length - 1, Math.ceil((p / 100) * s.length) - 1)] ?? 0) : 0;
+};
+
+const unknown = models.filter((m) => !prices.has(m));
+if (unknown.length) throw new Error(`not available to this account: ${unknown.join(", ")}`);
+const lessonsPerModel = Object.keys(SCENARIOS).length * runs;
+const worstCase = models.reduce((sum, m) => {
+  const p = prices.get(m) as { in: number; out: number };
+  return sum + lessonsPerModel * 2 * (WORST_IN_TOKENS * p.in + WORST_OUT_TOKENS * p.out);
+}, 0);
+process.stderr.write(
+  `plan: ${models.length} model(s) x ${lessonsPerModel} lessons, worst case $${worstCase.toFixed(4)} (cap $${maxUsd})\n`,
+);
+// NaN-safe: refuse unless the worst case is a finite number within the cap.
+if (!(Number.isFinite(worstCase) && worstCase <= maxUsd)) {
+  throw new Error(
+    `worst-case cost $${worstCase.toFixed(4)} exceeds --max-usd ${maxUsd}; nothing was called`,
+  );
+}
+let spentUsd = 0;
+
+const debugFile = args.includes("--debug") ? args[args.indexOf("--debug") + 1] : undefined;
+const debug: Array<{ model: string; status: number; content: unknown }> = [];
+
+const results: Record<string, unknown>[] = [];
+for (const model of models) {
+  const calls: Array<{ ms: number; inTok: number; outTok: number; status: number }> = [];
+  const p = prices.get(model) as { in: number; out: number };
+  const perCallWorst = WORST_IN_TOKENS * p.in + WORST_OUT_TOKENS * p.out;
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    // Checked before EVERY call, with that call's worst case, so the cap can't be overshot.
+    if (!(spentUsd + perCallWorst <= maxUsd)) {
+      throw new Error(`spend cap: next call could exceed $${maxUsd}; stopping`);
+    }
+    const t0 = performance.now();
+    let res: Response;
+    try {
+      res = await fetch(url, init);
+    } catch (e) {
+      spentUsd += perCallWorst; // aborted or failed: assume it was billed in full
+      throw e;
+    }
+    const ms = performance.now() - t0;
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (e) {
+      spentUsd += perCallWorst; // body aborted (timeout): assume billed in full
+      throw e;
+    }
+    let usage = { prompt_tokens: 0, completion_tokens: 0 };
+    try {
+      usage = (JSON.parse(text) as { usage?: typeof usage }).usage ?? usage;
+    } catch {}
+    calls.push({
+      ms,
+      inTok: usage.prompt_tokens,
+      outTok: usage.completion_tokens,
+      status: res.status,
+    });
+    // No usage reported: count the worst case rather than nothing.
+    spentUsd +=
+      usage.prompt_tokens || usage.completion_tokens
+        ? usage.prompt_tokens * p.in + usage.completion_tokens * p.out
+        : res.ok
+          ? perCallWorst
+          : 0;
+    if (debugFile) {
+      // Model content only (never the request, which carries the Authorization header).
+      let content: unknown = null;
+      try {
+        content = (JSON.parse(text) as { choices?: { message?: { content?: unknown } }[] })
+          .choices?.[0]?.message?.content;
+      } catch {}
+      debug.push({ model, status: res.status, content });
+    }
+    return new Response(text, { status: res.status, headers: res.headers });
+  }) as unknown as typeof fetch;
+  const provider = new NebiusTutorProvider({
+    apiKey: env.NEBIUS_API_KEY,
+    model,
+    baseUrl,
+    fetchImpl,
+    structuredOutputs: structured.get(model) ?? false,
+  });
+
+  let firstTry = 0;
+  let validated = 0;
+  let fallback = 0;
+  const fallbackReasons: Record<string, number> = {};
+  const lessonMs: number[] = [];
+  let n = 0;
+  for (const [name, script] of Object.entries(SCENARIOS)) {
+    const s = build(script);
+    for (let r = 0; r < runs; r++) {
+      const before = calls.length;
+      const t0 = performance.now();
+      if (spentUsd > maxUsd)
+        throw new Error(`spend cap reached ($${spentUsd.toFixed(4)}); stopping`);
+      const lesson = await explainOutcome({
+        snapshot: s.snap,
+        events: s.events,
+        learnerState: s.learner,
+        provider,
+        timeoutMs: 30_000,
+      });
+      lessonMs.push(performance.now() - t0);
+      n += 1;
+      const used = calls.length - before;
+      if (lesson.provenance.generator === "MODEL") {
+        validated += 1;
+        if (used === 1) firstTry += 1;
+      } else {
+        fallback += 1;
+        const reason =
+          lesson.validation.checks.find((c) => c.startsWith("fallback-reason:")) ??
+          "fallback-reason:unknown";
+        fallbackReasons[reason] = (fallbackReasons[reason] ?? 0) + 1;
+      }
+      process.stderr.write(
+        `${model} ${name} #${r + 1}: ${lesson.provenance.generator} calls=${used}\n`,
+      );
+    }
+  }
+  const price = prices.get(model);
+  const inTok = calls.reduce((a, c) => a + c.inTok, 0);
+  const outTok = calls.reduce((a, c) => a + c.outTok, 0);
+  const cost = price ? inTok * price.in + outTok * price.out : Number.NaN;
+  results.push({
+    model,
+    lessons: n,
+    firstTryValidPct: Math.round((100 * firstTry) / n),
+    finalValidPct: Math.round((100 * validated) / n),
+    fallbackPct: Math.round((100 * fallback) / n),
+    fallbackReasons,
+    httpErrors: calls.filter((c) => c.status >= 400).length,
+    callP50ms: Math.round(
+      pct(
+        calls.map((c) => c.ms),
+        50,
+      ),
+    ),
+    callP95ms: Math.round(
+      pct(
+        calls.map((c) => c.ms),
+        95,
+      ),
+    ),
+    lessonP50ms: Math.round(pct(lessonMs, 50)),
+    lessonP95ms: Math.round(pct(lessonMs, 95)),
+    avgInTokensPerLesson: Math.round(inTok / n),
+    avgOutTokensPerLesson: Math.round(outTok / n),
+    structuredOutputs: structured.get(model) ?? false,
+    usdPerThousandLessons: Number.isNaN(cost) ? null : Number(((cost / n) * 1000).toFixed(3)),
+    priceInPer1M: price ? price.in * 1e6 : null,
+    priceOutPer1M: price ? price.out * 1e6 : null,
+  });
+}
+console.log(JSON.stringify(results, null, 2));
+if (outFile) writeFileSync(outFile, JSON.stringify(results, null, 2));
+if (debugFile) writeFileSync(debugFile, JSON.stringify(debug, null, 2));

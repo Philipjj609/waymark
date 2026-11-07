@@ -12,6 +12,7 @@
     "@fle/learning": "workspace:*"
   },
   "devDependencies": {
+    "@fle/domain": "workspace:*",
     "@fle/simulation": "workspace:*"
   }
 }

@@ -17,6 +17,7 @@ import {
   fallbackLesson,
   figureIssues,
   formatFictionalAmount,
+  LESSON_DRAFT_JSON_SCHEMA,
   NebiusTutorProvider,
   nameIssues,
   type TutorContext,
@@ -558,5 +559,105 @@ describe("the model never writes figures (#84 review): placeholders only", () =>
         for (const t of strings) expect([...figureIssues(t), ...nameIssues(t)], t).toEqual([]);
       }
     }
+  });
+});
+
+describe("structured outputs (#6 probe)", () => {
+  it("the draft schema is the lesson contract minus server-owned validation/provenance", () => {
+    const s = LESSON_DRAFT_JSON_SCHEMA as {
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+    expect(Object.keys(s.properties)).not.toContain("validation");
+    expect(Object.keys(s.properties)).not.toContain("provenance");
+    expect(s.required).toEqual(expect.arrayContaining(["blocks", "conceptIds", "sourceRefs"]));
+    // Nebius' grammar engine rejects `propertyNames` (HTTP 400); visual data is forced to {}.
+    expect(JSON.stringify(s)).not.toContain("propertyNames");
+  });
+
+  const capture = () => {
+    let body: Record<string, unknown> = {};
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+    return { fetchImpl, body: () => body };
+  };
+  const req = {
+    stage: "generate" as const,
+    system: "s",
+    user: "u",
+    responseSchema: LESSON_DRAFT_JSON_SCHEMA,
+  };
+  const signal = () => new AbortController().signal;
+
+  it("sends response_format json_schema by default when the request carries a schema", async () => {
+    const c = capture();
+    await new NebiusTutorProvider({
+      apiKey: "k",
+      model: "m",
+      baseUrl: "https://x.test/v1",
+      fetchImpl: c.fetchImpl,
+    }).complete(req, { signal: signal() });
+    expect(c.body().response_format).toMatchObject({
+      type: "json_schema",
+      json_schema: { name: "lesson_draft" },
+    });
+  });
+
+  it("falls back to json_object for models without structured outputs", async () => {
+    const c = capture();
+    await new NebiusTutorProvider({
+      apiKey: "k",
+      model: "m",
+      baseUrl: "https://x.test/v1",
+      fetchImpl: c.fetchImpl,
+      structuredOutputs: false,
+    }).complete(req, { signal: signal() });
+    expect(c.body().response_format).toEqual({ type: "json_object" });
+  });
+});
+
+describe("provider configuration (review of #90)", () => {
+  const sent = async (env: Record<string, string>) => {
+    let body: Record<string, unknown> = {};
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_u: string, init: RequestInit) => {
+      body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+    try {
+      const p = createTutorProvider({
+        AI_PROVIDER: "nebius",
+        NEBIUS_API_KEY: "k",
+        AI_MODEL_TUTOR: "m",
+        ...env,
+      });
+      await p.complete(
+        { stage: "generate", system: "s", user: "u", responseSchema: LESSON_DRAFT_JSON_SCHEMA },
+        { signal: new AbortController().signal },
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    return body;
+  };
+
+  it("structured outputs are on by default and can be switched off per model by env", async () => {
+    expect(((await sent({})).response_format as { type: string }).type).toBe("json_schema");
+    expect((await sent({ AI_STRUCTURED_OUTPUTS: "false" })).response_format).toEqual({
+      type: "json_object",
+    });
+  });
+
+  it("every request carries a hard max_tokens cap (default 3000, env-bounded)", async () => {
+    expect((await sent({})).max_tokens).toBe(3000);
+    expect((await sent({ AI_MAX_OUTPUT_TOKENS: "1500" })).max_tokens).toBe(1500);
+    expect((await sent({ AI_MAX_OUTPUT_TOKENS: "999999" })).max_tokens).toBe(3000);
+    expect((await sent({ AI_MAX_OUTPUT_TOKENS: "abc" })).max_tokens).toBe(3000);
   });
 });
