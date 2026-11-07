@@ -45,3 +45,30 @@ describe("lesson panel: visual fallback", () => {
     expect(lessonWith("CashFlowTimeline").blocks[1]).toMatchObject({ recipe: "CashFlowTimeline" });
   });
 });
+
+describe("lesson panel: deterministic facts block (#88)", () => {
+  const render = (checks: string[]) =>
+    renderToStaticMarkup(
+      createElement(LessonPanel, {
+        view: {
+          status: "ready",
+          lesson: {
+            ...lessonWith("CashFlowTimeline"),
+            validation: { status: "VALIDATED", checks },
+          },
+        },
+      }),
+    );
+
+  it("labels block 0 as coming from the world's records when the server marked it", () => {
+    const html = render(["facts:deterministic", "schema"]);
+    expect(html).toContain('data-facts="deterministic"');
+    expect(html).toContain("From your world&#x27;s records");
+  });
+
+  it("never labels model text as records without the server's marker", () => {
+    const html = render(["schema", "facts:deterministic"]);
+    expect(html).not.toContain("data-facts");
+    expect(html).not.toContain("world&#x27;s records");
+  });
+});

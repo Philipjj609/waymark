@@ -5,6 +5,8 @@ export type FakeBehavior =
   | "valid"
   | "invalid-json"
   | "wrong-number"
+  | "temporal-misuse"
+  | "obligation-mismatch"
   | "bad-recipe"
   | "no-sources"
   | "hang"
@@ -40,6 +42,8 @@ export class FakeTutorProvider implements TutorProvider {
 /**
  * Placeholder-based like a real model must be (placeholders.ts): the fake writes no figure itself.
  * "wrong-number" writes a literal (wrong) figure, which the validator must reject.
+ * "temporal-misuse" replays the production bug of 7 Nov (#88): cash NOW in a sentence about before.
+ * "obligation-mismatch" puts one bill's figure next to another bill's creditor.
  */
 function lessonFor(ctx: TutorContext, behavior: FakeBehavior) {
   const concept = ctx.concepts[0];
@@ -48,11 +52,28 @@ function lessonFor(ctx: TutorContext, behavior: FakeBehavior) {
     behavior === "wrong-number"
       ? `${Math.trunc((bill?.remainingMinor ?? 0) / 100) + 1}.00 EUR`
       : `{{bill:${id}.remaining}}`;
-  const sentence = bill
+  const current = bill
     ? `You hold {{cash}} and {{bill:${bill.obligationId}.creditor}} is owed ${owed(
         bill.obligationId,
       )}, due on {{bill:${bill.obligationId}.dueDay}}.`
     : "You hold {{cash}}.";
+  // With a decision: interpretation over the before/after/next facts, each with its own placeholder.
+  const interpretive = ctx.decision
+    ? `Before your decision you had {{cash.before}}; afterwards you had {{cash.after}}.${
+        ctx.nextBill
+          ? " {{nextBill.creditor}} is still owed {{nextBill.remaining}}, due on {{nextBill.dueDay}}."
+          : ""
+      } You now hold {{cash}}.`
+    : current;
+  const [a, b] = ctx.obligations;
+  const sentence =
+    behavior === "wrong-number"
+      ? current
+      : behavior === "temporal-misuse"
+        ? "You held {{cash}} before paying."
+        : behavior === "obligation-mismatch" && a && b
+          ? `{{bill:${a.obligationId}.creditor}} is owed {{bill:${b.obligationId}.remaining}}.`
+          : interpretive;
   return {
     schemaVersion: "learning.lesson.v1",
     lessonId: `les_fake_d${ctx.day}`,

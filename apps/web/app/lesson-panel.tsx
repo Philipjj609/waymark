@@ -38,8 +38,13 @@ export function LessonPanel({ view }: { view: ExplanationView }) {
   );
 }
 
+/** Same marker as `FACTS_CHECK` in @fle/ai (#88); kept literal so the client bundle needs no AI code. */
+const FACTS_CHECK = "facts:deterministic";
+
 function Lesson({ lesson }: { lesson: LessonResponse }) {
   const badge = provenanceBadge(lesson.provenance);
+  // #88: block 0 is then the server's deterministic summary, not model text: label it as such.
+  const factsFirst = lesson.validation.checks[0] === FACTS_CHECK;
   return (
     <div>
       <p>
@@ -55,6 +60,21 @@ function Lesson({ lesson }: { lesson: LessonResponse }) {
         const key = `${lesson.lessonId}-${i}`;
         switch (block.type) {
           case "text":
+            if (i === 0 && factsFirst)
+              return (
+                <div
+                  key={key}
+                  data-facts="deterministic"
+                  style={{ background: "#f4f4f5", padding: "8px 10px", borderRadius: 4 }}
+                >
+                  <small>
+                    <strong>From your world's records</strong>
+                  </small>
+                  <p style={{ margin: "4px 0 0", whiteSpace: "pre-wrap" }}>
+                    {labelFictional(block.markdown)}
+                  </p>
+                </div>
+              );
             return (
               <p key={key} style={{ whiteSpace: "pre-wrap" }}>
                 {labelFictional(block.markdown)}

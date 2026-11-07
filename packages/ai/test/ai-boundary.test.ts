@@ -111,7 +111,7 @@ describe("explainOutcome with the fake provider", () => {
     const provider = new FakeTutorProvider(["wrong-number"]);
     const lesson = await run(provider);
     expect(lesson.validation.status).toBe("FALLBACK_REVIEWED");
-    expect(lesson.validation.checks[0]).toContain("FIGURE_OUTSIDE_PLACEHOLDER");
+    expect(lesson.validation.checks.join(" ")).toContain("FIGURE_OUTSIDE_PLACEHOLDER");
     expect(JSON.stringify(lesson)).not.toContain("551.00");
   });
 
@@ -153,14 +153,14 @@ describe("explainOutcome with the fake provider", () => {
   it("timeout -> fallback, even if the provider ignores the abort signal", async () => {
     const lesson = await run(new FakeTutorProvider(["hang"]), 20);
     expect(lesson.validation.status).toBe("FALLBACK_REVIEWED");
-    expect(lesson.validation.checks[0]).toContain("timeout");
+    expect(lesson.validation.checks.join(" ")).toContain("fallback-reason:timeout");
   });
 
   it("provider error -> fallback without retry", async () => {
     const provider = new FakeTutorProvider(["throw"]);
     const lesson = await run(provider);
     expect(provider.calls).toHaveLength(1);
-    expect(lesson.validation.checks[0]).toContain("provider-error");
+    expect(lesson.validation.checks.join(" ")).toContain("fallback-reason:provider-error");
   });
 });
 
@@ -520,7 +520,7 @@ describe("the model never writes figures (#84 review): placeholders only", () =>
 
   it("substituted text that outgrows the contract limit is rejected, not truncated", () => {
     const ctx = ctxOf();
-    const markdown = "{{cash}} ".repeat(130); // raw fits 1200 chars, the rendered text does not
+    const markdown = "You hold {{cash}}. ".repeat(60); // raw fits 1200 chars, the rendered text does not
     expect(markdown.length).toBeLessThanOrEqual(1200);
     expect(codes(reply(ctx, { markdown }), ctx)).toEqual(["SCHEMA_INVALID"]);
   });
@@ -549,7 +549,10 @@ describe("the model never writes figures (#84 review): placeholders only", () =>
         },
         "test",
       );
-      for (const b of lesson.blocks) {
+      // Block 0 is the deterministic facts block (#88): server text from the context, not checked
+      // as model text. Everything after it is the reviewed static content.
+      expect(lesson.validation.checks[0]).toBe("facts:deterministic");
+      for (const b of lesson.blocks.slice(1)) {
         const strings =
           b.type === "text"
             ? [b.markdown]

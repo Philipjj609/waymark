@@ -2,6 +2,7 @@ import type { ConceptId, LessonResponse } from "@fle/contracts";
 import { LessonResponseSchema } from "@fle/contracts";
 import { SEED_CONCEPTS } from "@fle/learning";
 import type { TutorContext } from "./context.js";
+import { FACTS_CHECK, factsBlock } from "./facts.js";
 import { CURRICULUM_VERSION } from "./types.js";
 
 /**
@@ -43,12 +44,14 @@ export function fallbackLesson(ctx: TutorContext, reason: string): LessonRespons
     lessonId: `les_fallback_${conceptId}_d${ctx.day}`,
     curriculumVersion: CURRICULUM_VERSION,
     conceptIds: [conceptId],
+    // #88: the deterministic facts come first, so even a fallback tells the learner what happened.
     blocks: [
+      factsBlock(ctx),
       { type: "text", markdown: text.body },
       { type: "question", prompt: text.prompt, rubricRef: `rubric:${conceptId}:reflection` },
     ],
     sourceRefs: [...ctx.allowedSourceRefs.slice(-1), `fallback:${conceptId}`],
-    validation: { status: "FALLBACK_REVIEWED", checks: [`fallback-reason:${reason}`] },
+    validation: { status: "FALLBACK_REVIEWED", checks: [FACTS_CHECK, `fallback-reason:${reason}`] },
     provenance: { generator: "REVIEWED_STATIC", model: null, promptVersion: null },
   });
 }
