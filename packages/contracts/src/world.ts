@@ -222,7 +222,7 @@ export const ProviderOperationViewSchema = z
     amount: PositiveMoneySchema,
     startedDay: WorldDaySchema,
     status: z.enum(["ACTIVE", "CAPTURED", "VOIDED"]),
-    /** Known once a verified void or an applied reconciliation named it. */
+    /** Bound by the server (BIND_PROVIDER_ORDER) right after it created the PayPal order. */
     orderId: z.string().min(1).max(128).nullable(),
     /** The capture that settled the obligation through this operation, if any. */
     captureId: z.string().min(1).max(128).nullable(),
@@ -245,6 +245,8 @@ export const ReconciliationOutcomeSchema = z.enum([
    */
   "RESOLVED_REFUNDED",
   "KEPT_NOT_TERMINAL",
+  /** The operation's order was never bound: nothing can be trusted, nothing changes (R1). */
+  "KEPT_ORDER_UNBOUND",
   "KEPT_CAPTURE_PENDING",
   "KEPT_REFUNDED_CAPTURE",
   "KEPT_MULTIPLE_CAPTURES",

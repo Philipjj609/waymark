@@ -29,6 +29,12 @@ export const VerifiedProviderEventSchema = z
     providerEventId: z.string().min(1).max(128),
     operationId: ProviderOperationIdSchema,
     /**
+     * 0.3.0 (final pass R1): the PayPal order this fact belongs to, as the server read it. The
+     * engine applies a fact only if the operation's order was bound first (BIND_PROVIDER_ORDER)
+     * and this id equals the bound one; otherwise it is refused with no effect.
+     */
+    orderId: z.string().min(1).max(128),
+    /**
      * - CAPTURE_COMPLETED: the only type that settles anything.
      * - CAPTURE_PENDING (0.3.0) / CAPTURE_DENIED: status only, the reservation is kept (after a
      *   denial the buyer may retry, ADR-0008 M2).
@@ -52,9 +58,9 @@ export const VerifiedProviderEventSchema = z
     ]),
     amount: PositiveMoneySchema,
     /**
-     * 0.3.0, CAPTURE_REFUNDED only: the PayPal capture id the refund belongs to. Without it (or if
-     * it is not the capture that settled the operation) the refund cannot be tied to a settled
-     * capture and is recorded as NEEDS_ATTENTION.
+     * 0.3.0, REQUIRED for CAPTURE_REFUNDED (final pass R2), absent otherwise: the PayPal capture id
+     * the refund belongs to. If it is not the capture that settled the operation the refund
+     * cannot be tied to a settled capture and is recorded as NEEDS_ATTENTION.
      */
     refundedCaptureId: z.string().min(1).max(128).optional(),
     mapping: z
@@ -71,8 +77,41 @@ export const VerifiedProviderEventSchema = z
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((e, ctx) => {
+    if ((e.eventType === "CAPTURE_REFUNDED") !== (e.refundedCaptureId !== undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["refundedCaptureId"],
+        message: "refundedCaptureId is required for CAPTURE_REFUNDED and only allowed there",
+      });
+    }
+  });
 export type VerifiedProviderEvent = z.infer<typeof VerifiedProviderEventSchema>;
+
+/**
+ * 0.3.0 (final pass R1): the SERVER binds the PayPal order it created for an operation
+ * (POST /v2/checkout/orders, `PayPal-Request-Id` = `<operationId>:create`) right after creating
+ * it, before any capture is possible. Server-only (VERIFIED_EXTERNAL). Idempotent: the same order
+ * id again is a no-op; a different one is refused and never rebinds. Until an operation is bound,
+ * no provider fact or reconciliation for it has any effect.
+ */
+export const ProviderOrderBindingSchema = z
+  .object({
+    provider: z.literal("PAYPAL_SANDBOX"),
+    operationId: ProviderOperationIdSchema,
+    mapping: z.object({ worldId: WorldIdSchema, obligationId: ObligationIdSchema }).strict(),
+    orderId: z.string().min(1).max(128),
+    verification: z
+      .object({
+        method: z.literal("ORDER_CREATE_RESPONSE"),
+        verifiedAt: z.iso.datetime(),
+        evidenceRef: z.string().min(1).max(256),
+      })
+      .strict(),
+  })
+  .strict();
+export type ProviderOrderBinding = z.infer<typeof ProviderOrderBindingSchema>;
 
 /**
  * PayPal order status as read back by the server (Orders v2), plus EXPIRED: the order was not

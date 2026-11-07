@@ -24,6 +24,11 @@
       "maxLength": 128,
       "pattern": "^pop_[A-Za-z0-9_.:-]+$"
     },
+    "orderId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
     "eventType": {
       "type": "string",
       "enum": [
@@ -120,6 +125,7 @@
     "provider",
     "providerEventId",
     "operationId",
+    "orderId",
     "eventType",
     "amount",
     "mapping",

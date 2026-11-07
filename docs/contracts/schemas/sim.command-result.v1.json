@@ -59,7 +59,9 @@
                 "PAYMENT_IN_FLIGHT",
                 "PROVIDER_OPERATION_MISMATCH",
                 "CHECKOUT_NOT_CANCELLABLE",
-                "PROVIDER_ATTENTION_OPEN"
+                "PROVIDER_ATTENTION_OPEN",
+                "PROVIDER_ORDER_UNBOUND",
+                "PROVIDER_ORDER_MISMATCH"
               ]
             },
             "message": {

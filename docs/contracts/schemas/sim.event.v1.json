@@ -54,7 +54,8 @@
         "PROVIDER_ATTENTION_RECORDED",
         "PROVIDER_REFUND_RECORDED",
         "PROVIDER_RECONCILED",
-        "PROVIDER_STATUS_FACT_RECORDED"
+        "PROVIDER_STATUS_FACT_RECORDED",
+        "PROVIDER_ORDER_BOUND"
       ]
     },
     "causationCommandId": {

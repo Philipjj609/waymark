@@ -35,6 +35,12 @@ Additive (minor) relative to 0.2.0:
   `REFUND_BEFORE_CAPTURE` records are now blocking (they never change the reservation). Engine only: a reconciliation that
   sees a capture of the active checkout updates that checkout as the fact would; a REFUNDED capture counts as returned only
   with `refundedAmount` equal to its amount; captures are sorted by id before fingerprinting.
+- Folded in before release (final pass of #98, 7 Nov; still 0.3.0): server-only command `BIND_PROVIDER_ORDER { binding }`
+  (`ProviderOrderBindingSchema`, verification method `ORDER_CREATE_RESPONSE`; not in `sim.player-command.v1`), event
+  `PROVIDER_ORDER_BOUND`, errors `PROVIDER_ORDER_UNBOUND` / `PROVIDER_ORDER_MISMATCH`, reconciliation outcome
+  `KEPT_ORDER_UNBOUND`. **`provider.event.v1` now REQUIRES `orderId`** (the bound PayPal order) and requires
+  `refundedCaptureId` exactly on `CAPTURE_REFUNDED` (refused on every other type). `packages/payments` `verifyCapture`
+  emits `orderId`.
 - `sim.snapshot.v1`: each `reservations[]` item adds `realm` (`PAYPAL_SANDBOX`), `status`, `attentionReason`; the snapshot
   adds `attention[]`. Required fields, same rule as 0.2.0: the engine is the only producer; strict consumers update together.
 

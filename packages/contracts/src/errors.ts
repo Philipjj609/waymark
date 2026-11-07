@@ -31,6 +31,10 @@ export const CommandErrorCodeSchema = z.enum([
   "CHECKOUT_NOT_CANCELLABLE",
   /** 0.3.0: an open capture-type attention record blocks paying this obligation (owner decision 3). */
   "PROVIDER_ATTENTION_OPEN",
+  /** 0.3.0: the operation's PayPal order is not bound yet (BIND_PROVIDER_ORDER first); no effect. */
+  "PROVIDER_ORDER_UNBOUND",
+  /** 0.3.0: the order id differs from the one bound to the operation; never rebinds, no effect. */
+  "PROVIDER_ORDER_MISMATCH",
 ]);
 export type CommandErrorCode = z.infer<typeof CommandErrorCodeSchema>;
 

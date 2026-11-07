@@ -11,7 +11,11 @@ import {
   WorldVersionSchema,
 } from "./ids.js";
 import { PositiveMoneySchema } from "./money.js";
-import { ProviderReconciliationSchema, VerifiedProviderEventSchema } from "./provider.js";
+import {
+  ProviderOrderBindingSchema,
+  ProviderReconciliationSchema,
+  VerifiedProviderEventSchema,
+} from "./provider.js";
 import type { Origin } from "./world.js";
 
 export const COMMAND_SCHEMA_VERSION = "sim.command.v1" as const;
@@ -76,12 +80,15 @@ export const CommandEnvelopeSchema = z.discriminatedUnion("kind", [
     "RECONCILE_PROVIDER_STATE",
     z.object({ reconciliation: ProviderReconciliationSchema }).strict(),
   ),
+  /** 0.3.0 (final pass R1): SERVER-ONLY binding of the PayPal order id to an operation. */
+  command("BIND_PROVIDER_ORDER", z.object({ binding: ProviderOrderBindingSchema }).strict()),
 ]);
 
 /** Kinds only trusted server code may construct (origin VERIFIED_EXTERNAL). */
 export const SERVER_ONLY_COMMAND_KINDS = [
   "APPLY_VERIFIED_PROVIDER_EVENT",
   "RECONCILE_PROVIDER_STATE",
+  "BIND_PROVIDER_ORDER",
 ] as const;
 export type CommandEnvelope = z.infer<typeof CommandEnvelopeSchema>;
 

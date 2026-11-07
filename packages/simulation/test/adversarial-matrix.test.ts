@@ -11,6 +11,7 @@ import type {
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  boundOrderId,
   cmd,
   execute,
   fp30,
@@ -47,6 +48,7 @@ function event(
     provider: "PAYPAL_SANDBOX",
     providerEventId: id,
     operationId: lastOp(w, obligationId),
+    orderId: boundOrderId(w, lastOp(w, obligationId)),
     eventType: type,
     amount: { amountMinor: 3000, currency: "EUR" },
     mapping: { worldId: w.worldId, obligationId },

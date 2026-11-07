@@ -9,6 +9,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { WorldState } from "../src/index.js";
 import {
+  boundOrderId,
   cmd,
   createRng,
   execute,
@@ -117,6 +118,7 @@ function providerEvent(
     provider: "PAYPAL_SANDBOX",
     providerEventId: id,
     operationId: lastOp(w, obligationId),
+    orderId: boundOrderId(w, lastOp(w, obligationId)),
     eventType: "CAPTURE_COMPLETED",
     amount: { amountMinor, currency: "EUR" },
     mapping: { worldId: w.worldId, obligationId },

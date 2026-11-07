@@ -17,6 +17,7 @@ import {
 import { consolidate, eur, Ledger, PostingError, reversedLines } from "@fle/domain";
 import { describe, expect, it } from "vitest";
 import {
+  boundOrderId,
   cmd,
   createWorld,
   execute,
@@ -54,6 +55,7 @@ function capture(
     provider: "PAYPAL_SANDBOX",
     providerEventId: id,
     operationId: lastOp(w, PHONE),
+    orderId: boundOrderId(w, lastOp(w, PHONE)),
     eventType: type,
     amount: { amountMinor: 3000, currency: "EUR" },
     mapping: { worldId: w.worldId, obligationId: PHONE },

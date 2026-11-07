@@ -19,8 +19,10 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   availableCash,
+  boundOrderId,
   cmd,
   createWorld,
+  defaultOrderId,
   execute,
   fp30,
   fp30Config,
@@ -30,6 +32,7 @@ import {
   RENT,
   replay,
   run,
+  serverBindAfter,
   snapshot,
   type WorldState,
 } from "../src/index.js";
@@ -66,6 +69,7 @@ function event(
     provider: "PAYPAL_SANDBOX",
     providerEventId: id,
     operationId: (operationId ?? "pop_none") as ProviderOperationId,
+    orderId: boundOrderId(w, (operationId ?? "pop_none") as ProviderOperationId),
     eventType: type,
     amount: { amountMinor, currency: "EUR" },
     mapping: { worldId: w.worldId, obligationId },
@@ -84,11 +88,14 @@ const deliver = (w: WorldState, ev: VerifiedProviderEvent): AuthorizedCommand =>
     origin: "VERIFIED_EXTERNAL",
   }) as AuthorizedCommand;
 
-const checkout = (w: WorldState, n: number, o: ObligationId) =>
-  execute(
+const checkout = (w: WorldState, n: number, o: ObligationId) => {
+  const out = execute(
     w,
     playerCommand(w, cmd(n), { kind: "START_PROVIDER_CHECKOUT", payload: { obligationId: o } }),
   );
+  const bind = serverBindAfter(w, "START_PROVIDER_CHECKOUT", out); // server binds the order (D1b)
+  return bind ? { ...out, state: execute(out.state, bind).state } : out;
+};
 
 const checkoutBody = (o: ObligationId) =>
   ({ kind: "START_PROVIDER_CHECKOUT", payload: { obligationId: o } }) as const;
@@ -452,7 +459,14 @@ describe("verified provider facts against an active checkout", () => {
     let w = fp30();
     const push = (c: AuthorizedCommand) => {
       recorded.push(c);
-      w = execute(w, c).state;
+      const before = w;
+      const out = execute(w, c);
+      w = out.state;
+      const bind = serverBindAfter(before, c.kind, out);
+      if (bind) {
+        recorded.push(bind);
+        w = execute(w, bind).state;
+      }
     };
     push(playerCommand(w, cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }));
     push(
@@ -491,7 +505,14 @@ describe("operation ids and the operation registry (#12 review)", () => {
     const advance = playerCommand(w0, cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } });
     const w1 = execute(w0, advance).state;
     const start = playerCommand(w1, cmd(2), checkoutBody(PHONE));
-    const rebuilt = replay({ ...fp30Config(), worldId: "wld_alpha" as WorldId }, [advance, start]);
+    const started = execute(w1, start);
+    const bind = serverBindAfter(w1, "START_PROVIDER_CHECKOUT", started);
+    expect(bind).not.toBeNull();
+    const rebuilt = replay({ ...fp30Config(), worldId: "wld_alpha" as WorldId }, [
+      advance,
+      start,
+      bind as AuthorizedCommand,
+    ]);
     expect(opOf(rebuilt, PHONE)).toBe(opA);
     expect(rebuilt.headHash).toBe(a.headHash);
   });
@@ -506,7 +527,7 @@ describe("operation ids and the operation registry (#12 review)", () => {
       amount: eur(30),
       startedDay: 8,
       status: "ACTIVE",
-      orderId: null,
+      orderId: defaultOrderId(op), // bound by the server right after createOrder (R1)
       captureId: null,
       refunded: eur(0),
     });
@@ -625,7 +646,14 @@ describe("property: reservations never overdraw, and each bill settles at most o
         const recorded: AuthorizedCommand[] = [];
         const apply = (c: AuthorizedCommand) => {
           recorded.push(c);
-          w = execute(w, c).state;
+          const before = w;
+          const out = execute(w, c);
+          w = out.state;
+          const bind = serverBindAfter(before, c.kind, out);
+          if (bind) {
+            recorded.push(bind);
+            w = execute(w, bind).state;
+          }
         };
         for (const s of steps) {
           if (s.k === "reconcile") {

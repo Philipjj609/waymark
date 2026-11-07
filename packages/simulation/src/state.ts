@@ -77,6 +77,12 @@ export interface Reservation {
    * order lacks one of them contradicts a verified fact and changes nothing (owner decision 2).
    */
   readonly captureIdsSeen: readonly string[];
+  /**
+   * Final pass R4: what is known about each remembered capture (from facts or read-backs). The
+   * reservation status is derived from all of them, so one denial never hides another pending or
+   * live capture.
+   */
+  readonly captureStates: Readonly<Record<string, "PENDING" | "DENIED" | "LIVE">>;
 }
 
 /**
@@ -91,7 +97,7 @@ export interface ProviderOperation {
   readonly amount: Money;
   readonly startedDay: WorldDay;
   readonly status: "ACTIVE" | "CAPTURED" | "VOIDED";
-  /** PayPal order id, once a verified void or an applied reconciliation named it. */
+  /** PayPal order id, bound by the server right after it created the order (BIND_PROVIDER_ORDER). */
   readonly orderId: string | null;
   /** The capture id that settled the obligation through this operation. */
   readonly captureId: string | null;

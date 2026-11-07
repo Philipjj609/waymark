@@ -23,6 +23,7 @@ import {
   type ObligationId,
   OriginSchema,
   type ProviderOperationId,
+  type ProviderOrderBinding,
   type ProviderReconciliation,
   type ReconciliationOutcome,
   type ReservationStatus,
@@ -388,7 +389,49 @@ function resolveProviderTarget(
   const o = tx.s.obligations[ev.mapping.obligationId];
   if (!o) throw new Reject("PROVIDER_EVENT_UNMAPPED", `no obligation ${ev.mapping.obligationId}`);
   const op = requireRegisteredOperation(tx, ev.operationId, o.obligationId);
+  requireBoundOrder(op, ev.orderId);
   return { o, op, r: tx.reservation(o.obligationId) };
+}
+
+/**
+ * Final pass R1: the engine trusts a provider fact only for the PayPal order the server bound to
+ * the operation when it created it (BIND_PROVIDER_ORDER). An unbound operation, or a fact about
+ * another order, has no effect at all: no settlement, release, status change or capture memory.
+ */
+function requireBoundOrder(op: ProviderOperation, orderId: string): void {
+  if (op.orderId === null) {
+    throw new Reject(
+      "PROVIDER_ORDER_UNBOUND",
+      `operation ${op.operationId} has no bound PayPal order yet; bind it first`,
+      { operationId: op.operationId },
+    );
+  }
+  if (op.orderId !== orderId) {
+    throw new Reject(
+      "PROVIDER_ORDER_MISMATCH",
+      `order ${orderId} is not the order bound to ${op.operationId}`,
+      { operationId: op.operationId, boundOrderId: op.orderId, orderId },
+    );
+  }
+}
+
+/**
+ * Final pass R4: the reservation status is derived from EVERY capture the engine remembers for the
+ * checkout, never from the last fact alone. Any live unapplied capture → NEEDS_ATTENTION; any
+ * pending one → CAPTURE_PENDING (cancel refused, a void is held); otherwise the cancel request,
+ * then a denial, then AWAITING_PAYER. NEEDS_ATTENTION is sticky (only a reconciliation ends it).
+ */
+function deriveStatus(
+  r: Reservation,
+  captureStates: Reservation["captureStates"],
+): ReservationStatus {
+  if (r.status === "NEEDS_ATTENTION") return "NEEDS_ATTENTION";
+  const states = Object.values(captureStates);
+  if (states.includes("LIVE")) return "NEEDS_ATTENTION";
+  if (states.includes("PENDING")) return "CAPTURE_PENDING";
+  if (r.cancelRequested) return "CANCEL_REQUESTED";
+  if (states.includes("DENIED")) return "CAPTURE_DENIED";
+  return "AWAITING_PAYER";
 }
 
 const sameAmount = (a: Money, b: Money) =>
@@ -662,6 +705,9 @@ function applyVoid(tx: Tx, ev: VerifiedProviderEvent): void {
   }
   // A capture is pending at PayPal: a void now contradicts a verified fact and releasing would let
   // the bill be paid a second time when the pending capture completes (review H2).
+  // The status is derived from every remembered capture (R4): any pending one makes it
+  // CAPTURE_PENDING and any live unapplied one NEEDS_ATTENTION (handled above), so this holds the
+  // void while ANY remembered capture is pending or live.
   if (r.status === "CAPTURE_PENDING") {
     recordAttention(tx, ev, o, r, "VOID_WHILE_CAPTURE_PENDING");
     return;
@@ -702,7 +748,8 @@ function releaseThroughProvider(
   if (reason !== "CAPTURES_REFUNDED")
     tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, `ORDER_VOIDED:fact:${orderId}`];
   tx.dropReservation(o.obligationId);
-  tx.updateOperation(r.operationId, { status: "VOIDED", orderId });
+  // The order id was bound at creation and is never changed here (final pass R1).
+  tx.updateOperation(r.operationId, { status: "VOIDED" });
   tx.emit("RESERVATION_RELEASED", {
     obligationId: o.obligationId,
     operationId: r.operationId,
@@ -745,17 +792,16 @@ function applyCaptureStatus(tx: Tx, ev: VerifiedProviderEvent): void {
     recordAttention(tx, ev, o, r, "OUT_OF_ORDER_STATUS");
     return;
   }
-  const to: ReservationStatus =
-    ev.eventType === "CAPTURE_PENDING"
-      ? "CAPTURE_PENDING"
-      : r.cancelRequested
-        ? "CANCEL_REQUESTED"
-        : "CAPTURE_DENIED";
+  const captureStates = {
+    ...r.captureStates,
+    [ev.providerEventId]: ev.eventType === "CAPTURE_PENDING" ? "PENDING" : "DENIED",
+  } as const;
+  const to = deriveStatus(r, captureStates);
   tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, factKey(ev)];
   const captureIdsSeen = r.captureIdsSeen.includes(ev.providerEventId)
     ? r.captureIdsSeen
     : [...r.captureIdsSeen, ev.providerEventId];
-  tx.setReservation({ ...r, status: to, captureIdsSeen });
+  tx.setReservation({ ...r, status: to, captureIdsSeen, captureStates });
   tx.emit(to === r.status ? "PROVIDER_STATUS_FACT_RECORDED" : "PROVIDER_CHECKOUT_STATUS_CHANGED", {
     obligationId: o.obligationId,
     operationId: r.operationId,
@@ -845,7 +891,9 @@ function decideReconciliation(
 ): Decision {
   const own = r?.operationId === op.operationId ? r : undefined;
   const { orderId, orderStatus, captures } = rc.observed;
-  if (op.orderId !== null && op.orderId !== orderId) return { outcome: "KEPT_ORDER_MISMATCH" };
+  // Final pass R1: only the order the server bound to this operation can be trusted.
+  if (op.orderId === null) return { outcome: "KEPT_ORDER_UNBOUND" };
+  if (op.orderId !== orderId) return { outcome: "KEPT_ORDER_MISMATCH" };
   if (
     captures.some(
       (c) =>
@@ -872,13 +920,6 @@ function decideReconciliation(
     ...open.flatMap((a) => (a.refundedCaptureId ? [a.refundedCaptureId] : [])),
   ];
   if (recorded.some((id) => !byId.has(id))) return { outcome: "KEPT_RECORDED_CAPTURE_MISSING" };
-  // An early refund that names no capture still proves one was taken: a read-back showing no
-  // capture that holds or held money contradicts it (re-review N2).
-  if (
-    open.some((a) => a.reason === "REFUND_BEFORE_CAPTURE" && a.refundedCaptureId === null) &&
-    !captures.some((x) => isLive(x) || x.status === "REFUNDED" || x.status === "PENDING")
-  )
-    return { outcome: "KEPT_RECORDED_CAPTURE_MISSING" };
   // A capture verified COMPLETED can later be refunded, never un-completed (final review M4).
   const verifiedCompleted = [
     ...(op.captureId ? [op.captureId] : []),
@@ -926,16 +967,13 @@ function decideReconciliation(
   if (!(observedRefund >= 0 && observedRefund < c.amount.amountMinor))
     return { outcome: "KEPT_REFUNDED_CAPTURE" };
   // Refund records of a capture read back as fully REFUNDED (a refunded duplicate) are settled
-  // business at PayPal and do not count against this capture (re-review N3). A refund that names
-  // no capture cannot be matched; on a bill this very capture settled it is resolved by the
-  // CONFIRMED outcome (re-review low c), otherwise it keeps the attention open.
+  // business at PayPal and do not count against this capture (re-review N3). Every refund names
+  // its capture (refundedCaptureId is required, final pass R2).
   const fullyRefundedIds = new Set(captures.filter(isFullyRefunded).map((x) => x.captureId));
-  const settledByThis = o.state === "SETTLED" && op.captureId === c.captureId;
   const openRefunds = open.filter(
     (a) =>
       a.eventType === "CAPTURE_REFUNDED" &&
-      !(a.refundedCaptureId !== null && fullyRefundedIds.has(a.refundedCaptureId)) &&
-      !(settledByThis && a.refundedCaptureId === null),
+      !(a.refundedCaptureId !== null && fullyRefundedIds.has(a.refundedCaptureId)),
   );
   const waiting = openRefunds.filter(
     (a) => a.reason === "REFUND_BEFORE_CAPTURE" && a.refundedCaptureId === c.captureId,
@@ -1028,12 +1066,13 @@ function applyReconciliation(tx: Tx, raw: ProviderReconciliation): void {
     verification: rc.verification,
   });
   if (!applied) {
-    keepBlockedIfMoneyMayBeTaken(tx, rc, o, op, own, outcome);
+    // A read-back of an unbound or foreign order proves nothing about this operation (R1).
+    if (outcome !== "KEPT_ORDER_UNBOUND" && outcome !== "KEPT_ORDER_MISMATCH")
+      keepBlockedIfMoneyMayBeTaken(tx, rc, o, op, own, outcome);
     return;
   }
   // Apply refunds before resolving, so a refund the reconciliation could not apply stays open.
   if (outcome === "SETTLED" && capture) {
-    tx.updateOperation(op.operationId, { orderId: rc.observed.orderId });
     settleThroughProvider(tx, o, tx.s.operations[op.operationId] ?? op, own, capture.captureId, {
       providerEventId: capture.captureId,
       reconciliationId: rc.reconciliationId,
@@ -1060,9 +1099,45 @@ function applyReconciliation(tx: Tx, raw: ProviderReconciliation): void {
       reconciliationId: rc.reconciliationId,
       verification: rc.verification,
     });
-  } else if (tx.s.operations[op.operationId]?.orderId === null) {
-    tx.updateOperation(op.operationId, { orderId: rc.observed.orderId });
   }
+}
+
+/**
+ * Final pass R1: the server binds the PayPal order it created for an operation. Idempotent; a
+ * different order for a bound operation, or an order already bound to another operation, is
+ * refused (never rebinds). No journal, no cash, no status change.
+ */
+function applyBinding(tx: Tx, b: ProviderOrderBinding): void {
+  if (b.mapping.worldId !== tx.s.worldId)
+    throw new Reject("PROVIDER_EVENT_UNMAPPED", "binding maps to another world");
+  const o = tx.s.obligations[b.mapping.obligationId];
+  if (!o) throw new Reject("PROVIDER_EVENT_UNMAPPED", `no obligation ${b.mapping.obligationId}`);
+  const op = requireRegisteredOperation(tx, b.operationId, o.obligationId);
+  if (op.orderId === b.orderId) return; // the same binding again: no effect
+  if (op.orderId !== null) {
+    throw new Reject(
+      "PROVIDER_ORDER_MISMATCH",
+      `operation ${op.operationId} is already bound to another order; it never rebinds`,
+      { operationId: op.operationId, boundOrderId: op.orderId, orderId: b.orderId },
+    );
+  }
+  const other = Object.values(tx.s.operations).find((x) => x.orderId === b.orderId);
+  if (other) {
+    throw new Reject(
+      "PROVIDER_ORDER_MISMATCH",
+      `order ${b.orderId} is already bound to operation ${other.operationId}`,
+      { operationId: op.operationId, boundOperationId: other.operationId, orderId: b.orderId },
+    );
+  }
+  tx.updateOperation(op.operationId, { orderId: b.orderId });
+  tx.emit("PROVIDER_ORDER_BOUND", {
+    realm: "PAYPAL_SANDBOX",
+    provider: b.provider,
+    obligationId: o.obligationId,
+    operationId: op.operationId,
+    orderId: b.orderId,
+    verification: b.verification,
+  });
 }
 
 /**
@@ -1095,12 +1170,18 @@ function keepBlockedIfMoneyMayBeTaken(
       ...own.captureIdsSeen,
       ...risky.map((c) => c.captureId).filter((id) => !own.captureIdsSeen.includes(id)),
     ];
-    const to: ReservationStatus =
-      liveUnapplied || own.status === "NEEDS_ATTENTION" ? "NEEDS_ATTENTION" : "CAPTURE_PENDING";
+    const captureStates: Record<string, "PENDING" | "DENIED" | "LIVE"> = { ...own.captureStates };
+    for (const c of risky) {
+      if (isLive(c) && !seen(tx, captureFactKey(c.captureId))) captureStates[c.captureId] = "LIVE";
+      else if (c.status === "PENDING" && captureStates[c.captureId] !== "LIVE")
+        captureStates[c.captureId] = "PENDING";
+    }
+    const to = deriveStatus(own, captureStates);
     tx.setReservation({
       ...own,
       status: to,
       captureIdsSeen,
+      captureStates,
       attentionReason:
         to === "NEEDS_ATTENTION" ? (own.attentionReason ?? "RECONCILIATION_LIVE_CAPTURE") : null,
     });
@@ -1239,6 +1320,7 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
       attentionReason: null,
       cancelRequested: false,
       captureIdsSeen: [],
+      captureStates: {},
     };
     tx.s.reservations = { ...tx.s.reservations, [o.obligationId]: reservation };
     const operation: ProviderOperation = {
@@ -1370,6 +1452,11 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
     if (cmd.kind !== "RECONCILE_PROVIDER_STATE") return;
     applyReconciliation(tx, cmd.payload.reconciliation);
   },
+
+  BIND_PROVIDER_ORDER(tx, cmd) {
+    if (cmd.kind !== "BIND_PROVIDER_ORDER") return;
+    applyBinding(tx, cmd.payload.binding);
+  },
 };
 
 export interface ExecuteOutcome {
@@ -1429,7 +1516,9 @@ export function execute(state: WorldState, cmd: AuthorizedCommand): ExecuteOutco
       ? { ...cmd.payload.event, verification: null }
       : cmd.kind === "RECONCILE_PROVIDER_STATE"
         ? { ...cmd.payload.reconciliation, verification: null }
-        : cmd.payload;
+        : cmd.kind === "BIND_PROVIDER_ORDER"
+          ? { ...cmd.payload.binding, verification: null }
+          : cmd.payload;
   const fingerprint = sha256Hex(
     canonicalJson({ kind: cmd.kind, intent, origin, actorId, worldId: cmd.worldId }),
   );

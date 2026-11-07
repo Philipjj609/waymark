@@ -16,6 +16,7 @@ import { eur, imbalance } from "@fle/domain";
 import { describe, expect, it } from "vitest";
 import {
   availableCash,
+  boundOrderId,
   cmd,
   execute,
   fp30,
@@ -25,6 +26,7 @@ import {
   playerCommand,
   replay,
   run,
+  serverBindAfter,
   snapshot,
   type WorldState,
 } from "../src/index.js";
@@ -64,6 +66,7 @@ function fact(
     provider: "PAYPAL_SANDBOX",
     providerEventId: id,
     operationId: (op ?? "pop_none") as ProviderOperationId,
+    orderId: boundOrderId(w, (op ?? "pop_none") as ProviderOperationId),
     eventType: type,
     amount: { amountMinor: opts.amountMinor ?? 3000, currency: "EUR" },
     ...(opts.refundOf ? { refundedCaptureId: opts.refundOf } : {}),
@@ -80,8 +83,11 @@ const deliverCmd = (w: WorldState, ev: VerifiedProviderEvent): AuthorizedCommand
   }) as AuthorizedCommand;
 const deliver = (w: WorldState, ev: VerifiedProviderEvent) => execute(w, deliverCmd(w, ev));
 
-const player = (w: WorldState, body: Parameters<typeof playerCommand>[2]) =>
-  execute(w, playerCommand(w, fresh(), body));
+const player = (w: WorldState, body: Parameters<typeof playerCommand>[2]) => {
+  const out = execute(w, playerCommand(w, fresh(), body));
+  const bind = serverBindAfter(w, body.kind, out); // the server binds the order (D1b)
+  return bind ? { ...out, state: execute(out.state, bind).state } : out;
+};
 const cancel = (w: WorldState, o: ObligationId = PHONE) =>
   player(w, { kind: "REQUEST_CHECKOUT_CANCEL", payload: { obligationId: o } });
 const pay = (w: WorldState) =>
@@ -364,8 +370,11 @@ describe("NEEDS_ATTENTION: verified facts that cannot be applied are recorded (p
   it("REFUND_UNKNOWN_CAPTURE / REFUND_EXCEEDS_CAPTURE: refunds not tied to the settled capture", () => {
     let s = inFlight();
     s = deliver(s, fact(s, "CAPTURE_COMPLETED", "CAP-R")).state;
+    // A refund that names no capture is refused at the boundary (final pass R2).
+    expect(deliver(s, fact(s, "CAPTURE_REFUNDED", "RF-NONE")).result.error?.code).toBe(
+      "SCHEMA_INVALID",
+    );
     const outs = [
-      [deliver(s, fact(s, "CAPTURE_REFUNDED", "RF-NONE")), "REFUND_UNKNOWN_CAPTURE"],
       [
         deliver(s, fact(s, "CAPTURE_REFUNDED", "RF-OTHER", { refundOf: "CAP-OTHER" })),
         "REFUND_UNKNOWN_CAPTURE",
@@ -385,21 +394,21 @@ describe("NEEDS_ATTENTION: verified facts that cannot be applied are recorded (p
 
   it("REFUND_BEFORE_CAPTURE: recorded without touching the checkout; the capture still settles", () => {
     const s = inFlight();
-    const out = deliver(s, fact(s, "CAPTURE_REFUNDED", "RF-RB")); // names no capture
+    const out = deliver(s, fact(s, "CAPTURE_REFUNDED", "RF-RB", { refundOf: "CAP-RB" }));
     expectRecorded(s, out, "REFUND_BEFORE_CAPTURE");
     // Re-review N2: money was taken, so it blocks paying the bill, but the checkout is untouched.
     expect(out.state.attention[0]?.blocking).toBe(true);
     expect(statusOf(out.state)).toBe("AWAITING_PAYER"); // final review H2a
     const cap = deliver(out.state, fact(s, "CAPTURE_COMPLETED", "CAP-RB"));
     expect(cap.state.obligations[PHONE]?.state).toBe("SETTLED");
-    // It named no capture, so it cannot be applied: it stays open as (non-blocking) evidence.
-    expect(cap.state.attention[0]?.resolvedBy).toBeNull();
+    // The early refund named this capture, so it is applied once the capture settles (H2).
+    expect(cap.state.attention[0]?.resolvedBy).toBe("capture:CAP-RB");
   });
 
   it("is idempotent per fact: the same providerEventId twice gives one record", () => {
     let s = inFlight();
     s = deliver(s, fact(s, "CAPTURE_COMPLETED", "CAP-I")).state;
-    const ev = fact(s, "CAPTURE_REFUNDED", "CAP-I");
+    const ev = fact(s, "CAPTURE_REFUNDED", "CAP-I", { refundOf: "CAP-OTHER" });
     s = deliver(s, ev).state;
     const after = { events: s.events.length, attention: s.attention.length, version: s.version };
     for (let i = 0; i < 5; i++) {
@@ -441,8 +450,15 @@ function session() {
   let w = fp30();
   const exec = (c: AuthorizedCommand) => {
     recorded.push(c);
+    const before = w;
     const out = execute(w, c);
     w = out.state;
+    // The server binds the PayPal order right after it creates it (ADR-0008 D1b).
+    const bind = serverBindAfter(before, c.kind, out);
+    if (bind) {
+      recorded.push(bind);
+      w = execute(w, bind).state;
+    }
     return out;
   };
   return {
@@ -493,7 +509,7 @@ describe("regressions from the independent review of #81 (H1, H2, L1-L4)", () =>
     t.deliver(fact(t.w, "ORDER_VOIDED", "ORDER-1"));
     t.player(START);
     const op2 = opOf(t.w, PHONE) as string;
-    t.deliver(fact(t.w, "CAPTURE_REFUNDED", "REFUND-OP1", { op: op1 }));
+    t.deliver(fact(t.w, "CAPTURE_REFUNDED", "REFUND-OP1", { op: op1, refundOf: "CAP-OLD" }));
     expect(reasons(t.w)).toEqual(["REFUND_BEFORE_CAPTURE"]);
     expect(t.w.attention[0]?.reservationOperationId).toBeNull();
     expect(t.w.reservations[PHONE]?.status).toBe("AWAITING_PAYER");
@@ -600,7 +616,7 @@ describe("authority and determinism", () => {
   it("a player cannot forge a VERIFIED_EXTERNAL fact, neither through the engine nor the API schema", () => {
     const s = inFlight();
     const forged = {
-      ...deliverCmd(s, fact(s, "CAPTURE_REFUNDED", "CAP-FORGED")),
+      ...deliverCmd(s, fact(s, "CAPTURE_REFUNDED", "CAP-FORGED", { refundOf: "CAP-1" })),
       actorId: s.playerActorId,
       origin: "PLAYER",
     } as AuthorizedCommand;
@@ -625,7 +641,14 @@ describe("authority and determinism", () => {
     let w = fp30();
     const push = (c: AuthorizedCommand) => {
       recorded.push(c);
-      w = execute(w, c).state;
+      const before = w;
+      const out = execute(w, c);
+      w = out.state;
+      const bind = serverBindAfter(before, c.kind, out);
+      if (bind) {
+        recorded.push(bind);
+        w = execute(w, bind).state;
+      }
     };
     push(playerCommand(w, fresh(), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }));
     push(

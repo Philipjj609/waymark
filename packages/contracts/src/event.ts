@@ -40,6 +40,8 @@ export const DomainEventTypeSchema = z.enum([
   "PROVIDER_RECONCILED",
   /** 0.3.0: a verified PENDING/DENIED fact kept as evidence while the status did not change. */
   "PROVIDER_STATUS_FACT_RECORDED",
+  /** 0.3.0: the server bound the PayPal order id to a sandbox operation. No journal. */
+  "PROVIDER_ORDER_BOUND",
 ]);
 export type DomainEventType = z.infer<typeof DomainEventTypeSchema>;
 

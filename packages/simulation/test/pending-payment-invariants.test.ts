@@ -12,6 +12,7 @@ import { eur } from "@fle/domain";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  boundOrderId,
   cmd,
   execute,
   fp30,
@@ -44,6 +45,7 @@ function capture(
     provider: "PAYPAL_SANDBOX",
     providerEventId: id,
     operationId: lastOp(w, obligationId),
+    orderId: boundOrderId(w, lastOp(w, obligationId)),
     eventType: type,
     amount: { amountMinor, currency: "EUR" },
     mapping: { worldId: w.worldId, obligationId },
@@ -123,7 +125,11 @@ describe("a pending payment can never trap the player (I-014, ADR-0008 N1)", () 
     // 0.3.0: a denial is a status change, a refund before settlement is recorded for a human.
     // Neither settles, posts a journal or releases the earmark.
     for (const t of ["CAPTURE_DENIED", "CAPTURE_REFUNDED"] as const) {
-      const out = execute(w, provider(w, capture(w, PHONE, 3000, "CAP-X", t)));
+      const ev = capture(w, PHONE, 3000, "CAP-X", t);
+      const out = execute(
+        w,
+        provider(w, t === "CAPTURE_REFUNDED" ? { ...ev, refundedCaptureId: "CAP-X" } : ev),
+      );
       expect(out.result.status).toBe("ACCEPTED");
       expect(out.state.obligations[PHONE]?.state).toBe("DUE");
       expect(out.state.ledger.size).toBe(w.ledger.size);

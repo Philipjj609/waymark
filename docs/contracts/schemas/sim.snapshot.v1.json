@@ -864,6 +864,7 @@
               "CONFIRMED",
               "RESOLVED_REFUNDED",
               "KEPT_NOT_TERMINAL",
+              "KEPT_ORDER_UNBOUND",
               "KEPT_CAPTURE_PENDING",
               "KEPT_REFUNDED_CAPTURE",
               "KEPT_MULTIPLE_CAPTURES",
