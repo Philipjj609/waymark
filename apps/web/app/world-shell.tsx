@@ -31,7 +31,7 @@ function saveWorld(worldId: string | null): void {
   }
 }
 
-function describe(intent: Intent): string {
+function describeIntent(intent: Intent): string {
   switch (intent.kind) {
     case "ADVANCE_TIME":
       return `Advance to day ${intent.payload.targetDay}`;
@@ -122,7 +122,7 @@ export function WorldShell() {
         r.status === "ACCEPTED"
           ? `accepted, ${r.eventIds.length} event(s)`
           : `rejected: ${r.error?.code ?? "?"}`;
-      note(`${describe(intent)}: ${status}${out.duplicate ? " (duplicate)" : ""}`);
+      note(`${describeIntent(intent)}: ${status}${out.duplicate ? " (duplicate)" : ""}`);
       if (r.status === "REJECTED") setMessage(r.error?.message ?? "Rejected");
       else explainLatest(out.snapshot.worldId);
     } catch (err) {
