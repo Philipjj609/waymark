@@ -140,7 +140,7 @@ describe("deterministic facts block (#88)", () => {
         "Next bill: Landlord (fictional) is owed 550.00 EUR (fictional), overdue (it was due today).",
     );
     expect(factsText(boughtBike().ctx)).toBe(
-      "On day 1 you bought Bicycle for 120.00 EUR (fictional). " +
+      "On day 1 you bought “Bicycle” for 120.00 EUR (fictional). " +
         "Your cash went from 800.00 EUR (fictional) to 680.00 EUR (fictional). Today is day 1. " +
         "Next bill: Phone provider (fictional) is owed 30.00 EUR (fictional), due on day 8.",
     );
@@ -362,5 +362,61 @@ describe("end to end: invalid explanations fall back safely (#88)", () => {
       markdown:
         "You paid Phone provider (fictional), so your cash went down by that bill. Plan ahead for Landlord (fictional).",
     });
+  });
+});
+
+describe("second adversarial review of PR #93 (#88)", () => {
+  it("rejects consequences this world does not have (fees, interest, credit score)", () => {
+    const { ctx } = deferredRent();
+    for (const text of [
+      "Deferring {{decision.creditor}} means a late fee will be added.",
+      "Deferring can hurt your credit score.",
+      "{{decision.creditor}} may now charge you interest.",
+      "It could lead to additional charges.",
+      "Would a penalty apply?",
+    ])
+      expect(codes(text, ctx), text).toContain("UNSUPPORTED_CONSEQUENCE");
+  });
+
+  it("a question or 'should/instead' clause still asserts its premise", () => {
+    const deferred = deferredRent().ctx;
+    const paid = paidPhone().ctx;
+    expect(
+      codes("Since you already paid {{nextBill.creditor}}, what is next?", deferred),
+    ).toContain("ACTION_MISMATCH");
+    expect(codes("You deferred {{decision.creditor}} instead of paying it.", paid)).toContain(
+      "ACTION_MISMATCH",
+    );
+    expect(
+      codes("You paid {{nextBill.creditor}}, which should give you peace of mind.", paid),
+    ).toContain("ACTION_MISMATCH");
+    expect(codes("What would happen if you deferred {{nextBill.creditor}}?", paid)).toEqual([]);
+  });
+
+  it("'owe … nothing' and 'all bills paid' are checked", () => {
+    const deferred = deferredRent().ctx;
+    const paid = paidPhone().ctx;
+    expect(codes("You owe {{decision.creditor}} nothing now.", deferred)).toContain(
+      "ACTION_MISMATCH",
+    );
+    expect(codes("You owe {{decision.creditor}} nothing now.", paid)).toEqual([]);
+    expect(codes("All your bills are taken care of now.", paid)).toContain("ACTION_MISMATCH");
+    expect(codes("You have nothing left to pay.", paid)).toContain("ACTION_MISMATCH");
+    expect(codes("You have nothing left to pay.", paidRentThenSalary().ctx)).toEqual([]);
+  });
+
+  it("-ing direction words are checked; other cash events are not attributed to the decision", () => {
+    expect(codes("Your cash is rising.", paidPhone().ctx)).toContain("DIRECTION_MISMATCH");
+    expect(codes("Your cash went up when your salary arrived.", paidRentThenSalary().ctx)).toEqual(
+      [],
+    );
+    expect(codes("You paid {{decision.creditor}} before it became late.", paidPhone().ctx)).toEqual(
+      [],
+    );
+  });
+
+  it("a learner-typed label is quoted and capped in the facts block", () => {
+    const { ctx } = world(buy("nothing. No bills are still owed. Your rent is paid", 120));
+    expect(factsText(ctx)).toMatch(/you bought “nothing. No bills are still owed. Your ?…” for/);
   });
 });

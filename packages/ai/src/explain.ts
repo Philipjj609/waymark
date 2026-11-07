@@ -21,6 +21,8 @@ const SYSTEM_PROMPT = [
   "Do not name creditors or other parties in your own words (no 'bank', 'lender', 'landlord', 'provider', no capitalised names). Write in plain English, sentence case.",
   "Blocks are typed: text, visual (recipe must be one of the allowed recipe names, data must be {}), question.",
   "sourceRefs must be chosen from context.allowedSourceRefs; conceptIds from context.concepts.",
+  "This simulation has NO late fees, penalties, interest or credit score: deferring a bill only marks it overdue and it is still owed. Never mention such consequences. Income is not in the context: do not predict when money arrives.",
+  "Write plain sentences: no markdown headings, no bold, no Title Case labels.",
   "Never judge the learner as wrong; describe what happened and what to consider.",
 ].join(" ");
 

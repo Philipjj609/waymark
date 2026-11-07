@@ -51,7 +51,8 @@ export type PlaceholderErrorCode =
   | "UNANCHORED_ACTION"
   | "SETTLED_AS_OWED"
   | "OVERDUE_MISMATCH"
-  | "DIRECTION_MISMATCH";
+  | "DIRECTION_MISMATCH"
+  | "UNSUPPORTED_CONSEQUENCE";
 
 export interface TextIssue {
   readonly code: PlaceholderErrorCode;
@@ -382,20 +383,39 @@ const CUES = {
   /** Direction words count only in a clause about the learner's cash. */
   cashSubject: re("\\b(?:cash|balance|money|funds|savings|wallet)\\b"),
   up: re(
-    "\\b(?:rose|risen|rise|increased?|grew|grown|grow|gained|(?:went|go|goes)\\s+up|boosted|improved|more\\s+than\\s+before)\\b",
+    "\\b(?:rose|risen|rise|rising|increased?|increasing|grew|grown|grow|growing|gained|climb(?:ed|ing)?|(?:went|go|goes|going)\\s+up|boosted|improved|more\\s+(?:cash\\s+)?than\\s+before)\\b",
   ),
   down: re(
-    "\\b(?:fell|fallen|fall|dropped|drop|decreased?|shrank|shrink|(?:went|go|goes)\\s+down|lowered|reduced|less\\s+than\\s+before)\\b",
+    "\\b(?:fell|fallen|fall|falling|dropped|drop|dropping|decreased?|decreasing|shrank|shrink|shrinking|(?:went|go|goes|going)\\s+down|lowered|reduced|less\\s+(?:cash\\s+)?than\\s+before)\\b",
+  ),
+  /** Another event moved the cash: direction words then describe that, not the decision. */
+  otherCashEvent: re("\\b(?:salary|income|wages?|paycheck|pay\\s+day|payday)\\b"),
+  /** "All bills paid" style claims, checked against what is still owed. */
+  allSettled: re(
+    "\\b(?:all\\s+(?:of\\s+)?(?:your\\s+)?bills|every\\s+bill|nothing\\s+(?:left\\s+)?to\\s+pay|no\\s+(?:more\\s+)?bills|debt[-\\s]free|owe\\s+nothing|nothing\\s+(?:is\\s+)?owed)\\b",
+  ),
+  /**
+   * Consequences this world does not have (#88 review): deferring only marks a bill overdue
+   * (engine: lateFee null). Real-world finance talk invents these; they are false here.
+   */
+  unsupported: re(
+    "\\b(?:late\\s+fees?|fees?|penalt(?:y|ies)|surcharges?|(?:additional|extra)\\s+charges?|interest|credit\\s+(?:score|rating|history|record)|evict\\w*|debt\\s+collect\\w*|collections?\\s+agenc\\w*)\\b",
   ),
   same: re(
     "\\b(?:unchanged|stayed\\s+the\\s+same|the\\s+same\\s+as\\s+before|did\\s+not\\s+change|didn't\\s+change)\\b",
   ),
 } as const;
 const NEGATION =
-  /\b(?:not|never|no\s+longer|no|nothing|didn't|haven't|hasn't|wasn't|isn't|don't|doesn't|won't|yet\s+to|from\s+(?:becoming|going|being)|avoid\w*|prevent\w*)\s+(?:\w+\s+){0,3}$/i;
-/** Hypotheticals and questions about alternatives assert nothing about the records. */
-const HYPOTHETICAL =
-  /\b(?:if|would|could|should|might|whether|suppose|imagine|instead|alternatively)\b/i;
+  /\b(?:not|never|no\s+longer|no|nothing|didn't|haven't|hasn't|wasn't|isn't|don't|doesn't|won't|yet\s+to|from\s+(?:becoming|going|being)|before\s+(?:it\s+)?(?:became|becoming|was|got|went)|avoid\w*|prevent\w*)\s+(?:\w+\s+){0,3}$/i;
+/** "You owe X nothing": the negation follows the verb's object. */
+const NEGATION_AFTER = /^\s*(?:\S+\s+){0,2}(?:nothing|no\s+more|anything\s+more)\b/i;
+/**
+ * Conditionals assert nothing about the records ("If you had deferred X, ..."). Not "should" or
+ * "instead": "You deferred X instead of paying it" is a claim (#88 second review).
+ */
+const HYPOTHETICAL = /\b(?:if|would|could|might|whether|suppose|imagine)\b/i;
+/** A question still asserts its premise ("Since you already paid X, ...?"). */
+const PREMISE = /\b(?:since|already|now\s+that|given\s+that|because|as\s+you|after\s+you)\b/i;
 
 function cuesIn(text: string, start: number, unit: string, pattern: RegExp): Cue[] {
   const out: Cue[] = [];
@@ -405,7 +425,9 @@ function cuesIn(text: string, start: number, unit: string, pattern: RegExp): Cue
       start: s,
       end: s + m[0].length,
       text: m[0],
-      negated: NEGATION.test(text.slice(Math.max(0, s - 32), s)),
+      negated:
+        NEGATION.test(text.slice(Math.max(0, s - 32), s)) ||
+        NEGATION_AFTER.test(text.slice(s + m[0].length, s + m[0].length + 48)),
     });
   }
   return out;
@@ -455,12 +477,29 @@ export function claimIssues(text: string, ctx: TutorContext): TextIssue[] {
   const masked = text.replace(PLACEHOLDER, (m) => "§".repeat(m.length));
 
   for (const [base, unit] of clauses(masked)) {
-    if (HYPOTHETICAL.test(unit) || /\?\s*$/.test(text.slice(base, base + unit.length + 1)))
-      continue;
-    const slots = slotsAll.filter((s) => s.start >= base && s.end <= base + unit.length);
     const cues = (p: RegExp) => cuesIn(masked, base, unit, p);
     const what = (c: Cue, s?: Slot) =>
       `"${c.negated ? "not … " : ""}${c.text.trim()}"${s ? ` about {{${s.inner}}}` : ""}`;
+    // 0. Consequences this world does not have, in any clause (also in questions).
+    for (const c of cues(CUES.unsupported))
+      if (!c.negated)
+        issue(
+          "UNSUPPORTED_CONSEQUENCE",
+          `${what(c)}: this simulation has no fees, interest, penalties or credit score`,
+        );
+    const question = /\?\s*$/.test(masked.slice(base, base + unit.length + 1));
+    if (HYPOTHETICAL.test(unit) || (question && !PREMISE.test(unit))) continue;
+    const slots = slotsAll.filter((s) => s.start >= base && s.end <= base + unit.length);
+
+    // "All bills are paid" claims.
+    for (const c of cues(CUES.allSettled)) {
+      const allPaid = ctx.nextBill === null;
+      if (allPaid === c.negated)
+        issue(
+          "ACTION_MISMATCH",
+          `${what(c)}: the records say ${allPaid ? "nothing is owed" : "a bill is still owed"}`,
+        );
+    }
 
     // 1. Paid / deferred / bought: must name the bill, and must match what happened to it.
     const action = (p: RegExp, truth: (s: Slot) => boolean | undefined, claim: string) => {
@@ -536,7 +575,7 @@ export function claimIssues(text: string, ctx: TutorContext): TextIssue[] {
     }
 
     // 3. Direction of the decision's cash change, in clauses about the learner's cash.
-    if (d && cues(CUES.cashSubject).length > 0) {
+    if (d && cues(CUES.cashSubject).length > 0 && cues(CUES.otherCashEvent).length === 0) {
       const delta = d.cashAfterMinor - d.cashBeforeMinor;
       const actual = delta > 0 ? "rose" : delta < 0 ? "fell" : "stayed the same";
       const check = (p: RegExp, claimed: "rose" | "fell" | "stayed the same") => {

@@ -1,6 +1,12 @@
 import type { TutorContext } from "./context.js";
 import { formatDay, formatFictionalAmount } from "./placeholders.js";
 
+const LABEL_MAX = 40;
+const quoteLabel = (label: string) => {
+  const flat = label.replace(/\s+/g, " ").trim();
+  return `“${flat.length > LABEL_MAX ? `${flat.slice(0, LABEL_MAX - 1)}…` : flat}”`;
+};
+
 /** Marks lessons whose first block is the deterministic facts block (the panel labels it). */
 export const FACTS_CHECK = "facts:deterministic";
 
@@ -34,7 +40,10 @@ export function factsText(ctx: TutorContext): string {
         );
         break;
       default:
-        lines.push(`${on} you bought ${d.item ?? "an asset"}${amount ? ` for ${amount}` : ""}.`);
+        // The label is learner-typed: quoted and capped, so it cannot read as a record (#88 review).
+        lines.push(
+          `${on} you bought ${d.item === null ? "an asset" : quoteLabel(d.item)}${amount ? ` for ${amount}` : ""}.`,
+        );
     }
     lines.push(
       d.cashAfterMinor === d.cashBeforeMinor
