@@ -17,6 +17,7 @@ import {
   fallbackLesson,
   figureIssues,
   formatFictionalAmount,
+  LESSON_DRAFT_JSON_SCHEMA,
   NebiusTutorProvider,
   nameIssues,
   type TutorContext,
@@ -558,5 +559,63 @@ describe("the model never writes figures (#84 review): placeholders only", () =>
         for (const t of strings) expect([...figureIssues(t), ...nameIssues(t)], t).toEqual([]);
       }
     }
+  });
+});
+
+describe("structured outputs (#6 probe)", () => {
+  it("the draft schema is the lesson contract minus server-owned validation/provenance", () => {
+    const s = LESSON_DRAFT_JSON_SCHEMA as {
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+    expect(Object.keys(s.properties)).not.toContain("validation");
+    expect(Object.keys(s.properties)).not.toContain("provenance");
+    expect(s.required).toEqual(expect.arrayContaining(["blocks", "conceptIds", "sourceRefs"]));
+    // Nebius' grammar engine rejects `propertyNames` (HTTP 400); visual data is forced to {}.
+    expect(JSON.stringify(s)).not.toContain("propertyNames");
+  });
+
+  const capture = () => {
+    let body: Record<string, unknown> = {};
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+    return { fetchImpl, body: () => body };
+  };
+  const req = {
+    stage: "generate" as const,
+    system: "s",
+    user: "u",
+    responseSchema: LESSON_DRAFT_JSON_SCHEMA,
+  };
+  const signal = () => new AbortController().signal;
+
+  it("sends response_format json_schema by default when the request carries a schema", async () => {
+    const c = capture();
+    await new NebiusTutorProvider({
+      apiKey: "k",
+      model: "m",
+      baseUrl: "https://x.test/v1",
+      fetchImpl: c.fetchImpl,
+    }).complete(req, { signal: signal() });
+    expect(c.body().response_format).toMatchObject({
+      type: "json_schema",
+      json_schema: { name: "lesson_draft" },
+    });
+  });
+
+  it("falls back to json_object for models without structured outputs", async () => {
+    const c = capture();
+    await new NebiusTutorProvider({
+      apiKey: "k",
+      model: "m",
+      baseUrl: "https://x.test/v1",
+      fetchImpl: c.fetchImpl,
+      structuredOutputs: false,
+    }).complete(req, { signal: signal() });
+    expect(c.body().response_format).toEqual({ type: "json_object" });
   });
 });

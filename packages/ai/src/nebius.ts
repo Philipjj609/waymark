@@ -6,6 +6,12 @@ export interface NebiusConfig {
   readonly model: string;
   readonly baseUrl: string;
   readonly fetchImpl?: typeof fetch;
+  /**
+   * Send the request's JSON Schema as `response_format: json_schema` (structured outputs). Default
+   * true; set false for a model whose `supported_features` lack `structured_outputs`, which then
+   * gets plain `json_object` mode.
+   */
+  readonly structuredOutputs?: boolean;
   /** Injected clock for the rate-limit cool-down (tests). Defaults to Date.now. */
   readonly now?: () => number;
 }
@@ -42,7 +48,13 @@ export class NebiusTutorProvider implements TutorProvider {
       body: JSON.stringify({
         model: this.cfg.model,
         temperature: 0,
-        response_format: { type: "json_object" },
+        response_format:
+          this.cfg.structuredOutputs !== false && request.responseSchema
+            ? {
+                type: "json_schema",
+                json_schema: { name: "lesson_draft", schema: request.responseSchema },
+              }
+            : { type: "json_object" },
         messages: [
           { role: "system", content: request.system },
           { role: "user", content: request.user },

@@ -1,6 +1,7 @@
 import type { DomainEvent, LessonResponse, WorldSnapshot } from "@fle/contracts";
 import type { LearnerState } from "@fle/learning";
 import { buildTutorContext, type TutorContext } from "./context.js";
+import { LESSON_DRAFT_JSON_SCHEMA } from "./draft-schema.js";
 import { fallbackLesson } from "./fallback.js";
 import { PROMPT_VERSION, type TutorProvider, type TutorRequest } from "./types.js";
 import { type ValidationFailure, validateModelOutput } from "./validate.js";
@@ -29,6 +30,7 @@ const request = (
 ): TutorRequest => ({
   stage,
   system: SYSTEM_PROMPT,
+  responseSchema: LESSON_DRAFT_JSON_SCHEMA,
   user: JSON.stringify({
     task: stage === "generate" ? "explain_outcome" : "repair_previous_output",
     promptVersion: PROMPT_VERSION,
