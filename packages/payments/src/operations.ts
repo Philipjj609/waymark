@@ -266,20 +266,18 @@ export class SandboxCheckout {
     // Defence in depth (#95 review L5): the order must carry this operation's id.
     if (r.value.referenceId !== rec.operationId && r.value.customId !== rec.operationId)
       return { ok: false, reason: "OPERATION_MISMATCH" };
-    // A server read is authoritative about captures: record what it shows (#95 re-review Q5).
+    // A server read may only ADD money signals to the record (CONFIRMED, PENDING), through merge().
+    // It never refuses or rotates the capture id: a read can be older than an in-flight capture,
+    // and a stale "declined only" read must not hide money (#95 re-review, R1-R3). A pending capture
+    // that is later declined is resolved by D1b's reconciliation, not here.
     const order = r.value;
     const live = order.captures.filter((x) => x.status !== "DECLINED" && x.status !== "FAILED");
-    const fresh = this.newRequestId();
-    await this.store.update(operationId, (c) => {
-      if (live.length === 1 && live[0]?.status === "COMPLETED")
-        return { ...c, captureState: merge(c.captureState, "CONFIRMED") };
-      if (live.length === 1 && live[0]?.status === "PENDING")
-        return { ...c, captureState: merge(c.captureState, "PENDING") };
-      // Only declined attempts, nothing holding money: the buyer may retry with a fresh capture id.
-      if (live.length === 0 && order.captures.length > 0 && c.captureState !== "CONFIRMED")
-        return { ...c, captureState: "REFUSED", captureRequestId: fresh };
-      return c;
-    });
+    const seen = live.length === 1 ? live[0]?.status : undefined;
+    if (seen === "COMPLETED" || seen === "PENDING")
+      await this.store.update(operationId, (c) => ({
+        ...c,
+        captureState: merge(c.captureState, seen === "COMPLETED" ? "CONFIRMED" : "PENDING"),
+      }));
     const observed = observedCaptureOf(order);
     if (!observed) return { ok: false, reason: "MULTIPLE_CAPTURES" };
     return verifyCapture(

@@ -1308,7 +1308,7 @@ describe("second re-review of #95: stale money signals, authoritative reads", ()
     });
   });
 
-  it("Q5: verify() records an authoritative read: declined-only after PENDING becomes retryable", async () => {
+  it("R1-R3: a declined-only read never refuses or rotates (a stale read must not hide money)", async () => {
     const store = new InMemoryOperationStore();
     const opId = "pop_q5" as ProviderOperationId;
     await seed(store, opId, "PENDING");
@@ -1342,7 +1342,26 @@ describe("second re-review of #95: stale money signals, authoritative reads", ()
     );
     expect((await co.verify(opId, "2026-11-07T12:00:00Z")).ok).toBe(false);
     const rec = await store.get(opId);
-    expect(rec?.captureState).toBe("REFUSED");
-    expect(rec?.captureRequestId).not.toBe(RID(12));
+    expect(rec?.captureState).toBe("PENDING");
+    expect(rec?.captureRequestId).toBe(RID(12));
+  });
+
+  it("verify() adds money signals from the read: a completed capture marks CONFIRMED", async () => {
+    const { pp, client } = setup();
+    const store = new InMemoryOperationStore();
+    const co = new SandboxCheckout(client, store, nextRid);
+    const opId = "pop_q6" as ProviderOperationId;
+    const s = await co.start({ operationId: opId, ...base, amount: EUR(3000) });
+    const id = s.kind === "OK" ? s.value.orderId : "";
+    pp.approve(id);
+    // The capture happened through another channel; this record never saw its answer.
+    await new PayPalSandboxClient({
+      clientId: CLIENT_ID,
+      clientSecret: SECRET,
+      fetch: pp.fetch as typeof fetch,
+    }).captureOrder(id, RID(999));
+    expect((await store.get(opId))?.captureState).toBe("NOT_STARTED");
+    expect((await co.verify(opId, "2026-11-07T12:00:00Z")).ok).toBe(true);
+    expect((await store.get(opId))?.captureState).toBe("CONFIRMED");
   });
 });
