@@ -87,11 +87,27 @@ export function replayHeadHash(worldId: string, sent: readonly CommandEnvelope[]
   return { headHash: state.headHash, version: state.version };
 }
 
+/**
+ * Both money forms the app renders: the UI's "€770.00" and the lesson's "770.00 EUR"
+ * (the facts block). Same shape as apps/web/lib/money.ts MONEY_IN_TEXT, plus the label.
+ */
+const MONEY =
+  /(?:[€$£¥]\s?-?\d+(?:[.,]\d{1,2})?|-?\d+(?:[.,]\d{1,2})?\s?(?:EUR|USD|GBP|JPY)\b)(\s*\(fictional\))?/g;
+
 /** Every amount of money on screen must be labelled fictional (invariant 7). */
 export async function expectAllMoneyFictional(page: Page) {
   // biome-ignore lint/performance/useDomNodeTextContent: we want only the RENDERED text a person sees (innerText), not hidden nodes.
   const text = await page.locator("body").innerText();
-  const amounts = text.match(/€\d+(?:\.\d{2})?(?: \(fictional\))?/g) ?? [];
+  const amounts = [...text.matchAll(MONEY)];
   expect(amounts.length).toBeGreaterThan(0);
-  expect(amounts.filter((a) => !a.endsWith("(fictional)"))).toEqual([]);
+  expect(amounts.filter((m) => !m[1]).map((m) => m[0])).toEqual([]);
+}
+
+/**
+ * Wait until the lesson panel shows the explanation of THIS action (its deterministic facts
+ * line), not a still-loading panel or the previous action's lesson.
+ */
+export async function expectLessonAbout(page: Page, factsLine: string | RegExp) {
+  await expect(page.getByText("Preparing an explanation…")).toHaveCount(0);
+  await expect(page.locator('[data-facts="deterministic"]')).toContainText(factsLine);
 }

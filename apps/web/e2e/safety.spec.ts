@@ -21,15 +21,25 @@ test.describe("safety rules in the running app", () => {
 
     const stranger = await browser.newContext();
     try {
-      // Reading: the world simply does not exist for another session.
+      // The stranger gets a real session of its own first (so a 404 below means isolation, not
+      // "no cookie"), and can read its own world.
+      const strangerPage = await stranger.newPage();
+      await strangerPage.goto("/");
+      const [own] = await Promise.all([
+        strangerPage.waitForResponse(
+          (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/worlds",
+        ),
+        strangerPage.getByRole("button", { name: "Start a new FP-30 world" }).click(),
+      ]);
+      await expect(strangerPage.getByRole("heading", { name: "Day 1", exact: true })).toBeVisible();
+      const ownId = ((await own.json()) as { worldId: string }).worldId;
+      expect((await stranger.request.get(`/api/worlds/${ownId}`)).status()).toBe(200);
+
+      // Reading: your world simply does not exist for that session.
       const read = await stranger.request.get(`/api/worlds/${worldId}`);
       expect(read.status()).toBe(404);
 
-      // Writing: a well-formed, same-origin command from another session is "not found" too.
-      const strangerPage = await stranger.newPage();
-      await strangerPage.goto("/");
-      await strangerPage.getByRole("button", { name: "Start a new FP-30 world" }).click();
-      await expect(strangerPage.getByRole("heading", { name: "Day 1", exact: true })).toBeVisible();
+      // Writing: a well-formed, same-origin command from that session is "not found" too.
       const write = await stranger.request.post("/api/commands", {
         headers: { origin: baseURL as string, "content-type": "application/json" },
         data: {

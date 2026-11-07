@@ -4,6 +4,7 @@ import {
   captureCommands,
   cash,
   expectAllMoneyFictional,
+  expectLessonAbout,
   obligationRow,
   replayHeadHash,
   sendVia,
@@ -47,6 +48,12 @@ test("fictional FP-30 month: pay, defer, salary, pay overdue, explanation, reloa
   await expect(page.locator('[data-facts="deterministic"]')).toContainText(
     "From your world's records",
   );
+  // ...and it is the lesson about THIS payment, not the previous advance (newest-wins guard).
+  await expectLessonAbout(page, /you paid Phone provider/);
+  await expectLessonAbout(
+    page,
+    "Your cash went from 800.00 EUR (fictional) to 770.00 EUR (fictional)",
+  );
 
   // Day 10: rent falls due. Defer it: it becomes OVERDUE and no money moves.
   await advanceTo(page, 10);
@@ -56,6 +63,8 @@ test("fictional FP-30 month: pay, defer, salary, pay overdue, explanation, reloa
   await expect(stateCell(rent)).toHaveText("OVERDUE");
   await expect(cash(page)).toHaveText("€770.00 (fictional)");
   await expect(page.getByRole("button", { name: /^Advance to day/ })).toBeEnabled();
+  await expectLessonAbout(page, /you deferred the bill from Landlord/);
+  await expectLessonAbout(page, "Your cash stayed at 770.00 EUR (fictional)");
 
   // Day 15: the net salary arrives; the overdue rent is still owed and can now be paid.
   await advanceTo(page, 15);
@@ -66,7 +75,13 @@ test("fictional FP-30 month: pay, defer, salary, pay overdue, explanation, reloa
   await expect(cash(page)).toHaveText("€1120.00 (fictional)");
   await expect(stateCell(rent)).toHaveText("SETTLED");
 
-  // The fictional path is labelled as such and never presented as a PayPal payment.
+  // The fictional path is labelled as such and never presented as a PayPal payment. Wait for the
+  // final lesson first, so these checks also cover the tutor's text (not a loading panel).
+  await expectLessonAbout(page, /you paid Landlord/);
+  await expectLessonAbout(
+    page,
+    "Your cash went from 1670.00 EUR (fictional) to 1120.00 EUR (fictional)",
+  );
   await expectAllMoneyFictional(page);
   await expect(page.getByText(/paypal|sandbox/i)).toHaveCount(0);
 

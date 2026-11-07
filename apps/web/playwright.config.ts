@@ -35,7 +35,10 @@ export default defineConfig({
   webServer: {
     command: `pnpm exec next build --webpack && pnpm exec next start --port ${PORT}`,
     url: `${BASE_URL}/api/health`,
-    reuseExistingServer: !process.env.CI,
+    // Never attach to a server that is already running: it could be another worktree's build or
+    // a dev server with a real .env (Postgres, Nebius). If the port is taken Playwright fails
+    // loudly; pick another with E2E_PORT (e.g. one per worktree).
+    reuseExistingServer: false,
     timeout: 300_000,
     stdout: "pipe",
     stderr: "pipe",
