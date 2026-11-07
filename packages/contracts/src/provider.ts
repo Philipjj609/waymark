@@ -126,6 +126,11 @@ export const ProviderReconciliationSchema = z
                 captureId: z.string().min(1).max(128),
                 status: ObservedCaptureStatusSchema,
                 amount: PositiveMoneySchema,
+                /**
+                 * Total refunded so far, as PayPal reports it. Needed for PARTIALLY_REFUNDED: without
+                 * it the engine cannot match the refunds it has seen and keeps the attention open.
+                 */
+                refundedAmount: PositiveMoneySchema.optional(),
               })
               .strict(),
           )

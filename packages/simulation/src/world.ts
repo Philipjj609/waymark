@@ -468,7 +468,7 @@ export function snapshot(state: WorldState): WorldSnapshot {
       externalPayment: externalPaymentOf(op),
       refundedAmount: op.refunded,
     })),
-    reconciliations: state.reconciliations.map((x) => ({ ...x })),
+    reconciliations: state.reconciliations.map(({ fingerprint: _f, ...x }) => ({ ...x })),
     availableCash: entityIds.map((entityId) => ({
       entityId,
       amount: availableCash(state, entityId),

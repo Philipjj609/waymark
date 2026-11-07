@@ -26,6 +26,11 @@ Additive (minor) relative to 0.2.0:
     (both unreleased);
   - snapshot adds `providerOperations[]` (with `externalPayment`: `NONE | CAPTURED | PARTIALLY_REFUNDED | REFUNDED`) and
     `reconciliations[]`; events `PROVIDER_REFUND_RECORDED`, `PROVIDER_RECONCILED`; error `PROVIDER_ATTENTION_OPEN`.
+- Folded in before release (final review of #98, 7 Nov; still 0.3.0): reconciliation outcome `RESOLVED_REFUNDED`;
+  observed capture adds optional `refundedAmount`; attention records add `refundedCaptureId`, accept eventType
+  `RECONCILIATION`, and `resolvedBy` may also be `capture:<captureId>`; reasons `OUT_OF_ORDER_STATUS`,
+  `RECONCILIATION_LIVE_CAPTURE`; event `PROVIDER_STATUS_FACT_RECORDED`. A reused `reconciliationId` with a different
+  observation is `IDEMPOTENCY_CONFLICT`.
 - `sim.snapshot.v1`: each `reservations[]` item adds `realm` (`PAYPAL_SANDBOX`), `status`, `attentionReason`; the snapshot
   adds `attention[]`. Required fields, same rule as 0.2.0: the engine is the only producer; strict consumers update together.
 

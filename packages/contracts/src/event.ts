@@ -38,6 +38,8 @@ export const DomainEventTypeSchema = z.enum([
   "PROVIDER_REFUND_RECORDED",
   /** 0.3.0: a server reconciliation attempt and its outcome (settlement/release events follow). */
   "PROVIDER_RECONCILED",
+  /** 0.3.0: a verified PENDING/DENIED fact kept as evidence while the status did not change. */
+  "PROVIDER_STATUS_FACT_RECORDED",
 ]);
 export type DomainEventType = z.infer<typeof DomainEventTypeSchema>;
 

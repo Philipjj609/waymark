@@ -597,6 +597,8 @@ describe("property: reservations never overdraw, and each bill settles at most o
           "pending" as const,
           "two" as const,
           "approved" as const,
+          "refunded" as const,
+          "partial" as const,
         ),
         id: fc.constantFrom("A", "B", "C"),
       }),
@@ -629,10 +631,16 @@ describe("property: reservations never overdraw, and each bill settles at most o
           if (s.k === "reconcile") {
             const op = lastOp(w, s.o) ?? "pop_stale";
             const amount = { amountMinor: AMOUNT[s.o] ?? 1, currency: "EUR" as const };
-            const c = (id: string, status: "COMPLETED" | "PENDING") => ({
+            const c = (
+              id: string,
+              status: "COMPLETED" | "PENDING" | "REFUNDED" | "PARTIALLY_REFUNDED",
+            ) => ({
               captureId: id,
               status,
               amount,
+              ...(status === "PARTIALLY_REFUNDED"
+                ? { refundedAmount: { amountMinor: 1000, currency: "EUR" as const } }
+                : {}),
             });
             const [orderStatus, captures] = {
               voided: ["VOIDED", []] as const,
@@ -640,6 +648,8 @@ describe("property: reservations never overdraw, and each bill settles at most o
               pending: ["APPROVED", [c(`capture-B-${s.o}-${op}`, "PENDING")]] as const,
               two: ["COMPLETED", [c("X1", "COMPLETED"), c("X2", "COMPLETED")]] as const,
               approved: ["APPROVED", []] as const,
+              refunded: ["COMPLETED", [c(`capture-A-${s.o}-${op}`, "REFUNDED")]] as const,
+              partial: ["COMPLETED", [c(`capture-A-${s.o}-${op}`, "PARTIALLY_REFUNDED")]] as const,
             }[s.shape];
             apply({
               ...playerCommand(w, cmd(seq++), {
@@ -647,7 +657,9 @@ describe("property: reservations never overdraw, and each bill settles at most o
                 payload: {
                   reconciliation: {
                     provider: "PAYPAL_SANDBOX",
-                    reconciliationId: `rc-${s.id}-${s.shape}-${op}`,
+                    // No shape in the id: the same id is reused with other observations,
+                    // which must be refused (IDEMPOTENCY_CONFLICT), never silently ignored.
+                    reconciliationId: `rc-${s.id}-${op}`,
                     operationId: op as ProviderOperationId,
                     mapping: { worldId: w.worldId, obligationId: s.o },
                     observed: { orderId: `order-${op}`, orderStatus, captures: [...captures] },
@@ -680,7 +692,21 @@ describe("property: reservations never overdraw, and each bill settles at most o
                 refund: "CAPTURE_REFUNDED",
               } as const
             )[s.k];
-            apply(deliver(w, event(w, s.o, op, `${s.k}-${s.id}-${s.o}-${op}`, type)));
+            const ev = event(w, s.o, op, `${s.k}-${s.id}-${s.o}-${op}`, type);
+            // Refunds name the capture a capture step with the same letter would use, so refunds
+            // arrive before and after their capture (final review H2).
+            apply(
+              deliver(
+                w,
+                s.k === "refund"
+                  ? {
+                      ...ev,
+                      refundedCaptureId: `capture-${s.id}-${s.o}-${op}`,
+                      amount: { amountMinor: 1000, currency: "EUR" },
+                    }
+                  : ev,
+              ),
+            );
           } else {
             const body =
               s.k === "advance"

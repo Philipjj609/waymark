@@ -509,6 +509,8 @@
                   "REFUND_UNKNOWN_CAPTURE",
                   "REFUND_EXCEEDS_CAPTURE",
                   "STALE_OPERATION_STATUS",
+                  "OUT_OF_ORDER_STATUS",
+                  "RECONCILIATION_LIVE_CAPTURE",
                   "RESERVATION_NEEDS_ATTENTION"
                 ]
               },
@@ -556,7 +558,8 @@
               "CAPTURE_DENIED",
               "CAPTURE_REFUNDED",
               "ORDER_VOIDED",
-              "CAPTURE_PENDING"
+              "CAPTURE_PENDING",
+              "RECONCILIATION"
             ]
           },
           "operationId": {
@@ -585,6 +588,8 @@
               "REFUND_UNKNOWN_CAPTURE",
               "REFUND_EXCEEDS_CAPTURE",
               "STALE_OPERATION_STATUS",
+              "OUT_OF_ORDER_STATUS",
+              "RECONCILIATION_LIVE_CAPTURE",
               "RESERVATION_NEEDS_ATTENTION"
             ]
           },
@@ -638,6 +643,18 @@
               {
                 "type": "string",
                 "minLength": 1,
+                "maxLength": 160
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "refundedCaptureId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
                 "maxLength": 128
               },
               {
@@ -657,7 +674,8 @@
           "reservationOperationId",
           "day",
           "blocking",
-          "resolvedBy"
+          "resolvedBy",
+          "refundedCaptureId"
         ],
         "additionalProperties": false
       }
@@ -842,6 +860,7 @@
               "SETTLED",
               "RELEASED",
               "CONFIRMED",
+              "RESOLVED_REFUNDED",
               "KEPT_NOT_TERMINAL",
               "KEPT_CAPTURE_PENDING",
               "KEPT_REFUNDED_CAPTURE",

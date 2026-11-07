@@ -139,6 +139,13 @@ export const AttentionReasonSchema = z.enum([
   "REFUND_EXCEEDS_CAPTURE",
   /** A PENDING/DENIED fact of an operation that is no longer the active checkout (audit only). */
   "STALE_OPERATION_STATUS",
+  /** A CAPTURE_PENDING for a capture already verified DENIED: never regresses the status. */
+  "OUT_OF_ORDER_STATUS",
+  /**
+   * A reconciliation kept everything although the read-back shows a live or pending capture:
+   * money may have been taken, so the obligation is blocked until a reconciliation resolves it.
+   */
+  "RECONCILIATION_LIVE_CAPTURE",
   /** Any further fact for a reservation that already NEEDS_ATTENTION: a human resolves it. */
   "RESERVATION_NEEDS_ATTENTION",
 ]);
@@ -148,6 +155,7 @@ export type AttentionReason = z.infer<typeof AttentionReasonSchema>;
 export const AttentionRecordSchema = z
   .object({
     realm: z.literal("PAYPAL_SANDBOX"),
+    /** The provider fact's id, or the reconciliationId for eventType RECONCILIATION. */
     providerEventId: z.string().min(1).max(128),
     eventType: z.enum([
       "CAPTURE_COMPLETED",
@@ -155,6 +163,8 @@ export const AttentionRecordSchema = z
       "CAPTURE_REFUNDED",
       "ORDER_VOIDED",
       "CAPTURE_PENDING",
+      /** Raised by a KEPT reconciliation that saw a live or pending capture. */
+      "RECONCILIATION",
     ]),
     operationId: ProviderOperationIdSchema,
     obligationId: ObligationIdSchema,
@@ -172,8 +182,13 @@ export const AttentionRecordSchema = z
      * PAY_OBLIGATION and START_PROVIDER_CHECKOUT for the SAME obligation until it is resolved.
      */
     blocking: z.boolean(),
-    /** The reconciliationId that resolved this record, or null while it is open. */
-    resolvedBy: z.string().min(1).max(128).nullable(),
+    /**
+     * What resolved this record, or null while it is open: a reconciliationId, or
+     * `capture:<captureId>` when the capture an early refund was waiting for settled.
+     */
+    resolvedBy: z.string().min(1).max(160).nullable(),
+    /** CAPTURE_REFUNDED records only: the capture the refund names (null otherwise). */
+    refundedCaptureId: z.string().min(1).max(128).nullable(),
   })
   .strict();
 export type AttentionRecord = z.infer<typeof AttentionRecordSchema>;
@@ -208,7 +223,7 @@ export const ProviderOperationViewSchema = z
   })
   .strict();
 
-/** Owner decision 2: what one reconciliation did. Only the first three change anything. */
+/** Owner decision 2: what one reconciliation did. Only the first four change anything. */
 export const ReconciliationOutcomeSchema = z.enum([
   /** One live exact COMPLETED capture, bill not settled: settled once, reservation consumed. */
   "SETTLED",
@@ -216,6 +231,11 @@ export const ReconciliationOutcomeSchema = z.enum([
   "RELEASED",
   /** The provider state matches what the engine already applied (nothing to change). */
   "CONFIRMED",
+  /**
+   * Order terminal and every capture fully REFUNDED / DECLINED / FAILED, at least one refunded:
+   * no money is held; records resolved, earmark released if any, bill unpaid (final review H1).
+   */
+  "RESOLVED_REFUNDED",
   "KEPT_NOT_TERMINAL",
   "KEPT_CAPTURE_PENDING",
   "KEPT_REFUNDED_CAPTURE",

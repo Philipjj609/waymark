@@ -123,59 +123,91 @@ unspendable, (4) a verified capture settles exactly once, (5) no fictional payme
 
 Reservation status (snapshot `reservations[].status`, realm always `PAYPAL_SANDBOX`). Every status keeps the earmark.
 
-| From                            | Trigger (origin)                                         | To / effect                                                          |
-| ------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------- |
-| (none)                          | `START_PROVIDER_CHECKOUT` (PLAYER), no open blocking rec | AWAITING_PAYER; cash reserved, no journal                            |
-| AWAITING_PAYER, CAPTURE_DENIED  | `REQUEST_CHECKOUT_CANCEL` (PLAYER), once                 | CANCEL_REQUESTED + `cancelRequested`; **nothing released**           |
-| any but NEEDS_ATTENTION         | `CAPTURE_PENDING`, exact amount (VERIFIED_EXTERNAL)      | CAPTURE_PENDING                                                      |
-| AWAITING_PAYER, CAPTURE_PENDING | `CAPTURE_DENIED`, exact amount (VERIFIED_EXTERNAL)       | CAPTURE_DENIED, or CANCEL_REQUESTED if `cancelRequested`             |
-| any but NEEDS_ATTENTION         | `CAPTURE_COMPLETED`, exact amount (VERIFIED_EXTERNAL)    | earmark consumed + SETTLED once ("the capture wins")                 |
-| any but NEEDS_ATTENTION/PENDING | `ORDER_VOIDED`, exact amount (VERIFIED_EXTERNAL)         | earmark released, obligation keeps DUE/OVERDUE                       |
-| CAPTURE_PENDING                 | `ORDER_VOIDED` (VERIFIED_EXTERNAL)                       | NEEDS_ATTENTION (`VOID_WHILE_CAPTURE_PENDING`, blocking)             |
-| any                             | a fact of its own operation that cannot be applied       | NEEDS_ATTENTION + record                                             |
-| NEEDS_ATTENTION                 | any further fact (VERIFIED_EXTERNAL)                     | another record (`RESERVATION_NEEDS_ATTENTION`); never auto-resolved  |
-| any (own operation)             | `RECONCILE_PROVIDER_STATE` → SETTLED / RELEASED          | earmark consumed + SETTLED once / earmark released; records resolved |
-| any                             | `RECONCILE_PROVIDER_STATE` → KEPT_*                      | unchanged; attempt recorded                                          |
+| From                             | Trigger (origin)                                         | To / effect                                                         |
+| -------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------- |
+| (none)                           | `START_PROVIDER_CHECKOUT` (PLAYER), no open blocking rec | AWAITING_PAYER; cash reserved, no journal                           |
+| AWAITING_PAYER, CAPTURE_DENIED   | `REQUEST_CHECKOUT_CANCEL` (PLAYER), once                 | CANCEL_REQUESTED + `cancelRequested`; **nothing released**          |
+| any but NEEDS_ATTENTION          | `CAPTURE_PENDING`, exact amount (VERIFIED_EXTERNAL)      | CAPTURE_PENDING (recorded only if that capture was already DENIED)  |
+| AWAITING_PAYER, CAPTURE_PENDING  | `CAPTURE_DENIED`, exact amount (VERIFIED_EXTERNAL)       | CAPTURE_DENIED, or CANCEL_REQUESTED if `cancelRequested`            |
+| CAPTURE_DENIED, CANCEL_REQUESTED | another `CAPTURE_DENIED` (VERIFIED_EXTERNAL)             | unchanged; kept as evidence (`PROVIDER_STATUS_FACT_RECORDED`)       |
+| any but NEEDS_ATTENTION          | `CAPTURE_COMPLETED`, exact amount (VERIFIED_EXTERNAL)    | earmark consumed + SETTLED once; early refunds of it then applied   |
+| any but NEEDS_ATTENTION/PENDING  | `ORDER_VOIDED`, exact amount (VERIFIED_EXTERNAL)         | earmark released, obligation keeps DUE/OVERDUE                      |
+| CAPTURE_PENDING                  | `ORDER_VOIDED` (VERIFIED_EXTERNAL)                       | NEEDS_ATTENTION (`VOID_WHILE_CAPTURE_PENDING`, blocking)            |
+| any                              | a blocking fact of its own operation                     | NEEDS_ATTENTION + record                                            |
+| any                              | a non-blocking fact (early refund, stale status, ...)    | unchanged; record only (final review H2a)                           |
+| NEEDS_ATTENTION                  | any further fact (VERIFIED_EXTERNAL)                     | another record (`RESERVATION_NEEDS_ATTENTION`); never auto-resolved |
+| any (own operation)              | `RECONCILE_PROVIDER_STATE` → applied outcome             | see the outcome table; open records of the operation resolved       |
+| any                              | `RECONCILE_PROVIDER_STATE` → KEPT_*                      | unchanged; attempt recorded; blocking record if a capture is live   |
 
 `DEFER_OBLIGATION` (PLAYER) is allowed in every status and with open records (principles 2 and 3). `PAY_OBLIGATION`
 and a second checkout are `PAYMENT_IN_FLIGHT` while a reservation exists and `PROVIDER_ATTENTION_OPEN` while a blocking
 record is open (principle 5). `ADVANCE_TIME` stays blocked while the decision is open (principle 1).
 
-**Reconciliation (decision 2), checks in this fixed order:** the operation's known order id must match
-(`KEPT_ORDER_MISMATCH`); every capture currency is the world's (`KEPT_AMOUNT_MISMATCH`); every capture the engine has seen
-for the operation (its settling capture, its recorded attention, its applied PENDING/DENIED) must be in the read-back
-(`KEPT_RECORDED_CAPTURE_MISSING`); no PENDING capture (`KEPT_CAPTURE_PENDING`); no refunded capture or open refund record
-(`KEPT_REFUNDED_CAPTURE`); at most one live COMPLETED capture (`KEPT_MULTIPLE_CAPTURES`). Then:
-- one live capture: order COMPLETED (`KEPT_INCONSISTENT_ORDER`), exact amount (`KEPT_AMOUNT_MISMATCH`); bill already
-  settled → `CONFIRMED` if by this very capture, else `KEPT_DOUBLE_PAYMENT` (refund outside the engine); bill unsettled →
-  no other active checkout (`KEPT_OTHER_CHECKOUT_ACTIVE`), enough available cash without an earmark
-  (`KEPT_INSUFFICIENT_FUNDS`), then **SETTLED** once (dedup by capture id, shared with the capture fact);
-- no live capture and order VOIDED/EXPIRED: **RELEASED** (own earmark) or `CONFIRMED` (already released);
-- otherwise `KEPT_NOT_TERMINAL` / `KEPT_INCONSISTENT_ORDER`.
-  SETTLED, RELEASED and CONFIRMED resolve every open record of that operation (`resolvedBy` = the reconciliationId).
+### Reconciliation (decision 2)
 
-**Attention reasons** (`PROVIDER_ATTENTION_RECORDED`, idempotent per (eventType, providerEventId)): `CAPTURE_AFTER_VOID`,
-`CAPTURE_FOR_SETTLED_OBLIGATION`, `CAPTURE_AMOUNT_MISMATCH`, `VOID_AMOUNT_MISMATCH`, `VOID_AFTER_CAPTURE`,
-`VOID_WHILE_CAPTURE_PENDING`, `CAPTURE_STATUS_AMOUNT_MISMATCH`, `REFUND_BEFORE_CAPTURE`, `REFUND_UNKNOWN_CAPTURE`,
-`REFUND_EXCEEDS_CAPTURE`, `STALE_OPERATION_STATUS`, `RESERVATION_NEEDS_ATTENTION`. Only a fact of the reservation's
-**own** operation puts it into NEEDS_ATTENTION (review H1). Facts that do not belong to the obligation (another world,
-an unknown obligation, an operation never started for it) are still rejected: there is nothing to record them against.
+Idempotent per `reconciliationId`, bound to its content: the same id with a different observation (verification
+metadata excluded) is `IDEMPOTENCY_CONFLICT`; the identical one is a no-op. Checks run in this fixed order; the first
+that matches decides.
+
+| #   | Read-back (and engine knowledge)                                                                     | Outcome                                                                                           | Effect                                                                                       |
+| --- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| 1   | order id differs from the one the engine knows for the operation                                     | KEPT_ORDER_MISMATCH                                                                               | none                                                                                         |
+| 2   | a capture (or refunded amount) in another currency                                                   | KEPT_AMOUNT_MISMATCH                                                                              | none                                                                                         |
+| 3   | a capture the engine has seen for the operation is missing                                           | KEPT_RECORDED_CAPTURE_MISSING                                                                     | none                                                                                         |
+| 4   | a capture verified COMPLETED is now DECLINED/FAILED                                                  | KEPT_INCONSISTENT_ORDER                                                                           | none (M4)                                                                                    |
+| 5   | a PENDING capture                                                                                    | KEPT_CAPTURE_PENDING                                                                              | none                                                                                         |
+| 6   | more than one live (COMPLETED / PARTIALLY_REFUNDED) capture                                          | KEPT_MULTIPLE_CAPTURES                                                                            | none                                                                                         |
+| 7   | no live capture, order not terminal (not COMPLETED/VOIDED/EXPIRED)                                   | KEPT_NOT_TERMINAL                                                                                 | none                                                                                         |
+| 8   | no live capture, operation settled the bill, its capture fully refunded                              | CONFIRMED / KEPT_REFUNDED_CAPTURE                                                                 | confirmed only if the engine already applied the full refund                                 |
+| 9   | no live capture, at least one REFUNDED (rest DECLINED/FAILED), order terminal                        | **RESOLVED_REFUNDED**                                                                             | release own earmark; bill stays unpaid (H1)                                                  |
+| 10  | no capture money, order VOIDED/EXPIRED                                                               | **RELEASED** / CONFIRMED                                                                          | release own earmark (or nothing left to release)                                             |
+| 11  | no capture money, order COMPLETED                                                                    | KEPT_INCONSISTENT_ORDER                                                                           | none                                                                                         |
+| 12  | one live capture, order not COMPLETED, or amount differs from the operation                          | KEPT_INCONSISTENT_ORDER / KEPT_AMOUNT_MISMATCH                                                    | none                                                                                         |
+| 13  | refunded amount ≠ refunds applied for it + early refund records waiting for it                       | KEPT_REFUNDED_CAPTURE                                                                             | none                                                                                         |
+| 14  | bill already SETTLED: by this capture / by another payment                                           | CONFIRMED / KEPT_DOUBLE_PAYMENT                                                                   | confirmed: apply the waiting early refunds                                                   |
+| 15  | bill unsettled: wrong remaining amount, capture already applied, another checkout active, cash short | KEPT_AMOUNT_MISMATCH / KEPT_DOUBLE_PAYMENT / KEPT_OTHER_CHECKOUT_ACTIVE / KEPT_INSUFFICIENT_FUNDS | none                                                                                         |
+| 16  | otherwise                                                                                            | **SETTLED**                                                                                       | settle once (dedup shared with the capture fact), then apply the waiting early refunds (H2b) |
+
+SETTLED, RELEASED, CONFIRMED and RESOLVED_REFUNDED resolve every open record of the operation (`resolvedBy` = the
+reconciliationId). Any KEPT outcome whose read-back shows a live or pending capture adds, once per operation while open,
+a BLOCKING `RECONCILIATION_LIVE_CAPTURE` record, so the same bill cannot be paid or checked out again until a later
+reconciliation resolves it (M1/M2). The only exception is a pending capture of the active checkout, which its in-flight
+lock already covers. These records never change a reservation.
+
+**Attention reasons** (`PROVIDER_ATTENTION_RECORDED`, idempotent per (eventType, providerEventId)). Blocking:
+`CAPTURE_AFTER_VOID`, `CAPTURE_FOR_SETTLED_OBLIGATION`, `CAPTURE_AMOUNT_MISMATCH`, `VOID_AMOUNT_MISMATCH`,
+`VOID_WHILE_CAPTURE_PENDING`, `CAPTURE_STATUS_AMOUNT_MISMATCH`, `RECONCILIATION_LIVE_CAPTURE`, and
+`RESERVATION_NEEDS_ATTENTION` for a capture fact. Non-blocking (evidence only, never change a reservation):
+`VOID_AFTER_CAPTURE`, `REFUND_BEFORE_CAPTURE` (applied automatically once its capture settles), `REFUND_UNKNOWN_CAPTURE`,
+`REFUND_EXCEEDS_CAPTURE`, `STALE_OPERATION_STATUS`, `OUT_OF_ORDER_STATUS`, `RESERVATION_NEEDS_ATTENTION` for other facts.
+Only a blocking fact of the reservation's **own** operation puts it into NEEDS_ATTENTION (reviews H1, H2a). Facts that
+do not belong to the obligation (another world, an unknown obligation, an operation never started for it) are still
+rejected: there is nothing to record them against.
+
+**Delivery order (final review H2).** A refund that arrives before its capture is kept as `REFUND_BEFORE_CAPTURE` and
+applied as `PROVIDER_REFUND_RECORDED` when that capture settles (fact or reconciliation), so capture→refund,
+refund→capture and refund→reconciliation all end with the bill SETTLED and the same external payment status.
 
 **Cancel and timeout.** Cancel is a request. Release needs a verified `ORDER_VOIDED` (whose `providerEventId` is the
-PayPal **order id**) or a reconciliation that read the order back as VOIDED/EXPIRED with no live capture. The engine has
-no clock (invariant 10): a timeout is the server's reconciliation (GET order). Nothing time-based is in the engine.
+PayPal **order id**) or a reconciliation that read the order back as terminal with no money held. The engine has no
+clock (invariant 10): a timeout is the server's reconciliation (GET order). Nothing time-based is in the engine.
 
 **Review fixes folded in (7 Nov):** H1 stale-operation facts never touch the current reservation; H2 void while pending is
 held; L1 `cancelRequested` survives status changes; L2 status amount mismatches are recorded; L3 `CAPTURE_REFUNDED`'s
 `providerEventId` is the refund id (capture id in `refundedCaptureId`); L4 typed dedup keys; L5 provider and
-reconciliation commands use server-generated random command ids (server-side, D1b).
+reconciliation commands use server-generated random command ids (server-side, D1b). Final review of #98: H1
+RESOLVED_REFUNDED; H2 order-independent refunds; M1/M2 blocking records for kept live captures; M3 reconciliation
+fingerprints; M4 no release against a verified capture; L2 status facts never regress and are always kept as evidence.
 
 **Supersedes** "a known operation of the same bill without a reservation (late capture after a void) still settles":
 such a capture is `CAPTURE_AFTER_VOID` and settles only through a reconciliation.
 
 **Choices not covered by the decisions (for review):**
-- Reconciliation KEPT outcomes do not create a new attention record or put a healthy reservation into NEEDS_ATTENTION;
-  they are visible in `reconciliations[]` only. A double capture on a healthy checkout surfaces when its facts arrive.
+- A fully REFUNDED capture is settled-then-refunded only through the capture fact. A reconciliation that sees it fully
+  refunded without the capture fact applies RESOLVED_REFUNDED (bill unpaid), as for a capture a human refunded.
+- RESOLVED_REFUNDED marks a released operation `VOIDED` (the engine's "ended without settling") even when PayPal's order
+  is COMPLETED.
 - A second `ORDER_VOIDED` for an already-voided operation (another order id) is still rejected, not recorded.
 - The order id becomes known to the engine only from a verified void or an applied reconciliation; until then
   `KEPT_ORDER_MISMATCH` cannot trigger.
+- L3 (reviewer): stays documented.

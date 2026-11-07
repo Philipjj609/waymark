@@ -235,8 +235,11 @@ describe("verified CAPTURE_PENDING / CAPTURE_DENIED change status only", () => {
     ]);
     s = cancel(s).state;
     expect(statusOf(s)).toBe("CANCEL_REQUESTED");
-    // A further denial does not undo the player's cancel request.
-    expect(deliver(s, fact(s, "CAPTURE_DENIED", "CAP-2")).events).toHaveLength(0);
+    // A further denial does not undo the player's cancel request, but it is kept as evidence.
+    const again = deliver(s, fact(s, "CAPTURE_DENIED", "CAP-2"));
+    expect(types(again)).toEqual(["PROVIDER_STATUS_FACT_RECORDED"]);
+    s = again.state;
+    expect(statusOf(s)).toBe("CANCEL_REQUESTED");
     expectNoMoneyMoved(start, s);
     expect(avail(s)).toBe(77000);
     s = deliver(s, fact(s, "ORDER_VOIDED", "ORDER-1")).state;
@@ -290,6 +293,7 @@ describe("NEEDS_ATTENTION: verified facts that cannot be applied are recorded (p
       day: 8,
       blocking: true,
       resolvedBy: null,
+      refundedCaptureId: null,
     });
   });
 
@@ -379,13 +383,16 @@ describe("NEEDS_ATTENTION: verified facts that cannot be applied are recorded (p
     }
   });
 
-  it("REFUND_BEFORE_CAPTURE: a later completion of that refunded capture cannot settle", () => {
+  it("REFUND_BEFORE_CAPTURE: recorded without touching the checkout; the capture still settles", () => {
     const s = inFlight();
-    const out = deliver(s, fact(s, "CAPTURE_REFUNDED", "CAP-RB"));
+    const out = deliver(s, fact(s, "CAPTURE_REFUNDED", "RF-RB")); // names no capture
     expectRecorded(s, out, "REFUND_BEFORE_CAPTURE");
-    expect(statusOf(out.state)).toBe("NEEDS_ATTENTION");
-    const late = deliver(out.state, fact(s, "CAPTURE_COMPLETED", "CAP-RB"));
-    expectRecorded(out.state, late, "RESERVATION_NEEDS_ATTENTION");
+    expect(out.state.attention[0]?.blocking).toBe(false);
+    expect(statusOf(out.state)).toBe("AWAITING_PAYER"); // final review H2a
+    const cap = deliver(out.state, fact(s, "CAPTURE_COMPLETED", "CAP-RB"));
+    expect(cap.state.obligations[PHONE]?.state).toBe("SETTLED");
+    // It named no capture, so it cannot be applied: it stays open as (non-blocking) evidence.
+    expect(cap.state.attention[0]?.resolvedBy).toBeNull();
   });
 
   it("is idempotent per fact: the same providerEventId twice gives one record", () => {

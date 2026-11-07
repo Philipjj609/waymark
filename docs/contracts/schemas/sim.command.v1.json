@@ -763,6 +763,30 @@
                               "currency"
                             ],
                             "additionalProperties": false
+                          },
+                          "refundedAmount": {
+                            "type": "object",
+                            "properties": {
+                              "amountMinor": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "currency": {
+                                "type": "string",
+                                "enum": [
+                                  "EUR",
+                                  "USD",
+                                  "GBP",
+                                  "JPY"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "amountMinor",
+                              "currency"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [

@@ -150,7 +150,12 @@ export interface WorldState {
    */
   readonly attention: readonly AttentionRecord[];
   /** Every server reconciliation attempt and its outcome, append-only (owner decision 2). */
-  readonly reconciliations: readonly ReconciliationRecord[];
+  readonly reconciliations: ReadonlyArray<
+    ReconciliationRecord & {
+      /** sha256 of the reconciliation without its verification metadata (final review M3). */
+      readonly fingerprint: string;
+    }
+  >;
   /**
    * Provider fact keys already applied (one verified provider event → at most one effect). A
    * key starts with its event type: `<eventType>:fact:<id>` for an applied fact and
