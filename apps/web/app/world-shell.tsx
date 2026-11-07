@@ -1,10 +1,11 @@
 "use client";
 
-import type { Obligation, WorldSnapshot } from "@fle/contracts";
+import type { WorldSnapshot } from "@fle/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, createApiClient, type Intent } from "../lib/command-client";
-import { formatFictional } from "../lib/money";
+import { todayView } from "../lib/today-view";
 import { type ExplanationView, LessonPanel } from "./lesson-panel";
+import { type Act, AdvancePanel, BillsPanel, DecisionCard, StatusPanel } from "./today-screen";
 
 /** Remembering the world id is a convenience; the cookie (not this) is what grants access. */
 const WORLD_KEY = "waymark.worldId";
@@ -137,116 +138,80 @@ export function WorldShell() {
 
   if (!snapshot) {
     return (
-      <section>
-        {message && <p role="alert">{message}</p>}
-        <button type="button" onClick={newWorld} disabled={busy}>
+      <section className="card" aria-label="Start">
+        {message && (
+          <p role="alert" className="alert">
+            {message}
+          </p>
+        )}
+        <h2 className="card-title">Your first fictional month</h2>
+        <p className="muted">
+          Bills fall due, time stops until you decide whether to pay or defer, and a short
+          explanation follows each choice. Everything is recorded, so you can come back to it.
+        </p>
+        <button type="button" className="btn btn-primary" onClick={newWorld} disabled={busy}>
           Start a new FP-30 world
         </button>
       </section>
     );
   }
 
-  const cash = snapshot.balances.find((b) => b.account === "ASSET:Cash");
-  const blockedIds = new Set(snapshot.blockingDecisions.map((d) => d.obligationId));
-  const nextDay = targetDay !== null && targetDay > snapshot.day ? targetDay : snapshot.day + 1;
-  const isActionable = (o: Obligation) =>
-    blockedIds.has(o.obligationId) || o.state === "DUE" || o.state === "OVERDUE";
+  const view = todayView(snapshot);
+  const nextDay = targetDay !== null && targetDay > view.day ? targetDay : view.day + 1;
+  const onAct: Act = (kind, obligationId) =>
+    act(
+      kind === "PAY"
+        ? { kind: "PAY_OBLIGATION", payload: { obligationId } }
+        : { kind: "DEFER_OBLIGATION", payload: { obligationId } },
+    );
 
   return (
-    <section>
-      <p>
-        World <code>{snapshot.worldId}</code> · version {snapshot.version}
-      </p>
-      <h2>Day {snapshot.day}</h2>
-      <p>
-        Cash: <strong>{cash ? formatFictional(cash.balance) : "none"}</strong>
-      </p>
-      {message && <p role="alert">{message}</p>}
-
-      <LessonPanel view={explanation} />
-
-      <h3>Obligations</h3>
-      <table>
-        <thead>
-          <tr>
-            <th align="left">Creditor</th>
-            <th align="left">State</th>
-            <th align="right">Amount</th>
-            <th align="right">Due day</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {snapshot.obligations.map((o) => (
-            <tr key={o.obligationId}>
-              <td>{o.creditorLabel}</td>
-              <td>{o.state}</td>
-              <td align="right">{formatFictional(o.amount)}</td>
-              <td align="right">{o.dueDay}</td>
-              <td>
-                {isActionable(o) && (
-                  <>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        act({ kind: "PAY_OBLIGATION", payload: { obligationId: o.obligationId } })
-                      }
-                    >
-                      Pay
-                    </button>{" "}
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        act({ kind: "DEFER_OBLIGATION", payload: { obligationId: o.obligationId } })
-                      }
-                    >
-                      Defer
-                    </button>
-                  </>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <p>
-        <label>
-          Target day{" "}
-          <input
-            type="number"
-            min={snapshot.day + 1}
-            value={nextDay}
-            onChange={(e) => setTargetDay(Number.parseInt(e.target.value, 10) || null)}
-            style={{ width: 64 }}
+    <>
+      {message && (
+        <p role="alert" className="alert">
+          {message}
+        </p>
+      )}
+      <div className="today-grid">
+        <div>
+          <StatusPanel view={view} />
+          <DecisionCard view={view} busy={busy} onAct={onAct} />
+          <LessonPanel view={explanation} />
+          <AdvancePanel
+            view={view}
+            busy={busy}
+            nextDay={nextDay}
+            onTargetDay={setTargetDay}
+            onAdvance={() => act({ kind: "ADVANCE_TIME", payload: { targetDay: nextDay } })}
           />
-        </label>{" "}
-        <button
-          type="button"
-          disabled={busy || snapshot.blockingDecisions.length > 0}
-          onClick={() => act({ kind: "ADVANCE_TIME", payload: { targetDay: nextDay } })}
-        >
-          Advance to day {nextDay}
-        </button>{" "}
-        {snapshot.blockingDecisions.length > 0 && <em>Decide on the due bill first.</em>}
-      </p>
-
-      <h3>Recent activity (this browser)</h3>
-      <ol reversed>
-        {log.map((e) => (
-          <li key={e.n}>{e.text}</li>
-        ))}
-      </ol>
-      <p>
-        <small>
-          {snapshot.eventCount} event(s) recorded in this world. <code>{snapshot.ruleVersion}</code>
-        </small>
-      </p>
-      <button type="button" disabled={busy} onClick={newWorld}>
-        Start over with a new world
-      </button>
-    </section>
+        </div>
+        <div>
+          <BillsPanel view={view} busy={busy} onAct={onAct} />
+          <section className="card" aria-label="World">
+            <details>
+              <summary>Recent activity (this browser)</summary>
+              <ol className="log" reversed>
+                {log.map((e) => (
+                  <li key={e.n}>{e.text}</li>
+                ))}
+              </ol>
+            </details>
+            <p className="small muted" style={{ marginBottom: 0 }}>
+              World <code>{view.worldId}</code> · version {view.version} · {view.eventCount}{" "}
+              event(s) recorded · <code>{view.ruleVersion}</code>
+            </p>
+            <button
+              type="button"
+              className="btn"
+              style={{ marginTop: "var(--space-3)" }}
+              disabled={busy}
+              onClick={newWorld}
+            >
+              Start over with a new world
+            </button>
+          </section>
+        </div>
+      </div>
+    </>
   );
 }

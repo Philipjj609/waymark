@@ -2,7 +2,7 @@
 
 import type { LessonResponse } from "@fle/contracts";
 import { labelFictional } from "../lib/money";
-import { type ProvenanceKind, provenanceBadge } from "../lib/provenance";
+import { provenanceBadge } from "../lib/provenance";
 import { visualCaption } from "../lib/visual-caption";
 
 export type ExplanationView =
@@ -10,12 +10,6 @@ export type ExplanationView =
   | { readonly status: "loading" }
   | { readonly status: "error"; readonly message: string }
   | { readonly status: "ready"; readonly lesson: LessonResponse };
-
-const BADGE_STYLE: Record<ProvenanceKind, { background: string; color: string }> = {
-  TEST_STAND_IN: { background: "#fde68a", color: "#78350f" },
-  PREPARED_FALLBACK: { background: "#dbeafe", color: "#1e3a8a" },
-  AI_VALIDATED: { background: "#dcfce7", color: "#14532d" },
-};
 
 /**
  * "What just happened" (#84). Lesson text is rendered as plain React text (never as HTML, so a
@@ -25,8 +19,8 @@ const BADGE_STYLE: Record<ProvenanceKind, { background: string; color: string }>
 export function LessonPanel({ view }: { view: ExplanationView }) {
   if (view.status === "idle") return null;
   return (
-    <section aria-live="polite" style={{ border: "1px solid #ccc", padding: 12, margin: "12px 0" }}>
-      <h3 style={{ marginTop: 0 }}>What just happened</h3>
+    <section aria-live="polite" className="card">
+      <h3 className="card-title">What just happened</h3>
       {view.status === "loading" && <p>Preparing an explanation…</p>}
       {view.status === "error" && (
         <p>
@@ -48,13 +42,10 @@ function Lesson({ lesson }: { lesson: LessonResponse }) {
   return (
     <div>
       <p>
-        <strong
-          data-provenance={badge.kind}
-          style={{ ...BADGE_STYLE[badge.kind], padding: "2px 8px", borderRadius: 4 }}
-        >
+        <strong data-provenance={badge.kind} className="lesson-badge">
           {badge.label}
         </strong>{" "}
-        <small>All amounts are fictional simulation money.</small>
+        <small className="muted">All amounts are fictional simulation money.</small>
       </p>
       {lesson.blocks.map((block, i) => {
         const key = `${lesson.lessonId}-${i}`;
@@ -62,21 +53,15 @@ function Lesson({ lesson }: { lesson: LessonResponse }) {
           case "text":
             if (i === 0 && factsFirst)
               return (
-                <div
-                  key={key}
-                  data-facts="deterministic"
-                  style={{ background: "#f4f4f5", padding: "8px 10px", borderRadius: 4 }}
-                >
+                <div key={key} data-facts="deterministic" className="lesson-facts">
                   <small>
                     <strong>From your world's records</strong>
                   </small>
-                  <p style={{ margin: "4px 0 0", whiteSpace: "pre-wrap" }}>
-                    {labelFictional(block.markdown)}
-                  </p>
+                  <p>{labelFictional(block.markdown)}</p>
                 </div>
               );
             return (
-              <p key={key} style={{ whiteSpace: "pre-wrap" }}>
+              <p key={key} className="lesson-text">
                 {labelFictional(block.markdown)}
               </p>
             );
