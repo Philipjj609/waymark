@@ -48,6 +48,11 @@ export interface CurriculumBundle {
   readonly facts: readonly ReviewedFact[];
   /** Concepts the curriculum must cover. */
   readonly requiredConceptIds: readonly ConceptId[];
+  /**
+   * Misconception ids defined outside `curriculum` that references may point at. Only for
+   * validating a single unit in isolation while authoring (scripts/check-unit.ts).
+   */
+  readonly externalMisconceptionIds?: readonly string[];
 }
 
 export const MIN_OBJECTIVES = 2;
@@ -141,9 +146,10 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
   for (const c of b.requiredConceptIds) if (!units.has(c)) add(`curriculum`, "MISSING_UNIT", c);
 
   // Misconception ids are global so a distractor may point at a neighbouring concept's.
-  const misconceptionIds = new Set(
-    b.curriculum.units.flatMap((u) => u.misconceptions.map((m) => m.misconceptionId)),
-  );
+  const misconceptionIds = new Set([
+    ...b.curriculum.units.flatMap((u) => u.misconceptions.map((m) => m.misconceptionId)),
+    ...(b.externalMisconceptionIds ?? []),
+  ]);
   const exerciseById = new Map(
     b.curriculum.units.flatMap((u) => u.exercises.map((e) => [e.exerciseId, e] as const)),
   );
