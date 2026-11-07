@@ -138,6 +138,7 @@ describe("START_PROVIDER_CHECKOUT reserves, it does not pay (ADR-0008 step 1)", 
         realm: "PAYPAL_SANDBOX",
         status: "AWAITING_PAYER",
         attentionReason: null,
+        cancelRequested: false,
       },
     ]);
     expect(snap.attention).toEqual([]);
@@ -426,7 +427,7 @@ describe("verified provider facts against an active checkout", () => {
     expect(paid.state.obligations[PHONE]?.state).toBe("SETTLED");
   });
 
-  it("a capture of a voided operation never settles; the newer checkout is flagged too", () => {
+  it("a capture of a voided operation never settles and leaves the newer checkout alone (H1)", () => {
     let s = phoneInFlight();
     const old = opOf(s, PHONE);
     s = execute(s, deliver(s, event(s, PHONE, old, "VOID-OLD", "ORDER_VOIDED"))).state;
@@ -439,11 +440,11 @@ describe("verified provider facts against an active checkout", () => {
       expect.objectContaining({
         reason: "CAPTURE_AFTER_VOID",
         operationId: old,
-        reservationOperationId: opFor(FP30, 3),
+        reservationOperationId: null,
       }),
     ]);
-    expect(late.state.reservations[PHONE]?.status).toBe("NEEDS_ATTENTION");
-    expect(avail(late.state)).toBe(77000); // still reserved, not spendable
+    expect(late.state.reservations[PHONE]?.status).toBe("AWAITING_PAYER");
+    expect(avail(late.state)).toBe(77000); // the newer checkout is still reserved
   });
 
   it("replay derives the same operation ids and head hash", () => {

@@ -503,6 +503,8 @@
                   "CAPTURE_AMOUNT_MISMATCH",
                   "VOID_AMOUNT_MISMATCH",
                   "VOID_AFTER_CAPTURE",
+                  "VOID_WHILE_CAPTURE_PENDING",
+                  "CAPTURE_STATUS_AMOUNT_MISMATCH",
                   "REFUNDED_AFTER_SETTLEMENT",
                   "REFUND_BEFORE_SETTLEMENT",
                   "RESERVATION_NEEDS_ATTENTION"
@@ -512,6 +514,9 @@
                 "type": "null"
               }
             ]
+          },
+          "cancelRequested": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -522,7 +527,8 @@
           "sinceDay",
           "realm",
           "status",
-          "attentionReason"
+          "attentionReason",
+          "cancelRequested"
         ],
         "additionalProperties": false
       }
@@ -571,6 +577,8 @@
               "CAPTURE_AMOUNT_MISMATCH",
               "VOID_AMOUNT_MISMATCH",
               "VOID_AFTER_CAPTURE",
+              "VOID_WHILE_CAPTURE_PENDING",
+              "CAPTURE_STATUS_AMOUNT_MISMATCH",
               "REFUNDED_AFTER_SETTLEMENT",
               "REFUND_BEFORE_SETTLEMENT",
               "RESERVATION_NEEDS_ATTENTION"

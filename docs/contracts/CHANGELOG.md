@@ -13,6 +13,9 @@ Additive (minor) relative to 0.2.0:
 - Error code `CHECKOUT_NOT_CANCELLABLE`. Blocking decision option `REQUEST_CHECKOUT_CANCEL`.
 - New enums `ReservationStatusSchema` (`AWAITING_PAYER | CANCEL_REQUESTED | CAPTURE_PENDING | CAPTURE_DENIED |
   NEEDS_ATTENTION`) and `AttentionReasonSchema`; new `AttentionRecordSchema`.
+- Folded in before release (independent review of #81; 0.3.0 was never published, so the version is kept):
+  attention reasons `VOID_WHILE_CAPTURE_PENDING` and `CAPTURE_STATUS_AMOUNT_MISMATCH`; reservation field `cancelRequested`;
+  `providerEventId` of `CAPTURE_REFUNDED` is the PayPal **refund id** (capture id in `verification.evidenceRef`).
 - `sim.snapshot.v1`: each `reservations[]` item adds `realm` (`PAYPAL_SANDBOX`), `status`, `attentionReason`; the snapshot
   adds `attention[]`. Required fields, same rule as 0.2.0: the engine is the only producer; strict consumers update together.
 
@@ -24,6 +27,9 @@ Behaviour changes in the engine that ship with this version (no wire shape remov
   `PROVIDER_ATTENTION_RECORDED` event (was a rejection, or for a late capture after a void with the bill still payable,
   a settlement). No journal, no cash, no obligation change. Mapping failures (another world, unknown obligation,
   operation not started for that obligation) are still rejected.
+- Review fixes: a fact about a stale operation never puts a newer checkout into NEEDS_ATTENTION; a void while a capture
+  is pending is recorded and keeps the earmark; pending/denied amount mismatches are recorded; dedup keys are typed
+  (`<eventType>:fact:<id>` / `<eventType>:attention:<id>`), so ids cannot collide across event types.
 
 ## 0.2.0 — PayPal sandbox checkout reservations (2026-11-06, #12, ADR-0008)
 

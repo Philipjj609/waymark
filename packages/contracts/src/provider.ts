@@ -18,8 +18,10 @@ export const VerifiedProviderEventSchema = z
      * Dedup key: always the PayPal id of the fact itself, never a webhook event id (the same fact
      * can arrive via several paths and must collapse to one effect; webhook event ids belong in
      * `verification.evidenceRef`).
-     * - CAPTURE_COMPLETED / CAPTURE_PENDING / CAPTURE_DENIED / CAPTURE_REFUNDED: the PayPal
-     *   **capture id**, on every verification path (order lookup, webhook postback, local check).
+     * - CAPTURE_COMPLETED / CAPTURE_PENDING / CAPTURE_DENIED: the PayPal **capture id**, on
+     *   every verification path (order lookup, webhook postback, local check).
+     * - CAPTURE_REFUNDED: the PayPal **refund id**, so two partial refunds of one capture are two
+     *   facts; the refunded capture id goes in `verification.evidenceRef`.
      * - ORDER_VOIDED: the PayPal **order id** (a voided or expired order has no capture id).
      * The engine deduplicates per (eventType, providerEventId), so a later refund or denial of an
      * applied capture is never swallowed by the capture's own dedup entry.

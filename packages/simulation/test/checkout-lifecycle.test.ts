@@ -12,7 +12,7 @@ import {
   type VerifiedProviderEvent,
   WorldSnapshotSchema,
 } from "@fle/contracts";
-import { eur } from "@fle/domain";
+import { eur, imbalance } from "@fle/domain";
 import { describe, expect, it } from "vitest";
 import {
   availableCash,
@@ -244,13 +244,11 @@ describe("verified CAPTURE_PENDING / CAPTURE_DENIED change status only", () => {
     expect(s.events.filter((e) => e.eventType === "OBLIGATION_SETTLED")).toHaveLength(1);
   });
 
-  it("status facts for a non-active operation or with a wrong amount are refused; nothing changes", () => {
+  it("status facts for an operation that is not the active one are refused; nothing changes", () => {
     const s = inFlight();
     const other = deliver(s, fact(s, "CAPTURE_DENIED", "CAP-O", { op: "pop_other" }));
     expect(other.result.error?.code).toBe("PROVIDER_OPERATION_MISMATCH");
-    const amount = deliver(s, fact(s, "CAPTURE_PENDING", "CAP-A", { amountMinor: 1 }));
-    expect(amount.result.error?.code).toBe("PROVIDER_AMOUNT_MISMATCH");
-    expect(amount.state.reservations).toEqual(s.reservations);
+    expect(other.state.reservations).toEqual(s.reservations);
   });
 });
 
@@ -394,6 +392,182 @@ describe("NEEDS_ATTENTION: verified facts that cannot be applied are recorded (p
     const t = advance(d.state, 10);
     expect(t.result.status).toBe("ACCEPTED");
     expect(t.state.reservations[PHONE]?.status).toBe("NEEDS_ATTENTION");
+  });
+});
+
+/** Balanced journals, contract-valid snapshot, and replay of `recorded` reproduces `w`. */
+function expectSound(w: WorldState, recorded: readonly AuthorizedCommand[]) {
+  for (const j of w.ledger.all) expect(imbalance(j.lines).size).toBe(0);
+  const snap = snapshot(w);
+  expect(WorldSnapshotSchema.parse(snap)).toEqual(snap);
+  const rebuilt = replay(fp30Config(), recorded);
+  expect(rebuilt.headHash).toBe(w.headHash);
+  expect(snapshot(rebuilt)).toEqual(snap);
+}
+
+/** A recording session: every command is kept so the result can be replayed. */
+function session() {
+  const recorded: AuthorizedCommand[] = [];
+  let w = fp30();
+  const exec = (c: AuthorizedCommand) => {
+    recorded.push(c);
+    const out = execute(w, c);
+    w = out.state;
+    return out;
+  };
+  return {
+    get w() {
+      return w;
+    },
+    recorded,
+    player: (body: Parameters<typeof playerCommand>[2]) => exec(playerCommand(w, fresh(), body)),
+    deliver: (ev: VerifiedProviderEvent) => exec(deliverCmd(w, ev)),
+  };
+}
+
+const ADV8 = { kind: "ADVANCE_TIME", payload: { targetDay: 8 } } as const;
+const START = { kind: "START_PROVIDER_CHECKOUT", payload: { obligationId: PHONE } } as const;
+const PAY = { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } } as const;
+const CANCEL = { kind: "REQUEST_CHECKOUT_CANCEL", payload: { obligationId: PHONE } } as const;
+
+describe("regressions from the independent review of #81 (H1, H2, L1-L4)", () => {
+  it("R1 (H1): a late capture of a voided operation never blocks the newer checkout's own capture", () => {
+    const t = session();
+    t.player(ADV8);
+    t.player(START);
+    const op1 = opOf(t.w, PHONE) as string;
+    t.deliver(fact(t.w, "ORDER_VOIDED", "ORDER-1"));
+    t.player(START);
+    const op2 = opOf(t.w, PHONE) as string;
+    const late = t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-OP1", { op: op1 }));
+    expect(types(late)).toEqual(["PROVIDER_ATTENTION_RECORDED"]);
+    expect(t.w.attention[0]).toMatchObject({
+      reason: "CAPTURE_AFTER_VOID",
+      operationId: op1,
+      reservationOperationId: null,
+    });
+    expect(t.w.reservations[PHONE]).toMatchObject({ operationId: op2, status: "AWAITING_PAYER" });
+    const own = t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-OP2", { op: op2 }));
+    expect(own.result.status).toBe("ACCEPTED");
+    expect(t.w.obligations[PHONE]?.state).toBe("SETTLED");
+    expect(t.w.reservations).toEqual({});
+    expect(cash(t.w)).toBe(77000); // debited exactly once
+    expectSound(t.w, t.recorded);
+  });
+
+  it("R2 (H1): a refund for a voided operation is recorded without touching the newer checkout", () => {
+    const t = session();
+    t.player(ADV8);
+    t.player(START);
+    const op1 = opOf(t.w, PHONE) as string;
+    t.deliver(fact(t.w, "ORDER_VOIDED", "ORDER-1"));
+    t.player(START);
+    const op2 = opOf(t.w, PHONE) as string;
+    t.deliver(fact(t.w, "CAPTURE_REFUNDED", "REFUND-OP1", { op: op1 }));
+    expect(reasons(t.w)).toEqual(["REFUND_BEFORE_SETTLEMENT"]);
+    expect(t.w.attention[0]?.reservationOperationId).toBeNull();
+    expect(t.w.reservations[PHONE]?.status).toBe("AWAITING_PAYER");
+    t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-OP2", { op: op2 }));
+    expect(t.w.obligations[PHONE]?.state).toBe("SETTLED");
+    expectSound(t.w, t.recorded);
+  });
+
+  it("R3 (H2): a void while a capture is pending is recorded, the earmark kept: no double payment", () => {
+    const t = session();
+    t.player(ADV8);
+    t.player(START);
+    t.deliver(fact(t.w, "CAPTURE_PENDING", "CAP-P"));
+    const v = t.deliver(fact(t.w, "ORDER_VOIDED", "ORDER-P"));
+    expect(types(v)).toEqual(["PROVIDER_ATTENTION_RECORDED"]);
+    expect(reasons(t.w)).toEqual(["VOID_WHILE_CAPTURE_PENDING"]);
+    expect(t.w.reservations[PHONE]).toMatchObject({
+      status: "NEEDS_ATTENTION",
+      attentionReason: "VOID_WHILE_CAPTURE_PENDING",
+    });
+    expect(avail(t.w)).toBe(77000);
+    expect(t.player(PAY).result.error?.code).toBe("PAYMENT_IN_FLIGHT");
+    t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-P"));
+    expect(t.w.obligations[PHONE]?.state).toBe("DUE"); // a human reconciles; never paid twice
+    expect(cash(t.w)).toBe(80000);
+    expect(t.w.events.filter((e) => e.eventType === "OBLIGATION_SETTLED")).toHaveLength(0);
+    expectSound(t.w, t.recorded);
+  });
+
+  it("R9 (L1): a cancel request survives CAPTURE_PENDING → CAPTURE_DENIED and is not offered twice", () => {
+    const t = session();
+    t.player(ADV8);
+    t.player(START);
+    t.player(CANCEL);
+    t.deliver(fact(t.w, "CAPTURE_PENDING", "CAP-1"));
+    expect(snapshot(t.w).reservations[0]).toMatchObject({
+      status: "CAPTURE_PENDING",
+      cancelRequested: true,
+    });
+    t.deliver(fact(t.w, "CAPTURE_DENIED", "CAP-1"));
+    expect(snapshot(t.w).reservations[0]).toMatchObject({
+      status: "CANCEL_REQUESTED",
+      cancelRequested: true,
+    });
+    expect(snapshot(t.w).blockingDecisions[0]?.options).toEqual(["DEFER_OBLIGATION"]);
+    expect(t.player(CANCEL).result.error?.code).toBe("CHECKOUT_NOT_CANCELLABLE");
+    t.deliver(fact(t.w, "ORDER_VOIDED", "ORDER-1"));
+    expect(t.w.reservations).toEqual({});
+    expectSound(t.w, t.recorded);
+  });
+
+  it("L2: pending/denied facts with a wrong amount are recorded, never silently rejected", () => {
+    for (const type of ["CAPTURE_PENDING", "CAPTURE_DENIED"] as const) {
+      const t = session();
+      t.player(ADV8);
+      t.player(START);
+      const journals = t.w.ledger.size;
+      const out = t.deliver(fact(t.w, type, `CAP-${type}`, { amountMinor: 1 }));
+      expect(out.result.status).toBe("ACCEPTED");
+      expect(reasons(t.w)).toEqual(["CAPTURE_STATUS_AMOUNT_MISMATCH"]);
+      expect(t.w.reservations[PHONE]?.status).toBe("NEEDS_ATTENTION");
+      expect(t.w.ledger.size).toBe(journals); // no journal
+      expectSound(t.w, t.recorded);
+    }
+  });
+
+  it("L3: two partial refunds of one capture (distinct refund ids) are two records", () => {
+    const t = session();
+    t.player(ADV8);
+    t.player(START);
+    t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-R"));
+    const refund = (id: string, amountMinor: number) => ({
+      ...fact(t.w, "CAPTURE_REFUNDED", id, { amountMinor }),
+      verification: {
+        method: "ORDER_LOOKUP" as const,
+        verifiedAt: "2026-11-06T10:00:00Z",
+        evidenceRef: "capture:CAP-R",
+      },
+    });
+    t.deliver(refund("REFUND-1", 1000));
+    t.deliver(refund("REFUND-2", 2000));
+    t.deliver(refund("REFUND-2", 2000)); // redelivery: still one record
+    expect(t.w.attention.map((a) => [a.providerEventId, a.amount.amountMinor, a.reason])).toEqual([
+      ["REFUND-1", 1000, "REFUNDED_AFTER_SETTLEMENT"],
+      ["REFUND-2", 2000, "REFUNDED_AFTER_SETTLEMENT"],
+    ]);
+    expect(t.w.obligations[PHONE]?.state).toBe("SETTLED");
+    expectSound(t.w, t.recorded);
+  });
+
+  it("L4: a capture id that looks like another type's key cannot swallow that fact", () => {
+    // The capture id "ORDER_VOIDED:ORDER-9" once shared a key with the void of order ORDER-9.
+    const t = session();
+    t.player(ADV8);
+    t.player(START);
+    t.deliver(fact(t.w, "CAPTURE_COMPLETED", "ORDER_VOIDED:ORDER-9"));
+    expect(t.w.obligations[PHONE]?.state).toBe("SETTLED");
+    const v = t.deliver(fact(t.w, "ORDER_VOIDED", "ORDER-9"));
+    expect(types(v)).toEqual(["PROVIDER_ATTENTION_RECORDED"]);
+    expect(reasons(t.w)).toEqual(["VOID_AFTER_CAPTURE"]);
+    // Every dedup key is typed: <eventType>:fact:<id> or <eventType>:attention:<id>.
+    expect(new Set(t.w.appliedProviderEvents).size).toBe(t.w.appliedProviderEvents.length);
+    for (const k of t.w.appliedProviderEvents) expect(k).toMatch(/^[A-Z_]+:(fact|attention):/);
+    expectSound(t.w, t.recorded);
   });
 });
 

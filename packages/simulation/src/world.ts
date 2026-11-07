@@ -368,7 +368,7 @@ export function availableCash(state: WorldState, entityId: EntityId): Money {
  * human; a second request is refused rather than silently repeated (ADR-0008 amendment).
  */
 export function isCancellable(r: Reservation): boolean {
-  return r.status === "AWAITING_PAYER" || r.status === "CAPTURE_DENIED";
+  return !r.cancelRequested && (r.status === "AWAITING_PAYER" || r.status === "CAPTURE_DENIED");
 }
 
 /** Read model for the UI (`sim.snapshot.v1`). Derived only from authoritative state. */
@@ -419,6 +419,7 @@ export function snapshot(state: WorldState): WorldSnapshot {
       realm: "PAYPAL_SANDBOX" as const,
       status: r.status,
       attentionReason: r.attentionReason,
+      cancelRequested: r.cancelRequested,
     })),
     attention: state.attention.map((a) => ({ ...a })),
     availableCash: entityIds.map((entityId) => ({

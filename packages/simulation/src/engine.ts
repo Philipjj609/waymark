@@ -350,14 +350,16 @@ function requireRegisteredOperation(tx: Tx, ev: VerifiedProviderEvent): Provider
 }
 
 /**
- * Dedup keys in `appliedProviderEvents`. Facts are deduplicated per (eventType, providerEventId)
- * (ADR-0008 H3): a settled capture keeps its bare capture id (pre-0.2.0 form, so existing hashes
- * and stores are unchanged); every other fact is `<eventType>:<id>`; a fact recorded for a human
- * is `ATTENTION:<eventType>:<id>`, so the same fact is never recorded twice.
+ * Dedup keys in `appliedProviderEvents`, per (eventType, providerEventId) (ADR-0008 H3). EVERY key
+ * starts with its event type, then the kind of effect, then the id: `<eventType>:fact:<id>` for an
+ * applied fact, `<eventType>:attention:<id>` for a fact recorded for a human. Event types contain
+ * no ':', so a key decodes uniquely and ids can never collide across types or kinds (review L4:
+ * a bare capture id "ORDER_VOIDED:X" used to collide with the void key of order X). The keys are
+ * not part of the hash chain, so no golden value depends on them.
  */
-const factKey = (ev: VerifiedProviderEvent) => `${ev.eventType}:${ev.providerEventId}`;
+const factKey = (ev: VerifiedProviderEvent) => `${ev.eventType}:fact:${ev.providerEventId}`;
 const attentionKey = (ev: VerifiedProviderEvent) =>
-  `ATTENTION:${ev.eventType}:${ev.providerEventId}`;
+  `${ev.eventType}:attention:${ev.providerEventId}`;
 const seen = (tx: Tx, key: string) => tx.s.appliedProviderEvents.includes(key);
 
 /**
@@ -383,9 +385,11 @@ const sameAmount = (a: Money, b: Money) =>
 /**
  * NEEDS_ATTENTION (ADR-0008, principle 7): a verified fact that cannot be applied normally is
  * RECORDED, never silently rejected. It posts no journal, moves no cash and changes no
- * obligation. If the obligation has an active reservation, the reservation is kept (still not
- * spendable) and marked NEEDS_ATTENTION: from then on no automatic fact settles or releases it;
- * a human resolves it. Idempotent per (eventType, providerEventId).
+ * obligation. Only if the obligation's active reservation belongs to the fact's OWN operation is
+ * that reservation kept (still not spendable) and marked NEEDS_ATTENTION; from then on no
+ * automatic fact settles or releases it, a human resolves it. A fact about a stale operation
+ * (e.g. a late capture of a voided order) never touches a newer checkout of the same bill, whose
+ * own capture must still be able to settle (review H1). Idempotent per (eventType, id).
  */
 function recordAttention(
   tx: Tx,
@@ -394,6 +398,7 @@ function recordAttention(
   r: Reservation | undefined,
   reason: AttentionReason,
 ): void {
+  const own = r?.operationId === ev.operationId ? r : undefined;
   const record: AttentionRecord = {
     realm: "PAYPAL_SANDBOX",
     providerEventId: ev.providerEventId,
@@ -402,16 +407,16 @@ function recordAttention(
     obligationId: o.obligationId,
     reason,
     amount: ev.amount,
-    reservationOperationId: r?.operationId ?? null,
+    reservationOperationId: own?.operationId ?? null,
     day: tx.s.day,
   };
   tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, attentionKey(ev)];
   tx.s.attention = [...tx.s.attention, record];
-  if (r) tx.setReservation({ ...r, status: "NEEDS_ATTENTION", attentionReason: reason });
+  if (own) tx.setReservation({ ...own, status: "NEEDS_ATTENTION", attentionReason: reason });
   tx.emit("PROVIDER_ATTENTION_RECORDED", {
     ...record,
     provider: ev.provider,
-    previousReservationStatus: r?.status ?? null,
+    previousReservationStatus: own?.status ?? null,
     obligationState: o.state,
     verification: ev.verification,
   });
@@ -423,7 +428,7 @@ function recordAttention(
  * Everything else that is verified but inconsistent goes to NEEDS_ATTENTION.
  */
 function applyCapture(tx: Tx, ev: VerifiedProviderEvent): void {
-  if (seen(tx, ev.providerEventId)) return; // duplicate capture: one effect only (T02)
+  if (seen(tx, factKey(ev))) return; // duplicate capture: one effect only (T02)
   const { o, op, r } = resolveProviderTarget(tx, ev);
   if (seen(tx, attentionKey(ev))) return; // already recorded for a human
   const own = r?.operationId === op.operationId ? r : undefined;
@@ -438,8 +443,8 @@ function applyCapture(tx: Tx, ev: VerifiedProviderEvent): void {
     return;
   }
   // The order was verified voided and the earmark released: a capture now contradicts a
-  // verified fact. Never settle it automatically (the bill may since have been re-checked-out);
-  // a human decides. A newer checkout of the same bill is flagged NEEDS_ATTENTION too.
+  // verified fact. Never settle it automatically; a human decides. A newer checkout of the same
+  // bill is NOT touched (H1): its own verified capture still settles it.
   if (op.status === "VOIDED") {
     recordAttention(tx, ev, o, r, "CAPTURE_AFTER_VOID");
     return;
@@ -461,7 +466,7 @@ function applyCapture(tx: Tx, ev: VerifiedProviderEvent): void {
     recordAttention(tx, ev, o, r, "CAPTURE_AMOUNT_MISMATCH");
     return;
   }
-  tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, ev.providerEventId];
+  tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, factKey(ev)];
   // Consume the earmark and settle in this same command (ADR-0008 5a). The reserved cash is
   // then exactly what settle() finds available, so a reserved capture can't be INSUFFICIENT_FUNDS.
   // Any status but NEEDS_ATTENTION settles: after CANCEL_REQUESTED "the capture wins".
@@ -506,6 +511,13 @@ function applyVoid(tx: Tx, ev: VerifiedProviderEvent): void {
     recordAttention(tx, ev, o, r, "RESERVATION_NEEDS_ATTENTION");
     return;
   }
+  // A capture is pending at PayPal: a void now contradicts a verified fact and releasing would let
+  // the bill be paid a second time when the pending capture completes (review H2). Keep the
+  // earmark and let a human reconcile.
+  if (r.status === "CAPTURE_PENDING") {
+    recordAttention(tx, ev, o, r, "VOID_WHILE_CAPTURE_PENDING");
+    return;
+  }
   // A mismatched void must not leave the earmark silently locked: it stays reserved (not
   // spendable) and becomes visibly NEEDS_ATTENTION.
   if (!sameAmount(ev.amount, r.amount)) {
@@ -529,8 +541,10 @@ function applyVoid(tx: Tx, ev: VerifiedProviderEvent): void {
 
 /**
  * Verified CAPTURE_PENDING / CAPTURE_DENIED: status only. The earmark is kept either way (a
- * pending capture may still complete; after a denial the buyer may retry, ADR-0008 M2). A denial
- * does not undo a cancel request; a pending capture does show over it (the capture may win).
+ * pending capture may still complete; after a denial the buyer may retry, ADR-0008 M2). A pending
+ * capture shows over a cancel request (the capture may win), but the request itself is kept in
+ * `cancelRequested` and survives every status change (review L1): a later denial shows
+ * CANCEL_REQUESTED again and the cancel is not offered twice.
  */
 function applyCaptureStatus(tx: Tx, ev: VerifiedProviderEvent): void {
   if (seen(tx, factKey(ev))) return;
@@ -547,20 +561,15 @@ function applyCaptureStatus(tx: Tx, ev: VerifiedProviderEvent): void {
     recordAttention(tx, ev, o, r, "RESERVATION_NEEDS_ATTENTION");
     return;
   }
+  // A verified fact with the wrong amount is recorded, never silently rejected (review L2).
   if (!sameAmount(ev.amount, r.amount)) {
-    throw new Reject(
-      "PROVIDER_AMOUNT_MISMATCH",
-      `${ev.eventType} amount differs from the reservation`,
-      {
-        eventMinor: ev.amount.amountMinor,
-        reservedMinor: r.amount.amountMinor,
-      },
-    );
+    recordAttention(tx, ev, o, r, "CAPTURE_STATUS_AMOUNT_MISMATCH");
+    return;
   }
   const to: ReservationStatus =
     ev.eventType === "CAPTURE_PENDING"
       ? "CAPTURE_PENDING"
-      : r.status === "CANCEL_REQUESTED"
+      : r.cancelRequested
         ? "CANCEL_REQUESTED"
         : "CAPTURE_DENIED";
   if (to === r.status) return; // nothing changes, nothing is recorded
@@ -582,6 +591,8 @@ function applyCaptureStatus(tx: Tx, ev: VerifiedProviderEvent): void {
  * Verified CAPTURE_REFUNDED. Conservative by design: it never reverses a settlement and never
  * reopens the obligation. After settlement it stays SETTLED and is recorded as
  * REFUNDED_AFTER_SETTLEMENT; reopening it via a reversal journal is an owner decision (#81).
+ * `providerEventId` is the PayPal REFUND id (the capture id travels in evidenceRef), so two
+ * partial refunds of one capture are two facts and two records (review L3).
  */
 function applyRefund(tx: Tx, ev: VerifiedProviderEvent): void {
   const { o, r } = resolveProviderTarget(tx, ev);
@@ -682,6 +693,7 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
       sinceDay: tx.s.day,
       status: "AWAITING_PAYER",
       attentionReason: null,
+      cancelRequested: false,
     };
     tx.s.reservations = { ...tx.s.reservations, [o.obligationId]: reservation };
     const operation: ProviderOperation = {
@@ -740,7 +752,7 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
     // A request, not a release (principles 6 + 7): the earmark stays until the server verifies
     // the order can no longer be captured (ORDER_VOIDED). A capture that completes anyway still
     // settles. The blocking decision is untouched, so DEFER keeps working (principle 2).
-    tx.setReservation({ ...r, status: "CANCEL_REQUESTED" });
+    tx.setReservation({ ...r, status: "CANCEL_REQUESTED", cancelRequested: true });
     tx.emit("PROVIDER_CHECKOUT_CANCEL_REQUESTED", {
       obligationId: o.obligationId,
       operationId: r.operationId,
@@ -815,6 +827,16 @@ export interface ExecuteOutcome {
   readonly events: readonly DomainEvent[];
 }
 
+/**
+ * Provider facts must come only from trusted server code, never from a player session.
+ *
+ * L5 (D1b, not enforced here): the server must give every APPLY_VERIFIED_PROVIDER_EVENT command a
+ * freshly generated random commandId from a server-only id space, distinct from any id a client can
+ * choose. Command ids are idempotency keys per world (rejections are final, #46), so a player who
+ * could predict or pre-use a provider command's id could make a real verified capture collide with
+ * a stored REJECTED result (IDEMPOTENCY_CONFLICT) and never apply. The dedup key for the fact
+ * itself is (eventType, providerEventId), not the commandId (ADR-0008 M1).
+ */
 function originAllowed(cmd: AuthorizedCommand): boolean {
   if (cmd.kind === "APPLY_VERIFIED_PROVIDER_EVENT") return cmd.origin === "VERIFIED_EXTERNAL";
   return cmd.origin === "PLAYER";

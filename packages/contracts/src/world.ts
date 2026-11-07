@@ -92,7 +92,8 @@ export const MoneyRealmSchema = z.enum(["FICTIONAL", "PAYPAL_SANDBOX"]);
  * a NEEDS_ATTENTION reservation.
  * - AWAITING_PAYER: checkout started, no provider fact yet (PLAYER `START_PROVIDER_CHECKOUT`).
  * - CANCEL_REQUESTED: the player asked to cancel (PLAYER `REQUEST_CHECKOUT_CANCEL`). Nothing is
- *   released yet: the server must first verify that the order can no longer be captured.
+ *   released yet: the server must first verify that the order can no longer be captured. The
+ *   request is also kept in `cancelRequested`, which survives later status changes.
  * - CAPTURE_PENDING: a verified capture is PENDING at PayPal (VERIFIED_EXTERNAL).
  * - CAPTURE_DENIED: a verified capture was declined; the buyer may retry (VERIFIED_EXTERNAL).
  * - NEEDS_ATTENTION: a verified fact could not be applied normally (see `attentionReason`).
@@ -125,6 +126,10 @@ export const AttentionReasonSchema = z.enum([
   "VOID_AMOUNT_MISMATCH",
   /** A void for an operation whose capture already settled the obligation. */
   "VOID_AFTER_CAPTURE",
+  /** A void while a verified capture is PENDING; releasing could pay the bill twice (review H2). */
+  "VOID_WHILE_CAPTURE_PENDING",
+  /** A CAPTURE_PENDING / CAPTURE_DENIED whose amount differs from the reservation (review L2). */
+  "CAPTURE_STATUS_AMOUNT_MISMATCH",
   /** A refund for an already SETTLED obligation: it stays SETTLED, nothing is reversed. */
   "REFUNDED_AFTER_SETTLEMENT",
   /** A refund seen before any capture settled the obligation. */
@@ -150,7 +155,10 @@ export const AttentionRecordSchema = z
     obligationId: ObligationIdSchema,
     reason: AttentionReasonSchema,
     amount: PositiveMoneySchema,
-    /** The obligation's active reservation that was put into NEEDS_ATTENTION, if any. */
+    /**
+     * The reservation put into NEEDS_ATTENTION: only ever the fact's OWN operation. A fact about a
+     * stale operation leaves a newer checkout of the same bill untouched, so this is null (H1).
+     */
     reservationOperationId: ProviderOperationIdSchema.nullable(),
     day: WorldDaySchema,
   })
@@ -285,6 +293,8 @@ export const WorldSnapshotSchema = z
           status: ReservationStatusSchema,
           /** 0.3.0: non-null exactly when status is NEEDS_ATTENTION (the latest reason). */
           attentionReason: AttentionReasonSchema.nullable(),
+          /** 0.3.0: the player asked to cancel; survives later status changes (review L1). */
+          cancelRequested: z.boolean(),
         })
         .strict(),
     ),

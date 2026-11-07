@@ -69,6 +69,8 @@ export interface Reservation {
   readonly status: ReservationStatus;
   /** Non-null exactly when status is NEEDS_ATTENTION. */
   readonly attentionReason: AttentionReason | null;
+  /** The player asked to cancel. Survives later status changes (review L1); never resets. */
+  readonly cancelRequested: boolean;
 }
 
 /**
@@ -137,8 +139,8 @@ export interface WorldState {
   readonly attention: readonly AttentionRecord[];
   /**
    * Provider fact keys already applied (one verified provider event → at most one effect). A
-   * settled capture is its bare capture id (pre-0.2.0 form, kept for stable hashes); other facts
-   * are `<eventType>:<providerEventId>`; recorded attention is `ATTENTION:<eventType>:<id>`.
+   * key starts with its event type: `<eventType>:fact:<id>` for an applied fact and
+   * `<eventType>:attention:<id>` for a recorded one (review L4: no collisions across types).
    */
   readonly appliedProviderEvents: readonly string[];
   readonly counters: {

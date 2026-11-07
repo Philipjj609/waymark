@@ -103,11 +103,12 @@ Reservation status (snapshot `reservations[].status`, realm always `PAYPAL_SANDB
 | From                            | Trigger (origin)                                      | To / effect                                                         |
 | ------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------- |
 | (none)                          | `START_PROVIDER_CHECKOUT` (PLAYER)                    | AWAITING_PAYER; cash reserved, no journal                           |
-| AWAITING_PAYER, CAPTURE_DENIED  | `REQUEST_CHECKOUT_CANCEL` (PLAYER)                    | CANCEL_REQUESTED; **nothing released**                              |
+| AWAITING_PAYER, CAPTURE_DENIED  | `REQUEST_CHECKOUT_CANCEL` (PLAYER), once              | CANCEL_REQUESTED + `cancelRequested`; **nothing released**          |
 | any but NEEDS_ATTENTION         | `CAPTURE_PENDING` (VERIFIED_EXTERNAL)                 | CAPTURE_PENDING                                                     |
-| AWAITING_PAYER, CAPTURE_PENDING | `CAPTURE_DENIED` (VERIFIED_EXTERNAL)                  | CAPTURE_DENIED (buyer may retry); CANCEL_REQUESTED stays as it is   |
+| AWAITING_PAYER, CAPTURE_PENDING | `CAPTURE_DENIED` (VERIFIED_EXTERNAL)                  | CAPTURE_DENIED, or CANCEL_REQUESTED if `cancelRequested`            |
 | any but NEEDS_ATTENTION         | `CAPTURE_COMPLETED`, exact amount (VERIFIED_EXTERNAL) | reservation consumed + SETTLED in one command ("the capture wins")  |
-| any but NEEDS_ATTENTION         | `ORDER_VOIDED`, exact amount (VERIFIED_EXTERNAL)      | reservation released, obligation keeps DUE/OVERDUE                  |
+| any but NEEDS_ATTENTION/PENDING | `ORDER_VOIDED`, exact amount (VERIFIED_EXTERNAL)      | reservation released, obligation keeps DUE/OVERDUE                  |
+| CAPTURE_PENDING                 | `ORDER_VOIDED` (VERIFIED_EXTERNAL)                    | NEEDS_ATTENTION (`VOID_WHILE_CAPTURE_PENDING`); earmark kept        |
 | any                             | a verified fact that cannot be applied (below)        | NEEDS_ATTENTION + `attention[]` record; no journal, no cash         |
 | NEEDS_ATTENTION                 | any further verified fact                             | another record (`RESERVATION_NEEDS_ATTENTION`); never auto-resolved |
 
@@ -116,9 +117,26 @@ Reservation status (snapshot `reservations[].status`, realm always `PAYPAL_SANDB
 
 **Attention reasons** (`PROVIDER_ATTENTION_RECORDED`, idempotent per (eventType, providerEventId)): `CAPTURE_AFTER_VOID`,
 `CAPTURE_FOR_SETTLED_OBLIGATION`, `CAPTURE_AMOUNT_MISMATCH`, `VOID_AMOUNT_MISMATCH`, `VOID_AFTER_CAPTURE`,
-`REFUNDED_AFTER_SETTLEMENT`, `REFUND_BEFORE_SETTLEMENT`, `RESERVATION_NEEDS_ATTENTION`. If the obligation has an active
-reservation it becomes NEEDS_ATTENTION and stays reserved. Facts that do not belong to the obligation (another world, an
-unknown obligation, an operation never started for it) are still rejected, because there is nothing to record them against.
+`VOID_WHILE_CAPTURE_PENDING`, `CAPTURE_STATUS_AMOUNT_MISMATCH`, `REFUNDED_AFTER_SETTLEMENT`, `REFUND_BEFORE_SETTLEMENT`,
+`RESERVATION_NEEDS_ATTENTION`. Only when the obligation's active reservation belongs to the fact's **own** operation does it
+become NEEDS_ATTENTION (and stay reserved). A fact about a stale operation (e.g. a late capture or refund of a voided order)
+is recorded with `reservationOperationId: null` and leaves a newer checkout untouched, so that checkout's own capture still
+settles (review H1). Facts that do not belong to the obligation (another world, an unknown obligation, an operation never
+started for it) and status facts for a non-active operation are still rejected, because there is nothing to record them against.
+
+**Review fixes (2026-11-07, still contracts 0.3.0, unreleased):**
+- H1: attention for a stale operation never changes the current reservation (above).
+- H2: a void while a capture is PENDING would let the bill be paid twice once the capture completes. It is recorded as
+  `VOID_WHILE_CAPTURE_PENDING` and the earmark is kept.
+- L1: the cancel request is a separate `cancelRequested` flag on the reservation (shown in the snapshot). It survives
+  CAPTURE_PENDING → CAPTURE_DENIED, and the cancel is never offered twice.
+- L2: a CAPTURE_PENDING / CAPTURE_DENIED with a wrong amount is recorded (`CAPTURE_STATUS_AMOUNT_MISMATCH`), not rejected.
+- L3: for `CAPTURE_REFUNDED`, `providerEventId` is the PayPal **refund id** (the capture id goes in `evidenceRef`), so two
+  partial refunds are two facts and two records.
+- L4: every dedup key starts with its event type: `<eventType>:fact:<id>` or `<eventType>:attention:<id>`. A capture id that
+  looks like another type's key can no longer swallow that fact. The keys are not hashed; golden hashes are unchanged.
+- L5 (documented in the engine, enforced by the server, D1b): provider commands use server-generated random command ids
+  from a space players cannot choose, so a player can never pre-occupy the id of a verified fact's command.
 
 **Cancel and timeout.** Cancel is a request. Release needs a verified `ORDER_VOIDED`, whose `providerEventId` is the
 PayPal **order id**: the server read the order back as VOIDED, or as expired / not found after its expiry, with no
