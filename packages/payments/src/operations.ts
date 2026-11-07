@@ -129,6 +129,8 @@ const summary = (r: PayPalResult<unknown>): string =>
 const orderOf = (r: PayPalResult<ObservedOrder>): ObservedOrder | null =>
   r.kind === "OK" ? r.value : "order" in r && r.kind !== "CONFLICT" ? r.order : null;
 const DEFINITE_CAPTURE_REFUSALS = new Set(["NOT_APPROVED", "DECLINED", "REJECTED"]);
+/** Answers that mean money was, or may have been, captured. */
+const MONEY_SIGNALS = new Set(["OK", "PENDING", "ALREADY_CAPTURED", "UNCERTAIN"]);
 
 export type VerifyResult =
   | VerificationOutcome
@@ -224,10 +226,17 @@ export class SandboxCheckout {
     const rotate = DEFINITE_CAPTURE_REFUSALS.has(r.kind);
     const fresh = rotate ? this.newRequestId() : null;
     await this.store.update(operationId, (c) => {
-      // A late answer for a capture id that has since been rotated is stale: it may describe an
-      // older attempt, so it must not overwrite the state of the current one (#95 re-review N2).
+      // A late answer for a capture id that has since been rotated is stale. A stale REFUSAL must
+      // not overwrite the current attempt; but a stale answer that shows money captured or possibly
+      // captured (OK, PENDING, ALREADY_CAPTURED, UNCERTAIN) must never be hidden (#95 N2, Q3).
       if (c.captureRequestId !== rec.captureRequestId)
-        return { ...c, lastResult: `stale:${summary(r)}` };
+        return MONEY_SIGNALS.has(r.kind)
+          ? {
+              ...c,
+              captureState: merge(c.captureState, stepState(r)),
+              lastResult: `stale:${summary(r)}`,
+            }
+          : { ...c, lastResult: `stale:${summary(r)}` };
       const captureState =
         r.kind === "NOT_SENT"
           ? unsent(c.captureState, rec.captureState)
@@ -257,7 +266,21 @@ export class SandboxCheckout {
     // Defence in depth (#95 review L5): the order must carry this operation's id.
     if (r.value.referenceId !== rec.operationId && r.value.customId !== rec.operationId)
       return { ok: false, reason: "OPERATION_MISMATCH" };
-    const observed = observedCaptureOf(r.value);
+    // A server read is authoritative about captures: record what it shows (#95 re-review Q5).
+    const order = r.value;
+    const live = order.captures.filter((x) => x.status !== "DECLINED" && x.status !== "FAILED");
+    const fresh = this.newRequestId();
+    await this.store.update(operationId, (c) => {
+      if (live.length === 1 && live[0]?.status === "COMPLETED")
+        return { ...c, captureState: merge(c.captureState, "CONFIRMED") };
+      if (live.length === 1 && live[0]?.status === "PENDING")
+        return { ...c, captureState: merge(c.captureState, "PENDING") };
+      // Only declined attempts, nothing holding money: the buyer may retry with a fresh capture id.
+      if (live.length === 0 && order.captures.length > 0 && c.captureState !== "CONFIRMED")
+        return { ...c, captureState: "REFUSED", captureRequestId: fresh };
+      return c;
+    });
+    const observed = observedCaptureOf(order);
     if (!observed) return { ok: false, reason: "MULTIPLE_CAPTURES" };
     return verifyCapture(
       {

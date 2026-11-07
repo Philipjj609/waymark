@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   ClientConfigError,
   InMemoryOperationStore,
+  type OperationRecord,
   observedCaptureOf,
   PayPalSandboxClient,
   parseOrder,
@@ -1239,5 +1240,109 @@ describe("re-review of #95: stale answers, declined-then-paid, in-progress, unre
       kind: "UNCERTAIN",
       cause: "MALFORMED_RESPONSE",
     });
+  });
+});
+
+describe("second re-review of #95: stale money signals, authoritative reads", () => {
+  const base = { worldId: "wld_demo" as WorldId, obligationId: "obl_phone_d8" as ObligationId };
+  let n = 800;
+  const nextRid = () => RID(++n);
+  const seed = async (
+    store: InMemoryOperationStore,
+    opId: ProviderOperationId,
+    captureState: OperationRecord["captureState"],
+  ) =>
+    store.begin({
+      operationId: opId,
+      ...base,
+      expected: EUR(3000),
+      createRequestId: RID(11),
+      captureRequestId: RID(12),
+      paypalOrderId: "O1",
+      createState: "CONFIRMED",
+      captureState,
+      lastResult: null,
+    });
+
+  it("Q3: a stale answer showing money (OK) is not hidden behind REFUSED", async () => {
+    const store = new InMemoryOperationStore();
+    const opId = "pop_q3" as ProviderOperationId;
+    await seed(store, opId, "NOT_STARTED");
+    let release: (r: Response) => void = () => {};
+    const late = new Promise<Response>((r) => {
+      release = r;
+    });
+    const pp = new FakePayPal();
+    const f: typeof fetch = async (u, i = {}) =>
+      String(u).endsWith("/capture") ? late : pp.fetch(String(u), i);
+    const co = new SandboxCheckout(
+      new PayPalSandboxClient({ clientId: CLIENT_ID, clientSecret: SECRET, fetch: f }),
+      store,
+      nextRid,
+    );
+    const a = co.capture(opId);
+    await new Promise((r) => setTimeout(r, 10));
+    // Meanwhile another call got NOT_APPROVED: state REFUSED, id rotated.
+    await store.update(opId, (c) => ({ ...c, captureState: "REFUSED", captureRequestId: RID(13) }));
+    release(
+      json(201, {
+        id: "O1",
+        status: "COMPLETED",
+        purchase_units: [
+          {
+            reference_id: opId,
+            amount: { currency_code: "EUR", value: "30.00" },
+            payments: {
+              captures: [
+                { id: "C1", status: "COMPLETED", amount: { currency_code: "EUR", value: "30.00" } },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+    expect((await a).kind).toBe("OK");
+    expect(await store.get(opId)).toMatchObject({
+      captureState: "CONFIRMED",
+      captureRequestId: RID(13),
+    });
+  });
+
+  it("Q5: verify() records an authoritative read: declined-only after PENDING becomes retryable", async () => {
+    const store = new InMemoryOperationStore();
+    const opId = "pop_q5" as ProviderOperationId;
+    await seed(store, opId, "PENDING");
+    const pp = new FakePayPal();
+    const f: typeof fetch = async (u, i = {}) =>
+      String(u).includes("/v2/checkout/orders/O1")
+        ? json(200, {
+            id: "O1",
+            status: "APPROVED",
+            purchase_units: [
+              {
+                reference_id: opId,
+                amount: { currency_code: "EUR", value: "30.00" },
+                payments: {
+                  captures: [
+                    {
+                      id: "C1",
+                      status: "DECLINED",
+                      amount: { currency_code: "EUR", value: "30.00" },
+                    },
+                  ],
+                },
+              },
+            ],
+          })
+        : pp.fetch(String(u), i);
+    const co = new SandboxCheckout(
+      new PayPalSandboxClient({ clientId: CLIENT_ID, clientSecret: SECRET, fetch: f }),
+      store,
+      nextRid,
+    );
+    expect((await co.verify(opId, "2026-11-07T12:00:00Z")).ok).toBe(false);
+    const rec = await store.get(opId);
+    expect(rec?.captureState).toBe("REFUSED");
+    expect(rec?.captureRequestId).not.toBe(RID(12));
   });
 });
