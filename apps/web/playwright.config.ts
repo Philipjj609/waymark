@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { defineConfig, devices } from "@playwright/test";
 
 /**
@@ -10,8 +11,20 @@ import { defineConfig, devices } from "@playwright/test";
  * - WORLD_STORE=memory: ephemeral worlds, never the shared or production database;
  * - AI_PROVIDER=fake, empty NEBIUS_API_KEY: the deterministic tutor, no model calls or cost;
  * - empty PAYPAL_* values: the fictional journey never calls PayPal (D1b adds the sandbox leg).
+ *
+ * The production build is made BEFORE Playwright starts (`pnpm e2e` = `next build && playwright
+ * test`), so the web server's readiness window covers only `next start` (about a second), not a
+ * multi-minute build during which some other server could appear on the port and answer the
+ * health check. Run the suite through `pnpm e2e`; a bare `playwright test` without a build fails
+ * at `next start` (no production build), or would serve a stale one.
+ *
+ * Each checkout gets its own default port (3100–3899, derived from its path), so two worktrees
+ * running the suite at the same time never meet. E2E_PORT overrides it.
  */
-const PORT = Number(process.env.E2E_PORT ?? 3100);
+const PORT = Number(
+  process.env.E2E_PORT ??
+    3100 + (createHash("sha256").update(process.cwd()).digest().readUInt16BE(0) % 800),
+);
 const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({
@@ -33,13 +46,13 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: `pnpm exec next build --webpack && pnpm exec next start --port ${PORT}`,
+    command: `pnpm exec next start --port ${PORT}`,
     url: `${BASE_URL}/api/health`,
     // Never attach to a server that is already running: it could be another worktree's build or
-    // a dev server with a real .env (Postgres, Nebius). If the port is taken Playwright fails
-    // loudly; pick another with E2E_PORT (e.g. one per worktree).
+    // a dev server with a real .env (Postgres, Nebius). If something already answers the health
+    // URL, Playwright stops before any test; if the port is merely taken, `next start` fails.
     reuseExistingServer: false,
-    timeout: 300_000,
+    timeout: 60_000,
     stdout: "pipe",
     stderr: "pipe",
     env: {

@@ -161,6 +161,14 @@ test.describe("safety rules in the running app", () => {
       result: { status: "REJECTED", error: { code: "IDEMPOTENCY_CONFLICT" } },
     });
 
+    // "Not recorded" made observable: stateHash/version can't show it (a recorded rejection
+    // changes neither), but the original command must STILL replay as its accepted duplicate.
+    const retryAfterConflict = await page.request.post("/api/commands", { headers, data: paid });
+    expect(await retryAfterConflict.json()).toMatchObject({
+      duplicate: true,
+      result: { status: "ACCEPTED" },
+    });
+
     const now = await serverSnapshot(page, worldId);
     expect(now.stateHash).toBe(afterPay.stateHash);
     expect(now.version).toBe(afterPay.version);

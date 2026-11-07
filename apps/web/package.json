@@ -8,7 +8,7 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "e2e": "playwright test"
+    "e2e": "next build --webpack && playwright test"
   },
   "dependencies": {
     "@fle/ai": "workspace:*",
