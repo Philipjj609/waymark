@@ -31,7 +31,7 @@ export const cashBalanceFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "GENERAL_PRINCIPLE",
     statement:
-      "Cash is money you hold and can use to pay straight away: notes and coins, plus money in an account you can draw on whenever you ask. A right to receive money later and an item you own can both have value, but neither is cash until it has been turned into money you hold.",
+      "Cash is money you hold and can use to pay straight away: notes and coins, plus money in an account you can draw on whenever you ask. Money you expect later (an amount someone owes you, or pay you expect to earn) and things you own can have value, but none of them is cash until it has turned into money you hold.",
     support: [
       {
         sourceId: "src_ias_7",
@@ -41,6 +41,11 @@ export const cashBalanceFacts: readonly ReviewedFact[] = [
       {
         sourceId: "src_iasb_conceptual_framework_2018",
         locator: "para 4.6(a)(i) (a right to receive cash is an economic resource)",
+        relation: "SUPPORTS_CLAIM",
+      },
+      {
+        sourceId: "src_iasb_conceptual_framework_2018",
+        locator: "paras 4.3–4.4 (asset; economic resource)",
         relation: "SUPPORTS_CLAIM",
       },
       {
@@ -57,7 +62,7 @@ export const cashBalanceFacts: readonly ReviewedFact[] = [
     conceptIds: [id, "cpt_obligation" as ConceptId],
     scope: "GENERAL_PRINCIPLE",
     statement:
-      "A cash balance describes a single moment. It does not take away bills that fall due before the next money comes in, so the timing of money in and money out decides how much of the balance is really free.",
+      "A cash balance describes a single moment. It does not take away bills that fall due before the next money comes in, so the timing of money in and money out is the first check on how much of the balance is really safe to spend.",
     support: [
       {
         sourceId: "src_openstax_finance",
@@ -84,7 +89,7 @@ export const cashBalanceFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "SIMULATION_RULE",
     statement:
-      "In Waymark, your cash balance changes only when a payment, a purchase or an income is recorded. Receiving a bill or deferring it leaves cash where it was, and a payment or purchase that needs more cash than you hold is rejected, so nothing moves.",
+      "In Waymark, your cash balance changes only when a payment, a purchase or an income is recorded. Receiving a bill or deferring it leaves cash where it was, and a payment or purchase that needs more cash than you hold is rejected, so nothing moves. Your salary is not recorded anywhere until the day it arrives.",
     support: [
       {
         sourceId: "src_waymark_agents_invariants",
@@ -101,6 +106,16 @@ export const cashBalanceFacts: readonly ReviewedFact[] = [
         locator: "DEFER_OBLIGATION handler (OVERDUE, no late fee in v1)",
         relation: "DEFINES_SIMULATION_RULE",
       },
+      {
+        sourceId: "src_waymark_engine",
+        locator: "PAY_OBLIGATION handler",
+        relation: "DEFINES_SIMULATION_RULE",
+      },
+      {
+        sourceId: "src_waymark_fp30_fixture",
+        locator: "fp30Config(): opening cash, phone and rent bills, net salary",
+        relation: "DEFINES_SIMULATION_RULE",
+      },
     ],
     reviewStatus: "DRAFT",
     version: 1,
@@ -112,7 +127,7 @@ export const cashBalanceUnit: ConceptUnit = {
   explanation: [
     "Your cash balance is the money you hold right now and can use to pay today. That means notes and coins, plus money in an account you can spend from straight away.",
     "Money you expect to receive, such as a salary on its way, is not cash yet. Things you own, such as a laptop, are not cash either: you cannot pay a bill with them unless you sell them first.",
-    "The balance tells you what you hold, not what is free to spend. If bills fall due before your next income, part of the balance, or all of it, is already spoken for.",
+    "The balance tells you what you hold, not what is safe to spend. Bills due before your next income come off first, and everyday costs such as food need a share too.",
     "In Waymark, cash changes only when a payment, a purchase or an income is recorded. Receiving a bill or deferring it leaves your cash where it was, and a payment you cannot cover is rejected, so nothing moves.",
   ],
   inTheSimulation:
@@ -128,14 +143,14 @@ export const cashBalanceUnit: ConceptUnit = {
     {
       objectiveId: "obj_cash_balance_compute",
       statement:
-        "Given an opening cash balance and the payments made since, compute the cash balance after those payments.",
+        "Given an opening cash balance and a list of dated money events, compute the cash balance on a given day by counting only payments, purchases and income that have already happened.",
       competence: "APPLICATION",
       factIds: [FACT_SIM, FACT_DEFINITION],
     },
     {
       objectiveId: "obj_cash_balance_reason",
       statement:
-        "Given a cash balance and the dated bills due before the next income, explain why the balance is not the same as what is safe to spend.",
+        "Given a cash balance and the dated bills due before the next income, decide whether any of the balance is safe to spend and choose the reason that supports the decision.",
       competence: "REASONING",
       factIds: [FACT_SNAPSHOT],
     },
@@ -145,9 +160,9 @@ export const cashBalanceUnit: ConceptUnit = {
       misconceptionId: MIS_SAFE,
       statement: "Cash balance equals what is safe to spend.",
       whyPlausible:
-        "The balance is the clearest number on screen, and it is money you really hold, so treating all of it as free to spend feels natural.",
+        "The balance is the clearest number on screen, and it is money you really hold, so treating all of it as safe to spend feels natural.",
       correction:
-        "Look at the bills due before your next income and take them away first. What is left after them is what is free to spend.",
+        "Look at the bills due before your next income and take them away first. What is left is the most you could spend without missing one of those bills, and it still has to cover everyday costs such as food and any later bill your next income will not cover.",
       factIds: [FACT_SNAPSHOT],
     },
     {
@@ -156,7 +171,7 @@ export const cashBalanceUnit: ConceptUnit = {
       whyPlausible:
         "When income is regular and you know the date, it can feel as good as money already in your hands.",
       correction:
-        "Cash is only what you hold now. Expected money becomes cash on the day it arrives, and it cannot pay a bill that is due before that day.",
+        "Cash is only what you hold now. Expected money becomes cash on the day it arrives, so it cannot pay a bill on time if the bill is due before that day.",
       factIds: [FACT_DEFINITION, FACT_SIM],
     },
     {
@@ -176,7 +191,7 @@ export const cashBalanceUnit: ConceptUnit = {
     params: fp,
     steps: [
       {
-        text: "You start the month with {{openingCash}} in cash. On the first day you buy a laptop for {{laptopCost}}, so your cash balance becomes {{afterLaptop}}. The laptop is yours, but it is no longer cash.",
+        text: "In this fictional month, you start with {{openingCash}} in cash. On the first day you buy a laptop for {{laptopCost}}, so your cash balance becomes {{afterLaptop}}. The laptop is yours, but it is no longer cash.",
         derive: {
           name: "afterLaptop",
           expr: { minus: [{ param: "openingCash" }, { param: "laptopCost" }] },
@@ -190,17 +205,17 @@ export const cashBalanceUnit: ConceptUnit = {
         },
       },
       {
-        text: "Is {{afterPhone}} safe to spend? Check what is due before your next income. Rent of {{rentAmount}} is due on {{rentDue}}, and your salary of {{salaryAmount}} only arrives on {{salaryDay}}.",
+        text: "Is {{afterPhone}} safe to spend? Check what is due before your next income. Rent of {{rentAmount}} is due on {{rentDue}}, and your salary of {{salaryAmount}} (already after tax) only arrives on {{salaryDay}}.",
       },
       {
-        text: "The rent needs {{rentAmount}} and you hold {{afterPhone}}, so you are {{shortfall}} short on {{rentDue}}. The balance looked like spending money, but the rent already had a claim on all of it.",
+        text: "The rent needs {{rentAmount}} and you hold {{afterPhone}}, so you are {{shortfall}} short on {{rentDue}}. The balance looked like spending money, but all of it, and more, was already needed for the rent.",
         derive: {
           name: "shortfall",
           expr: { minus: [{ param: "rentAmount" }, { param: "afterPhone" }] },
         },
       },
       {
-        text: "In Waymark, time stops at the rent. A payment you cannot cover is rejected and nothing moves; you can defer the rent instead, which makes it overdue but still owed, with no late fee in this version. In real life, paying late can bring fees and cost trust.",
+        text: "In Waymark, the game pauses on {{rentDue}} and asks you to pay or defer the rent. A payment you cannot cover is rejected and nothing moves. Deferring makes the rent overdue but still owed, with no late fee in this version. In real life, paying late can bring fees and cost trust.",
       },
     ],
   },
@@ -238,7 +253,7 @@ export const cashBalanceUnit: ConceptUnit = {
         { itemId: "held", text: "The {{cashNow}} in your account", categoryId: "cash_now" },
         {
           itemId: "salary",
-          text: "Your net salary of {{salaryAmount}}, arriving on {{salaryDay}}",
+          text: "Your salary of {{salaryAmount}} (already after tax), arriving on {{salaryDay}}",
           categoryId: "not_cash",
           misconceptionId: MIS_INCOMING,
         },
@@ -277,7 +292,7 @@ export const cashBalanceUnit: ConceptUnit = {
         salaryDay: fp.salaryDay,
       },
       prompt:
-        "You started the month with {{openingCash}} in cash. On the first day you bought a laptop for {{laptopCost}}. On {{phoneDue}} you paid the phone bill of {{phoneAmount}}. Your net salary of {{salaryAmount}} arrives on {{salaryDay}}. What is your cash balance at the end of {{phoneDue}}?",
+        "You started the month with {{openingCash}} in cash. On the first day you bought a laptop for {{laptopCost}}. On {{phoneDue}} you paid the phone bill of {{phoneAmount}}. Your salary of {{salaryAmount}} (already after tax) arrives on {{salaryDay}}. What is your cash balance at the end of {{phoneDue}}?",
       answer: {
         minus: [
           { minus: [{ param: "openingCash" }, { param: "laptopCost" }] },
@@ -293,7 +308,7 @@ export const cashBalanceUnit: ConceptUnit = {
           expr: { minus: [{ param: "openingCash" }, { param: "phoneAmount" }] },
           misconceptionId: MIS_OWNED,
           feedback:
-            "It looks like the laptop money was still counted as cash. Buying the laptop turned {{laptopCost}} of cash into an item, so take it away too.",
+            "It looks like the laptop payment was left out. Buying the laptop turned {{laptopCost}} of cash into an item, so it comes off too.",
         },
         {
           expr: {
@@ -326,6 +341,7 @@ export const cashBalanceUnit: ConceptUnit = {
         openingCash: fp.openingCash,
         laptopCost: fp.laptopCost,
         phoneAmount: fp.phoneAmount,
+        phoneDue: fp.phoneDue,
         rentAmount: fp.rentAmount,
         rentDue: fp.rentDue,
         salaryAmount: fp.salaryAmount,
@@ -343,20 +359,21 @@ export const cashBalanceUnit: ConceptUnit = {
         },
       ],
       prompt:
-        "You have bought the laptop and paid the phone bill, and you now hold {{afterPhone}} in cash. Rent of {{rentAmount}} is due on {{rentDue}}. Your salary of {{salaryAmount}} arrives on {{salaryDay}}. Is any of your {{afterPhone}} safe to spend on something new today?",
+        "It is the end of {{phoneDue}}. You have bought the laptop and paid the phone bill, and you now hold {{afterPhone}} in cash. Rent of {{rentAmount}} is due on {{rentDue}}. Your salary of {{salaryAmount}} (already after tax) arrives on {{salaryDay}}. Could you spend any of your {{afterPhone}} on something new today and still pay the rent in full on its due date?",
       answers: [
         {
           choiceId: "no",
-          text: "No. None of it is free to spend before the rent is paid.",
+          text: "No. I cannot pay the rent in full on {{rentDue}} even now.",
           correct: true,
-          feedback: "That is the right answer. Check that your reason matches it.",
+          feedback:
+            "Your answer fits the timing of the bills. Your reason shows whether you checked what is due before the salary.",
         },
         {
           choiceId: "yes_balance",
           text: "Yes. It is all cash I hold, so all of it is mine to spend.",
           correct: false,
           feedback:
-            "You do hold it, but the rent due on {{rentDue}} already needs more than that. Holding money and having it free are different things.",
+            "You do hold it, but the rent due on {{rentDue}} already needs more than that. Holding money and having it safe to spend are different things.",
           misconceptionId: MIS_SAFE,
         },
         {
@@ -364,7 +381,7 @@ export const cashBalanceUnit: ConceptUnit = {
           text: "Yes. The salary arrives soon and will make up for anything I spend.",
           correct: false,
           feedback:
-            "The salary arrives on {{salaryDay}}, after the rent is due on {{rentDue}}. It cannot pay a bill that comes first.",
+            "The salary arrives on {{salaryDay}}, after the rent is due on {{rentDue}}. Deferring the rent and paying it from the salary is a real option in Waymark, but that is paying late, and this question asks about paying on time.",
           misconceptionId: MIS_INCOMING,
         },
       ],
@@ -372,22 +389,28 @@ export const cashBalanceUnit: ConceptUnit = {
       reasons: [
         {
           choiceId: "rent_first",
-          text: "Rent of {{rentAmount}} is due on {{rentDue}}, before the salary arrives, and it already needs more than I hold.",
+          text: "Rent is due on {{rentDue}}, before the salary, and it needs more than I hold.",
           correct: true,
           feedback:
-            "Yes. You compared the cash with what is due before the next income, which is the check that matters.",
+            "Yes. You compared the cash with what is due before the next income, and every euro spent now would make the gap bigger. In real life you could often pay part of the rent now; in Waymark a bill is paid in full or deferred, but the reasoning is the same.",
         },
         {
-          choiceId: "balance_is_spendable",
-          text: "The cash balance shows what I hold, so it shows what I can spend.",
+          choiceId: "never_before_payday",
+          text: "Money should never be spent before payday, whatever bills are due.",
           correct: false,
           feedback:
-            "The balance is a snapshot of what you hold. It does not take away the rent that is due before your next income.",
-          misconceptionId: MIS_SAFE,
+            "A blanket rule can give the right answer here by chance. The check that decides it is the rent due on {{rentDue}}, before the salary.",
+        },
+        {
+          choiceId: "laptop_already",
+          text: "I already spent {{laptopCost}} on the laptop, so I should not spend more this month.",
+          correct: false,
+          feedback:
+            "The laptop is already counted in your {{afterPhone}}. What decides it is that the rent due on {{rentDue}} needs more than you hold.",
         },
         {
           choiceId: "salary_covers",
-          text: "The salary of {{salaryAmount}} will arrive, so money spent now will be replaced in time.",
+          text: "The salary of {{salaryAmount}} arrives on {{salaryDay}}, so anything I spend now is replaced.",
           correct: false,
           feedback:
             "The salary is real but late for this bill. It arrives on {{salaryDay}}, and the rent is due on {{rentDue}}.",
@@ -395,10 +418,10 @@ export const cashBalanceUnit: ConceptUnit = {
         },
         {
           choiceId: "works_out",
-          text: "Spending is fine as long as things happen to work out by the end of the month.",
+          text: "Spending is fine if things happen to work out by the end of the month.",
           correct: false,
           feedback:
-            "Whether things work out later is partly luck. Judge the choice by what you know now: the rent is due before the salary.",
+            "Things working out later is not a plan. Judge the choice by what you know now: the rent is due before the salary, so spending now means paying the rent late.",
         },
       ],
     },
@@ -414,37 +437,55 @@ export const cashBalanceUnit: ConceptUnit = {
       simulationLink: "NONE",
       params: {
         startCash: eur(64000),
+        mondayTakings: eur(18000),
         supplierPaid: eur(21500),
         tableCost: eur(8500),
         payDay: { kind: "day", day: 2 },
+        spotFee: eur(12000),
+        spotFeeDue: { kind: "day", day: 5 },
         takings: eur(48000),
         marketDay: { kind: "day", day: 6 },
       },
       prompt:
-        "Amira sells vegetables from a market stall. She starts the week with {{startCash}} in her cash box and bank account. On {{payDay}} she pays her supplier {{supplierPaid}} and buys a new folding table for {{tableCost}}. She expects to take {{takings}} at the next market on {{marketDay}}. What is her cash balance at the end of {{payDay}}?",
+        "Amira sells vegetables from a market stall. She starts the week with {{startCash}} in her cash box and bank account, and takes {{mondayTakings}} at the market on the first day. On {{payDay}} she pays her supplier {{supplierPaid}}. On the same day she buys a folding table for {{tableCost}}. The fee for her market spot, {{spotFee}}, is due on {{spotFeeDue}}. She expects to take {{takings}} at the market on {{marketDay}}. What is her cash balance at the end of {{payDay}}?",
       answer: {
         minus: [
-          { minus: [{ param: "startCash" }, { param: "supplierPaid" }] },
+          {
+            minus: [
+              { sum: [{ param: "startCash" }, { param: "mondayTakings" }] },
+              { param: "supplierPaid" },
+            ],
+          },
           { param: "tableCost" },
         ],
       },
       feedbackCorrect:
-        "Correct. Both payments have happened, so both come off. The takings are not cash until the market day.",
+        "Correct. The first day's takings have arrived and both payments have happened. The spot fee is not paid yet, and the later takings are not cash until the market day.",
       feedbackIncorrect:
-        "Start from {{startCash}} and take away each payment Amira has made by the end of {{payDay}}.",
+        "Start from {{startCash}}, add the takings that have already arrived, and take away each payment Amira has made by the end of {{payDay}}.",
       diagnostics: [
         {
-          expr: { minus: [{ param: "startCash" }, { param: "supplierPaid" }] },
+          expr: {
+            minus: [
+              { sum: [{ param: "startCash" }, { param: "mondayTakings" }] },
+              { param: "supplierPaid" },
+            ],
+          },
           misconceptionId: MIS_OWNED,
           feedback:
-            "The table is something Amira owns now, but the {{tableCost}} she paid for it has left her cash. Take it away too.",
+            "It looks like the table was left out. The table is something Amira owns now, but the {{tableCost}} she paid for it has left her cash.",
         },
         {
           expr: {
             sum: [
               {
                 minus: [
-                  { minus: [{ param: "startCash" }, { param: "supplierPaid" }] },
+                  {
+                    minus: [
+                      { sum: [{ param: "startCash" }, { param: "mondayTakings" }] },
+                      { param: "supplierPaid" },
+                    ],
+                  },
                   { param: "tableCost" },
                 ],
               },
@@ -454,6 +495,27 @@ export const cashBalanceUnit: ConceptUnit = {
           misconceptionId: MIS_INCOMING,
           feedback:
             "That includes the takings Amira only expects on {{marketDay}}. Count only money she already holds.",
+        },
+        {
+          expr: {
+            minus: [
+              {
+                minus: [
+                  {
+                    minus: [
+                      { sum: [{ param: "startCash" }, { param: "mondayTakings" }] },
+                      { param: "supplierPaid" },
+                    ],
+                  },
+                  { param: "tableCost" },
+                ],
+              },
+              { param: "spotFee" },
+            ],
+          },
+          misconceptionId: MIS_SAFE,
+          feedback:
+            "It looks like the spot fee was taken off, but it is not due until {{spotFeeDue}}. The balance counts what she holds; setting money aside for the fee is a separate check.",
         },
       ],
     },
@@ -470,6 +532,7 @@ export const cashBalanceUnit: ConceptUnit = {
       params: {
         today: { kind: "day", day: 3 },
         cartCash: eur(41000),
+        stockValue: eur(32000),
         pitchFee: eur(6000),
         pitchDue: { kind: "day", day: 4 },
         beansBill: eur(24000),
@@ -488,39 +551,43 @@ export const cashBalanceUnit: ConceptUnit = {
             ],
           },
         },
+        {
+          name: "shortfall",
+          expr: { minus: [{ param: "grinderCost" }, { param: "freeCash" }] },
+        },
       ],
       prompt:
-        "Jonas runs a coffee cart. On {{today}} he holds {{cartCash}} in cash. His pitch fee of {{pitchFee}} is due on {{pitchDue}}, and the bill for coffee beans, {{beansBill}}, is due on {{beansDue}}. A festival on {{eventDay}} should bring in {{eventTakings}}. He wants a new grinder that costs {{grinderCost}}. Which statement about buying it today is accurate?",
+        "Jonas runs a coffee cart. On {{today}} he holds {{cartCash}} in cash, and he has coffee beans and cups in stock that cost him {{stockValue}}. The fee for his spot at the market, {{pitchFee}}, is due on {{pitchDue}}, and the bill for coffee beans, {{beansBill}}, is due on {{beansDue}}. He has no other sales until a festival on {{eventDay}}, which should bring in {{eventTakings}}. He wants a new grinder that costs {{grinderCost}}. Which statement about buying it today is accurate?",
       choices: [
         {
           choiceId: "free_after_bills",
-          text: "Only {{freeCash}} is not needed for bills due before the festival, so buying the grinder would leave a bill unpaid.",
+          text: "After the two bills due before the festival, only {{freeCash}} is left, less than the grinder costs.",
           correct: true,
           feedback:
-            "Yes. You took away the bills due before the next income and compared what was left with the price.",
+            "Yes. You took away the bills due before the next income: buying the grinder would leave him {{shortfall}} short when the bean bill is due.",
         },
         {
           choiceId: "balance_covers",
-          text: "He holds {{cartCash}}, which is more than the grinder costs, so he can buy it safely.",
+          text: "He holds {{cartCash}}, more than the {{grinderCost}} grinder, so buying it today still leaves enough.",
           correct: false,
           feedback:
-            "He does hold enough to pay for the grinder, but the pitch fee and the bean bill are due first. Take them away before comparing.",
+            "He does hold enough to pay for the grinder, but the spot fee and the bean bill are due first. Take them away before comparing.",
           misconceptionId: MIS_SAFE,
         },
         {
           choiceId: "festival_covers",
-          text: "The festival should bring in {{eventTakings}}, so he can buy it now and pay the bills from that.",
+          text: "The festival should bring in {{eventTakings}}, so he can buy it today and pay the bills from that.",
           correct: false,
           feedback:
-            "The festival money only arrives on {{eventDay}}, after both bills are due. It cannot pay them in time.",
+            "The festival money only arrives on {{eventDay}}, after both bills are due. It cannot pay them on time.",
           misconceptionId: MIS_INCOMING,
         },
         {
-          choiceId: "cart_value",
-          text: "His cart and equipment are worth more than both bills, so the bills are covered.",
+          choiceId: "stock_value",
+          text: "His stock cost {{stockValue}}, more than the bean bill, so buying the grinder still leaves that bill covered.",
           correct: false,
           feedback:
-            "The cart has value, but it is not cash. He could only pay the bills with it by selling it first.",
+            "Stock has value, but it is not cash. It pays a bill only after it has been sold.",
           misconceptionId: MIS_OWNED,
         },
       ],

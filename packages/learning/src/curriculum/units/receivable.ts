@@ -25,7 +25,7 @@ export const receivableFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "GENERAL_PRINCIPLE",
     statement:
-      "A receivable is a right to be paid by someone else for goods or work you have already provided. It is something of value you hold, but it is not cash until the payment actually arrives.",
+      "A receivable is money someone owes you. In everyday work and trade it usually comes from goods or work you have already delivered but not yet been paid for. It is something of value you hold, but it is not cash until the payment actually arrives.",
     support: [
       {
         sourceId: "src_iasb_conceptual_framework_2018",
@@ -36,6 +36,16 @@ export const receivableFacts: readonly ReviewedFact[] = [
         sourceId: "src_openstax_accounting_v1",
         locator:
           "§9.1 Short-term revenue recognition examples (sale on account: receivable now, cash later)",
+        relation: "SUPPORTS_CLAIM",
+      },
+      {
+        sourceId: "src_openstax_accounting_v1",
+        locator: "Ch. 9 Key Terms: accounts receivable; accrual accounting",
+        relation: "SUPPORTS_CLAIM",
+      },
+      {
+        sourceId: "src_ias_7",
+        locator: "para 6 (definitions of cash and cash equivalents)",
         relation: "SUPPORTS_CLAIM",
       },
       {
@@ -60,8 +70,9 @@ export const receivableFacts: readonly ReviewedFact[] = [
         relation: "SUPPORTS_CLAIM",
       },
       {
-        sourceId: "src_openstax_accounting_v1",
-        locator: "Ch. 9 Key Terms: accounts receivable; accrual accounting",
+        sourceId: "src_iasb_conceptual_framework_2018",
+        locator:
+          "para 1.17 (accrual accounting: effects recorded when they occur, not when cash moves)",
         relation: "SUPPORTS_CLAIM",
       },
       {
@@ -78,13 +89,8 @@ export const receivableFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "SIMULATION_RULE",
     statement:
-      "In Waymark's books, money someone owes you is kept separate from your cash, and an invoice is a document, not a cash movement: your cash changes only when a payment is actually received.",
+      "Waymark's books keep documents, obligations and cash movements apart: issuing a document such as an invoice posts nothing, and cash moves only when a payment is actually made or received. When freelance invoices arrive, money owed to you is planned to be recorded apart from your cash, and your cash will go up only when the client's payment is received.",
     support: [
-      {
-        sourceId: "src_waymark_adr_0002",
-        locator: "§1 Core rule 5 (receivables and cash are never revenue; net worth vs profit)",
-        relation: "DEFINES_SIMULATION_RULE",
-      },
       {
         sourceId: "src_waymark_agents_invariants",
         locator: "§6 invariant 8 (documents, obligations and cash movements are different things)",
@@ -100,15 +106,16 @@ const MIS_INVOICE = "mis_receivable_invoice_is_cash";
 const MIS_ON_TIME = "mis_receivable_arrives_on_time";
 const MIS_SPEND = "mis_receivable_spend_owed";
 const MIS_EXPECTED = "mis_receivable_expected_is_owed";
+const MIS_OUTCOME = "mis_receivable_outcome_proves_plan";
 
 export const receivableUnit: ConceptUnit = {
   conceptId: id,
   explanation: [
-    "A receivable is money someone owes you for something you have already delivered, such as a finished job or goods you handed over. You have a right to it, but it is not in your hands yet.",
+    "A receivable is money someone owes you, most often for something you have already delivered, such as a finished job or goods you handed over. You have a right to it, but it is not in your hands yet.",
     "Sending an invoice does not change your cash. The invoice asks to be paid; your cash goes up only when the payment actually arrives.",
-    "Money you are owed can come late, come only in part, or not come at all. A due date is the payer's promise, not a guarantee, so a plan that needs the money on that exact day carries risk.",
-    "Money you expect for work you have not done yet is not a receivable. It is expected income: nobody owes it to you until you deliver.",
-    "Freelance gigs and invoices are still being built in Waymark. When they arrive, money you are owed will be shown apart from your cash, and bills can only be paid from cash you actually hold.",
+    "Money you are owed can come late, come only in part, or not come at all. A due date is the date the payer is supposed to pay by, not a guarantee, so a plan that needs the money on that exact day carries risk.",
+    "Money you expect for work you have not done yet is usually not a receivable. It is expected income: for a job, the client normally owes you only once you deliver, or once the agreement makes a payment due.",
+    "Freelance gigs and invoices are still being built in Waymark. The plan is to show money you are owed apart from your cash; in Waymark, bills can already only be paid from cash you actually hold.",
   ],
   inTheSimulation:
     "Freelance gigs are coming in a later version of Waymark, where an unpaid invoice is planned to show as money owed to you, kept apart from your cash.",
@@ -116,7 +123,7 @@ export const receivableUnit: ConceptUnit = {
     {
       objectiveId: "obj_receivable_identify",
       statement:
-        "Given a list of situations, identify which ones create a receivable: someone owes you for goods or work you have already delivered.",
+        "Given a list of situations, identify which ones create a receivable: money someone owes you, here for work you have already delivered.",
       competence: "KNOWLEDGE",
       factIds: ["fact_receivable_definition"],
     },
@@ -130,7 +137,7 @@ export const receivableUnit: ConceptUnit = {
     {
       objectiveId: "obj_receivable_timing",
       statement:
-        "Explain why money you are owed may arrive late or not at all, and why a plan should not depend on its exact arrival date.",
+        "Given a plan that relies on a payment you are owed, judge whether it is safe and choose the reason: the payment may arrive late, in part or not at all.",
       competence: "REASONING",
       factIds: ["fact_receivable_timing"],
     },
@@ -151,7 +158,7 @@ export const receivableUnit: ConceptUnit = {
       whyPlausible:
         "The due date is written down and agreed, so it looks as fixed as a payday on a calendar.",
       correction:
-        "A due date is the payer's promise, not a guarantee. Payments can be late, partial or missing, so plan as if the date could slip.",
+        "A due date is the date the payer is supposed to pay by, not a guarantee. Payments can be late, partial or missing, so plan as if the date could slip.",
       factIds: ["fact_receivable_timing"],
     },
     {
@@ -159,17 +166,26 @@ export const receivableUnit: ConceptUnit = {
       statement: "I can spend money I'm owed as if I already had it.",
       whyPlausible: "The money is rightly yours, so counting it as yours feels honest.",
       correction:
-        "Being owed money and having money are different. A bill due today can only be paid from cash you hold today.",
+        "Being owed money and having money are different. A bill due today is paid from cash you hold today; paying it any other way means borrowing, which costs money and adds risk.",
       factIds: ["fact_receivable_definition", "fact_receivable_waymark_books"],
     },
     {
       misconceptionId: MIS_EXPECTED,
       statement: "Any money I expect to get is money I'm owed.",
       whyPlausible:
-        "Agreed pay for a job sounds like a debt to you, even before you have done the work.",
+        "Agreed pay for a job already feels like money owed to you, even before you have done the work.",
       correction:
-        "Someone owes you only once you have delivered. Pay for work not yet done is expected income, not a receivable.",
+        "For a job, the client usually owes you only once you have delivered (or once the agreement makes a payment due). Pay for work not yet done is expected income, not a receivable.",
       factIds: ["fact_receivable_definition"],
+    },
+    {
+      misconceptionId: MIS_OUTCOME,
+      statement: "If a plan worked out once, it was a good plan.",
+      whyPlausible:
+        "A good result feels like proof, and it is easier to remember what happened than what could have happened.",
+      correction:
+        "Judge a plan by what could happen, not by one result. A payment that came early once can still come late next time.",
+      factIds: ["fact_receivable_timing"],
     },
   ],
   workedExample: {
@@ -185,14 +201,14 @@ export const receivableUnit: ConceptUnit = {
         text: "The client now owes you {{gigFee}}. That is a receivable: you have a right to the money, but it is not in your account.",
       },
       {
-        text: "Your cash is still {{openingCash}}. Counting what you are owed, everything you have a right to adds up to {{withReceivable}}, but only the cash part can pay a bill today.",
+        text: "Your cash is still {{openingCash}}. Cash plus what the client owes you comes to {{withReceivable}}, but only the {{openingCash}} of cash can pay a bill today.",
         derive: {
           name: "withReceivable",
           expr: { sum: [{ param: "openingCash" }, { param: "gigFee" }] },
         },
       },
       {
-        text: "When the client pays, your cash rises by {{gigFee}} and the receivable is gone. Until that happens, you plan with {{openingCash}}.",
+        text: "When the client pays in full, your cash rises by {{gigFee}} and the receivable is gone. Until then, you plan with {{openingCash}}.",
       },
     ],
   },
@@ -213,14 +229,14 @@ export const receivableUnit: ConceptUnit = {
         rentDue: fp30.rentDue,
       },
       prompt:
-        "Freelance gigs are coming in a later version of Waymark, so imagine you take one. Sort each situation: is it a receivable, cash you already hold, or neither?",
+        "Freelance gigs are coming in a later version of Waymark, so imagine you take one. Each line below is a separate moment. Sort each one: is it a receivable, cash you already hold, or neither?",
       categories: [
         {
           categoryId: "receivable",
           label: "Receivable: owed to you for something already delivered",
         },
         { categoryId: "cash", label: "Cash: money you already hold" },
-        { categoryId: "neither", label: "Neither" },
+        { categoryId: "neither", label: "Neither: not money you hold, and not owed to you yet" },
       ],
       items: [
         {
@@ -252,7 +268,7 @@ export const receivableUnit: ConceptUnit = {
         },
       ],
       feedbackCorrect:
-        "Right: only work already delivered and not yet paid is a receivable, and it turns into cash only when the payment arrives.",
+        "Right: here, only work already delivered and not yet paid is a receivable, and it turns into cash only when the payment arrives.",
       feedbackIncorrect:
         "Ask two questions for each one: has the work been delivered, and has the money arrived? Delivered but unpaid is a receivable; arrived is cash.",
     },
@@ -270,6 +286,7 @@ export const receivableUnit: ConceptUnit = {
         laptopCost: fp30.laptopCost,
         phoneAmount: fp30.phoneAmount,
         phoneDue: fp30.phoneDue,
+        rentAmount: fp30.rentAmount,
         rentDue: fp30.rentDue,
         gigFee: fp30.gigFee,
       },
@@ -285,7 +302,7 @@ export const receivableUnit: ConceptUnit = {
         },
       ],
       prompt:
-        "Freelance gigs are still being built in Waymark, so imagine this. You start with {{openingCash}}, buy a laptop for {{laptopCost}}, and pay the phone bill of {{phoneAmount}} on {{phoneDue}}. You have also finished a gig and invoiced the client {{gigFee}}, but they have not paid. How much cash do you hold on {{rentDue}}, when rent is due?",
+        "Freelance gigs are still being built in Waymark, so imagine this. You start with {{openingCash}}, buy a laptop for {{laptopCost}}, and pay the phone bill of {{phoneAmount}} on {{phoneDue}}. Rent of {{rentAmount}} is due on {{rentDue}}. You have also finished a gig and invoiced the client {{gigFee}}, and by {{rentDue}} the client still has not paid. How much cash do you hold on {{rentDue}}, before paying rent?",
       answer: { param: "cashAtRent" },
       feedbackCorrect:
         "Right: only the money that has actually arrived counts, so the unpaid invoice adds nothing to your cash yet.",
@@ -297,6 +314,17 @@ export const receivableUnit: ConceptUnit = {
           misconceptionId: MIS_INVOICE,
           feedback:
             "This adds the invoice to your cash. Sending an invoice moves no money; your cash rises only when the client pays.",
+        },
+        {
+          expr: {
+            minus: [
+              { sum: [{ param: "cashAtRent" }, { param: "gigFee" }] },
+              { param: "rentAmount" },
+            ],
+          },
+          misconceptionId: MIS_SPEND,
+          feedback:
+            "This uses the unpaid invoice to pay rent. Rent is paid from cash you hold, and the client has not paid yet. The question also asks for your cash before paying rent.",
         },
       ],
     },
@@ -329,7 +357,7 @@ export const receivableUnit: ConceptUnit = {
         },
       ],
       prompt:
-        "Freelance gigs are coming in a later version of Waymark, so imagine this. You have finished a gig, and the client has promised to pay {{gigFee}} before {{rentDue}}. If you buy the laptop for {{laptopCost}} now, then after the phone bill of {{phoneAmount}} you will hold only {{cashAtRent}} when rent of {{rentAmount}} is due, so rent depends on that payment. Is buying the laptop now a sound plan?",
+        "Freelance gigs are coming in a later version of Waymark, so imagine this. You have finished a gig, and the client has promised to pay {{gigFee}} before {{rentDue}}. You want to buy the laptop for {{laptopCost}} now. After the phone bill of {{phoneAmount}}, you would hold {{cashAtRent}} when rent of {{rentAmount}} is due. Is buying the laptop now a safe plan?",
       answers: [
         {
           choiceId: "risky",
@@ -339,11 +367,18 @@ export const receivableUnit: ConceptUnit = {
         },
         {
           choiceId: "sound",
-          text: "Yes, it is a sound plan.",
+          text: "Yes, it is a safe plan.",
           correct: false,
           misconceptionId: MIS_ON_TIME,
           feedback:
             "The plan only works if the client pays on time. Look at what happens to rent if the payment is late.",
+        },
+        {
+          choiceId: "phone_first",
+          text: "Yes, as long as you pay the phone bill before you buy the laptop.",
+          correct: false,
+          feedback:
+            "The order does not change what you hold on rent day: both payments have left your account either way, and rent still depends on the client paying on time.",
         },
       ],
       reasonPrompt: "Which reason best supports your answer?",
@@ -369,14 +404,29 @@ export const receivableUnit: ConceptUnit = {
           correct: false,
           misconceptionId: MIS_SPEND,
           feedback:
-            "The money is yours by right, but a bill is paid from cash you hold. Until it arrives, you cannot spend it.",
+            "The money is yours by right, but it is not in your account. Until it arrives, spending it means using cash you don't have, or borrowing.",
         },
         {
           choiceId: "worked_before",
-          text: "When you tried this plan before, the client paid early and rent was covered.",
+          text: "Last month a client paid early and rent was covered, so the plan works.",
           correct: false,
+          misconceptionId: MIS_OUTCOME,
           feedback:
             "A good outcome once does not make the plan safe. Judge the plan by what could happen, not by how it turned out last time.",
+        },
+        {
+          choiceId: "laptop_costs_more",
+          text: "The laptop costs more than the gig pays, so you end up with less money.",
+          correct: false,
+          feedback:
+            "Both amounts are real, but the risk is about timing: rent is due before you know the payment has arrived.",
+        },
+        {
+          choiceId: "never_buy_before_bills",
+          text: "Buying something while a bill is still coming up is a mistake, whatever your cash.",
+          correct: false,
+          feedback:
+            "Spending before a bill can be fine when your cash covers both. Here it does not, unless a payment that has not arrived yet comes on time.",
         },
       ],
     },
@@ -396,7 +446,7 @@ export const receivableUnit: ConceptUnit = {
         owedLater: { kind: "money", amountMinor: 6_500, currency: EUR },
       },
       prompt:
-        "Maya repairs bikes. Right now she has {{cash}} in her account. Sam owes her {{owedSoon}} for a repair finished yesterday and has promised to pay later today. Lee owes her {{owedLater}} for a repair, due next week. A parts supplier asks to be paid right now. How much can Maya pay the supplier from the money she has at this moment?",
+        "Maya repairs bikes. Right now she has {{cash}} in her account. Sam owes her {{owedSoon}} for a repair finished yesterday and has promised to pay later today. Lee owes her {{owedLater}} for a repair, due next week. A parts supplier asks to be paid right now. What is the most Maya can pay the supplier right now?",
       answer: { param: "cash" },
       feedbackCorrect:
         "Right: both customers owe Maya money, but only the cash in her account can pay the supplier right now.",
@@ -432,7 +482,7 @@ export const receivableUnit: ConceptUnit = {
         bill: { kind: "money", amountMinor: 18_000, currency: EUR },
       },
       prompt:
-        "Jonas, a freelance translator, has delivered a job and sent an invoice for {{fee}}, due in two weeks. His card bill of {{bill}} is due in three weeks. Which plan treats the money he is owed most soundly?",
+        "Jonas, a freelance translator, has finished a job and sent an invoice for {{fee}}, due in two weeks. His electricity bill of {{bill}} is due in three weeks. Which plan is the most careful way to handle the money he is owed?",
       choices: [
         {
           choiceId: "plan_without_it",
@@ -443,7 +493,7 @@ export const receivableUnit: ConceptUnit = {
         },
         {
           choiceId: "spend_now",
-          text: "Spend the fee now on a new laptop, since the client has agreed to pay him for the job.",
+          text: "Buy a new laptop now with the money set aside for the bill, counting on the fee to replace it, since the client agreed to pay.",
           correct: false,
           misconceptionId: MIS_SPEND,
           feedback:
@@ -451,7 +501,7 @@ export const receivableUnit: ConceptUnit = {
         },
         {
           choiceId: "count_on_date",
-          text: "Count on the fee arriving on its due date, a week before the bill, so nothing else is needed.",
+          text: "Count on the fee arriving on its due date, a week before the bill, and check again only if it is late.",
           correct: false,
           misconceptionId: MIS_ON_TIME,
           feedback:
@@ -459,7 +509,7 @@ export const receivableUnit: ConceptUnit = {
         },
         {
           choiceId: "invoice_as_cash",
-          text: "Add the fee to his account balance on the day he sends the invoice, and budget from that.",
+          text: "Count the fee as part of his balance from the day he sends the invoice, and budget from that.",
           correct: false,
           misconceptionId: MIS_INVOICE,
           feedback:

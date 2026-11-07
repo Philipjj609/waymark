@@ -3,8 +3,10 @@ import type { ConceptUnit, Expr, Params, ReviewedFact } from "../types.js";
 
 /**
  * Liquidity (#17): the heart of the FP-30 demo. Buying the laptop on the first day leaves
- * too little cash on rent day even though the person's wealth stays positive and the
- * salary is on its way. Every figure is rendered from fixture-checked params.
+ * too little cash on rent day even though net worth (cash plus the laptop at cost, minus the
+ * rent owed) stays positive and the salary is on its way. The salary is never counted as net
+ * worth: the engine records it only when it is paid. Every figure is rendered from
+ * fixture-checked params.
  */
 const id = "cpt_liquidity" as ConceptId;
 
@@ -26,11 +28,16 @@ export const liquidityFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "GENERAL_PRINCIPLE",
     statement:
-      "Whether a bill can be paid depends on the cash on hand on the day it falls due. Things you own and income that arrives later only help once they have actually become cash, so a person can be worth a lot overall and still be unable to pay on time.",
+      "Whether a bill can be paid depends on the cash available on the day it falls due. Things you own help only once they have been turned into cash, and income helps only once it has been received, so a person whose net worth is positive can still be unable to pay on time.",
     support: [
       {
-        sourceId: "src_openstax_accounting_v1",
-        locator: "§2.3 Liquidity ratios: working capital and current ratio",
+        sourceId: "src_ias_7",
+        locator: "para 6 (definitions of cash and cash equivalents)",
+        relation: "SUPPORTS_CLAIM",
+      },
+      {
+        sourceId: "src_iasb_conceptual_framework_2018",
+        locator: "paras 4.3–4.4 (asset; economic resource)",
         relation: "SUPPORTS_CLAIM",
       },
       {
@@ -62,7 +69,7 @@ export const liquidityFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "GENERAL_PRINCIPLE",
     statement:
-      "When cash runs short before a due date, the ways out (paying late, waiting for income, selling something, or not making the purchase) each have a different cost. In real life paying late can bring fees and strain trust, and how serious that is depends on the bill.",
+      "When cash runs short before a due date, each way out has a cost: paying late once income arrives, borrowing to pay on time, selling something, or agreeing a later date or a partial payment with the creditor. Avoiding the purchase in the first place is the planning lesson, not a way out. In real life paying late can bring fees, damage a credit record and, for rent or utilities, put the home or the service at risk; how serious it is depends on the bill, the contract and the country.",
     support: [
       {
         sourceId: "src_cfpb_behind_on_bills",
@@ -144,33 +151,33 @@ const zeroFrom = (name: string): Expr => ({ minus: [p(name), p(name)] });
 export const liquidityUnit: ConceptUnit = {
   conceptId: id,
   explanation: [
-    "Liquidity means having cash at the moment a bill is due. It is about timing, not about how much you are worth overall.",
-    "Your wealth can include things you own and money you are owed or expect to earn. None of that pays a bill until it has become cash in your account.",
+    "Liquidity means being able to pay what is due when it is due, from cash or from money you can draw on at once without loss. It is about timing, not about how much you are worth overall.",
+    "Your net worth is what you own, including money you are already owed, minus what you owe. Pay for work you have not done yet is not part of it, and none of it pays a bill until it has become cash in your account.",
     "A monthly budget can balance and you can still run short. If a bill falls due a few days before your income arrives, the bill must be paid from the cash you already hold.",
-    "A purchase spends cash now. Before you buy, list the bills due before your next income and check that the cash left still covers each one on its date.",
-    "When a gap opens, every way out has a cost. In Waymark a deferred bill becomes overdue with no late fee in this version; in real life paying late can bring fees and damage trust.",
+    "A purchase spends cash now. Before you buy, list the bills due before your next income in date order, subtract each from the cash left, and check that the running balance never drops below the next bill.",
+    "When a gap opens, every way out has a cost. In Waymark a deferred bill becomes overdue with no late fee in this version. In real life paying late can bring fees, damage your credit record and, for rent or utilities, put your home or the service at risk; the rules differ by country and contract.",
   ],
   inTheSimulation:
-    "In Waymark you see liquidity when time stops at a bill and your cash is less than the amount due: the payment is rejected, and you choose to defer it or plan differently.",
+    "In Waymark, time stops at each bill on its due date; if you try to pay with less cash than is due, the payment is rejected and nothing moves, so you defer the bill, which makes it overdue, and pay it once more cash has arrived.",
   objectives: [
     {
       objectiveId: OBJ_GAP,
       statement:
-        "Given balances and dated obligations, identify whether a purchase creates a liquidity gap",
+        "Given a starting balance, a purchase, and dated bills and income, tell which resources can pay a bill on its due date and work out how much cash, if any, is short then",
       competence: "APPLICATION",
       factIds: [FACT_TIMING, FACT_ENGINE],
     },
     {
       objectiveId: OBJ_NET_WORTH,
       statement:
-        "Explain why someone with positive net worth, made up of cash, an item they own and income still to come, can be unable to pay a bill on its due date",
+        "Choose the reason why someone whose net worth is positive (what they own minus what they owe) and whose salary is on its way can still be unable to pay a bill on its due date",
       competence: "REASONING",
       factIds: [FACT_TIMING],
     },
     {
       objectiveId: OBJ_RECOVERY,
       statement:
-        "Compare ways to recover from a cash gap (deferring the bill, waiting for income, selling an item, skipping the purchase) by their consequences",
+        "Compare ways out of a cash gap (deferring the bill until income arrives, selling an item, doing nothing) by what each one really costs, in Waymark and in real life",
       competence: "REASONING",
       factIds: [FACT_OPTIONS, FACT_ENGINE],
     },
@@ -234,7 +241,7 @@ export const liquidityUnit: ConceptUnit = {
         derive: { name: "rentGap", expr: gapExpr("rentAmount", "cashAfterPhone") },
       },
       {
-        text: "Your salary of {{salaryAmount}} arrives on {{salaryDay}}, after the rent is due. It cannot close the gap on {{rentDue}}, even though it is larger than the rent.",
+        text: "Your take-home (net) salary of {{salaryAmount}} arrives on {{salaryDay}}, after the rent is due. It cannot close the gap on {{rentDue}}, even though it is larger than the rent.",
       },
       {
         text: "Without the laptop you would still hold {{cashWithoutLaptop}} after paying rent on {{rentDue}}. The purchase created the gap, not the month's totals.",
@@ -244,7 +251,11 @@ export const liquidityUnit: ConceptUnit = {
         },
       },
       {
-        text: "You are not poor overall: you own the laptop and your salary is coming. You are short of cash on one particular day, and that is what liquidity measures.",
+        text: "On {{rentDue}} you hold {{cashAfterPhone}} and a laptop recorded at its cost of {{laptopCost}}, and you owe {{rentAmount}}. Your net worth at cost is {{netWorthAtCost}}: positive, because buying the laptop swapped cash for an item. You are short of cash on one particular day, and that is what liquidity measures. The salary is not part of this figure: in Waymark it is recorded only when it is paid.",
+        derive: {
+          name: "netWorthAtCost",
+          expr: { minus: [{ sum: [p("cashAfterPhone"), p("laptopCost")] }, p("rentAmount")] },
+        },
       },
     ],
   },
@@ -270,7 +281,7 @@ export const liquidityUnit: ConceptUnit = {
       },
       derived: [{ name: "cashAfterPhone", expr: cashAfterPhoneExpr }],
       prompt:
-        "You start with {{openingCash}} and buy a laptop for {{laptopCost}} on the first day. The phone bill of {{phoneAmount}} is due on {{phoneDue}}, rent of {{rentAmount}} is due on {{rentDue}}, and your salary of {{salaryAmount}} arrives on {{salaryDay}}. How much cash are you short when the rent is due? Enter zero if you can pay it in full.",
+        "You start with {{openingCash}} and buy a laptop for {{laptopCost}} on the first day. The phone bill of {{phoneAmount}} is due on {{phoneDue}}, rent of {{rentAmount}} is due on {{rentDue}}, and your take-home (net) salary of {{salaryAmount}} arrives on {{salaryDay}}. How much cash are you short when the rent is due? Enter zero if you can pay it in full.",
       answer: gapExpr("rentAmount", "cashAfterPhone"),
       feedbackCorrect:
         "Right. After the laptop and the phone bill you hold {{cashAfterPhone}}, which is less than the rent, and the salary comes too late to help.",
@@ -281,13 +292,7 @@ export const liquidityUnit: ConceptUnit = {
           expr: zeroFrom("rentAmount"),
           misconceptionId: MIS_WEALTH,
           feedback:
-            "Your overall wealth is positive, but rent is paid with cash. Compare the cash you hold on {{rentDue}} with the rent.",
-        },
-        {
-          expr: { minus: [{ sum: [p("cashAfterPhone"), p("salaryAmount")] }, p("rentAmount")] },
-          misconceptionId: MIS_MONTHLY,
-          feedback:
-            "That counts the salary, but it arrives on {{salaryDay}}, after the rent is due on {{rentDue}}. Use only the cash you hold on rent day.",
+            "Rent needs cash on {{rentDue}}: the laptop is not cash and the salary only arrives on {{salaryDay}}. Subtract the laptop and the phone bill from {{openingCash}}, then compare what is left with the rent.",
         },
       ],
     },
@@ -302,15 +307,15 @@ export const liquidityUnit: ConceptUnit = {
       simulationLink: "FP30_FIXTURE",
       params: { laptopCost, rentDue, salaryAmount, salaryDay },
       prompt:
-        "You bought a laptop for {{laptopCost}} on the first day. Sort each item: can it be used towards the rent on {{rentDue}}, or not?",
+        "You bought a laptop for {{laptopCost}} on the first day. In Waymark, sort each item: is it cash you can pay the rent with on {{rentDue}}, or not?",
       categories: [
-        { categoryId: "pays", label: "Counts towards the rent on its due date" },
-        { categoryId: "not_cash", label: "Does not count towards the rent that day" },
+        { categoryId: "pays", label: "Cash you can pay the rent with on rent day" },
+        { categoryId: "not_cash", label: "Not cash you can pay with on rent day" },
       ],
       items: [
         {
           itemId: "cash_now",
-          text: "The cash in your account after paying the phone bill",
+          text: "What is left in your account on {{rentDue}} after the phone bill",
           categoryId: "pays",
         },
         {
@@ -321,13 +326,19 @@ export const liquidityUnit: ConceptUnit = {
         },
         {
           itemId: "salary",
-          text: "Your salary of {{salaryAmount}}, which arrives on {{salaryDay}}",
+          text: "Your take-home (net) salary of {{salaryAmount}}, which arrives on {{salaryDay}}",
           categoryId: "not_cash",
           misconceptionId: MIS_MONTHLY,
         },
+        {
+          itemId: "spent",
+          text: "The money you spent on the laptop",
+          categoryId: "not_cash",
+          misconceptionId: MIS_WEALTH,
+        },
       ],
       feedbackCorrect:
-        "Right. Only cash you hold on the due date counts towards the rent; the laptop and the salary are valuable, but they are not cash on that day.",
+        "Right. Only cash you hold on the due date can pay the rent; the laptop and the salary have value but are not cash that day, and the money spent on the laptop is gone.",
       feedbackIncorrect:
         "Ask of each item: is it cash in the account on {{rentDue}}? Value you own or income that comes later does not pay a bill that is due now.",
     },
@@ -349,9 +360,12 @@ export const liquidityUnit: ConceptUnit = {
         salaryAmount,
         salaryDay,
       },
-      derived: [{ name: "cashAfterPhone", expr: cashAfterPhoneExpr }],
+      derived: [
+        { name: "cashAfterPhone", expr: cashAfterPhoneExpr },
+        { name: "rentGap", expr: gapExpr("rentAmount", "cashAfterPhone") },
+      ],
       prompt:
-        "After buying the laptop for {{laptopCost}} and paying the phone bill, you hold {{cashAfterPhone}}. You also own the laptop, and your salary of {{salaryAmount}} arrives on {{salaryDay}}. Rent of {{rentAmount}} is due on {{rentDue}}. Can you pay the rent in full on {{rentDue}}?",
+        "After buying the laptop for {{laptopCost}} and paying the phone bill, you hold {{cashAfterPhone}}. You also own the laptop, and your take-home (net) salary of {{salaryAmount}} arrives on {{salaryDay}}. Rent of {{rentAmount}} is due on {{rentDue}}. In Waymark, can you pay the rent in full on {{rentDue}} with what you hold that day?",
       answers: [
         {
           choiceId: "yes",
@@ -363,27 +377,44 @@ export const liquidityUnit: ConceptUnit = {
         },
         {
           choiceId: "sell",
-          text: "Yes, if I sell the laptop on rent day",
+          text: "Yes, because the laptop counts as cash on rent day",
           correct: false,
           feedback:
-            "Waymark has no way to sell an item yet, and in real life a quick sale is not guaranteed and often brings in less than you paid.",
+            "An item is not cash. Waymark has no way to sell one yet, and in real life a sale takes time and may bring in less than you paid.",
           misconceptionId: MIS_SALE,
         },
         {
           choiceId: "no",
           text: "No, I cannot pay it in full on that day",
           correct: true,
-          feedback: "Right. The cash you hold on {{rentDue}} is less than the rent.",
+          feedback:
+            "Right. On {{rentDue}} you hold {{cashAfterPhone}}, which leaves you {{rentGap}} short of the rent.",
         },
       ],
       reasonPrompt: "Which reason best supports your answer?",
       reasons: [
         {
           choiceId: "cash_on_day",
-          text: "Rent needs cash on {{rentDue}}, and on that day I hold less cash than the rent; the laptop and the salary are not cash yet.",
+          text: "On {{rentDue}} I hold {{cashAfterPhone}}, less than the rent; the laptop and the salary are not cash that day.",
           correct: true,
           feedback:
             "Right. You are reasoning about cash on the due date, which is exactly what liquidity is.",
+        },
+        {
+          choiceId: "wealth_fell",
+          text: "Buying the laptop made me worth less overall, and that is why I cannot pay the rent.",
+          correct: false,
+          feedback:
+            "Buying the laptop swapped cash for an item, so at cost your net worth did not change. The problem is how much cash you hold on {{rentDue}}.",
+          misconceptionId: MIS_WEALTH,
+        },
+        {
+          choiceId: "monthly_short",
+          text: "This month my bills and the laptop add up to more than my income, so the rent is not covered.",
+          correct: false,
+          feedback:
+            "Add them up: the month's totals are covered by the salary. The rent is short only because the salary arrives on {{salaryDay}}, after it is due.",
+          misconceptionId: MIS_MONTHLY,
         },
         {
           choiceId: "monthly_total",
@@ -398,16 +429,8 @@ export const liquidityUnit: ConceptUnit = {
           text: "My cash, the laptop and the coming salary together are worth more than the rent.",
           correct: false,
           feedback:
-            "That is true of your wealth, but only the cash part can pay on {{rentDue}}. Look at the cash alone.",
+            "Adding them up mixes cash, an item you own and pay you have not received. Only the cash you hold can pay on {{rentDue}}, so look at the cash alone.",
           misconceptionId: MIS_WEALTH,
-        },
-        {
-          choiceId: "it_works_out",
-          text: "Things usually work out by the end of the month, so the exact rent day does not matter.",
-          correct: false,
-          feedback:
-            "Whether it works out later does not change whether you can pay on {{rentDue}}. Judge the decision by the cash on that day.",
-          misconceptionId: MIS_MONTHLY,
         },
       ],
     },
@@ -422,26 +445,26 @@ export const liquidityUnit: ConceptUnit = {
       simulationLink: "FP30_FIXTURE",
       params: { laptopCost, rentAmount, rentDue, salaryAmount, salaryDay },
       prompt:
-        "You bought the laptop for {{laptopCost}} and time has stopped on {{rentDue}}: rent of {{rentAmount}} is due and your cash is short. Your salary of {{salaryAmount}} arrives on {{salaryDay}}. Which statement about your options is accurate?",
+        "You bought the laptop for {{laptopCost}}, and time has stopped on {{rentDue}}: rent of {{rentAmount}} is due and your cash is short. Your take-home (net) salary of {{salaryAmount}} arrives on {{salaryDay}}. Which description of a way out, and of what it costs, is accurate?",
       choices: [
         {
           choiceId: "defer_tradeoff",
-          text: "Deferring keeps the rent owed and lets you pay it after the salary arrives. In Waymark that costs no fee yet; in real life paying late can cost fees and trust.",
+          text: "Deferring: the rent stays owed and you pay it after the salary arrives, with no fee in this version of Waymark but often fees in real life.",
           correct: true,
           feedback:
-            "Right. Deferring is a real recovery option with a cost that depends on where you are. Not buying the laptop would have avoided the choice, but that is a decision for the start of the month.",
+            "Right. Deferring is a real way out with a cost that differs between Waymark and real life, where late rent can also harm your credit record. Not buying the laptop would have avoided the choice.",
         },
         {
           choiceId: "sell_best",
-          text: "Selling the laptop on rent day is always the best fix, because it is still worth what you paid for it and can be sold at once.",
+          text: "Selling the laptop: it turns into cash on rent day for about what you paid, so the gap closes at no extra cost.",
           correct: false,
           feedback:
-            "A sale takes time and often brings in less than you paid, and Waymark has no way to sell an item yet. It is one option among several, not a sure fix.",
+            "A sale takes time and often brings in less than you paid, and Waymark has no way to sell an item yet.",
           misconceptionId: MIS_SALE,
         },
         {
           choiceId: "not_late",
-          text: "Waiting for the salary is not really paying late, because this month's income is bigger than this month's bills.",
+          text: "Waiting for the salary: this month's income is larger than this month's bills, so paying the rent then is not late.",
           correct: false,
           feedback:
             "The rent is due on {{rentDue}} and the salary comes on {{salaryDay}}, so waiting does mean paying late. Monthly totals do not move a due date.",
@@ -449,10 +472,10 @@ export const liquidityUnit: ConceptUnit = {
         },
         {
           choiceId: "wealth_fine",
-          text: "There is no real problem to solve, because your total wealth is still positive even after buying the laptop.",
+          text: "Doing nothing: your total wealth is still positive, so the rent counts as covered even though your cash is short.",
           correct: false,
           feedback:
-            "Your wealth is positive, but the rent cannot be paid from it on the day. Something has to give: defer, wait, sell, or plan the purchase differently next time.",
+            "Your wealth is positive, but it cannot pay the rent on the day. In Waymark you can defer the rent and pay it after the salary arrives; next time you could time the purchase around the rent.",
           misconceptionId: MIS_WEALTH,
         },
       ],
@@ -470,38 +493,32 @@ export const liquidityUnit: ConceptUnit = {
       params: {
         startCash: { kind: "money", amountMinor: 42000, currency: "EUR" },
         bikeCost: { kind: "money", amountMinor: 18000, currency: "EUR" },
+        feeAmount: { kind: "money", amountMinor: 21000, currency: "EUR" },
+        feeDue: { kind: "day", day: 6 },
         insuranceAmount: { kind: "money", amountMinor: 4500, currency: "EUR" },
-        insuranceDue: { kind: "day", day: 6 },
-        feeAmount: { kind: "money", amountMinor: 31000, currency: "EUR" },
-        feeDue: { kind: "day", day: 12 },
+        insuranceDue: { kind: "day", day: 12 },
         wagesAmount: { kind: "money", amountMinor: 70000, currency: "EUR" },
         wagesDay: { kind: "day", day: 20 },
       },
       derived: [
         {
-          name: "cashBeforeFee",
-          expr: { minus: [{ minus: [p("startCash"), p("bikeCost")] }, p("insuranceAmount")] },
+          name: "cashBeforeInsurance",
+          expr: { minus: [{ minus: [p("startCash"), p("bikeCost")] }, p("feeAmount")] },
         },
       ],
       prompt:
-        "Noor has {{startCash}} and buys a second-hand bike for {{bikeCost}} on the first day. A bike insurance payment of {{insuranceAmount}} is due on {{insuranceDue}}, a course fee of {{feeAmount}} is due on {{feeDue}}, and Noor's wages of {{wagesAmount}} arrive on {{wagesDay}}. How much cash is Noor short when the course fee is due? Enter zero if Noor can pay it in full.",
-      answer: gapExpr("feeAmount", "cashBeforeFee"),
+        "Noor has {{startCash}} and buys a second-hand bike for {{bikeCost}} on the first day. A course fee of {{feeAmount}} is due on {{feeDue}}, a bike insurance payment of {{insuranceAmount}} is due on {{insuranceDue}}, and Noor's wages of {{wagesAmount}} arrive on {{wagesDay}}. How much cash is Noor short when the insurance is due? Enter zero if Noor can pay it in full.",
+      answer: gapExpr("insuranceAmount", "cashBeforeInsurance"),
       feedbackCorrect:
-        "Right. After the bike and the insurance Noor holds {{cashBeforeFee}}, less than the course fee, and the wages arrive too late to help.",
+        "Right. After the bike and the course fee Noor holds {{cashBeforeInsurance}}, less than the insurance payment, and the wages arrive too late to help.",
       feedbackIncorrect:
-        "Track Noor's cash in date order: subtract the bike, then the insurance, then compare what is left with the course fee due on {{feeDue}}.",
+        "Track Noor's cash in date order: subtract the bike, then the course fee, then compare what is left with the insurance due on {{insuranceDue}}.",
       diagnostics: [
         {
-          expr: zeroFrom("feeAmount"),
+          expr: zeroFrom("insuranceAmount"),
           misconceptionId: MIS_WEALTH,
           feedback:
-            "Noor owns a bike and has wages coming, but the fee needs cash on {{feeDue}}. Compare the cash on that day with the fee.",
-        },
-        {
-          expr: { minus: [{ sum: [p("cashBeforeFee"), p("wagesAmount")] }, p("feeAmount")] },
-          misconceptionId: MIS_MONTHLY,
-          feedback:
-            "That counts the wages, which arrive on {{wagesDay}}, after the fee is due on {{feeDue}}. Use only the cash Noor holds on the fee's due date.",
+            "Noor owns a bike and has wages coming, but the insurance needs cash on {{insuranceDue}}. Subtract the bike and the course fee from {{startCash}}, then compare what is left with the insurance.",
         },
       ],
     },

@@ -5,6 +5,8 @@ import type { ConceptUnit, DayParam, MoneyParam, ReviewedFact } from "../types.j
  * Starter unit: Obligation (#17). Teaches reading a bill, totalling what falls due by a
  * day, and the pay-or-defer choice. Deferring is a legitimate recovery choice in Waymark
  * (ADR-0003 I-014), so no item scores a deferral as a mistake by itself (invariant 9).
+ * Bills stay SCHEDULED (not payable) until their due day in the engine, so the text says a
+ * bill is "known" from the start of the month, never "already owed".
  */
 const id = "cpt_obligation" as ConceptId;
 
@@ -46,6 +48,9 @@ const salaryDay: DayParam = { kind: "day", day: 15, ref: "fp30.salary.day" };
 const MIS_ONLY_ON_PAYMENT = "mis_obligation_only_on_payment";
 const MIS_DEFER_CANCELS = "mis_obligation_defer_cancels";
 const MIS_OVERDUE_SAME = "mis_obligation_overdue_same";
+const MIS_DUE_DAY_ONLY = "mis_obligation_due_day_only";
+const MIS_ALL_BILLS = "mis_obligation_ignores_due_date";
+const MIS_PAYDAY_IS_DUE = "mis_obligation_payday_sets_due_date";
 
 const FACT_OWED = "fact_obligation_owed_before_paid";
 const FACT_LATE = "fact_obligation_late_consequences_vary";
@@ -57,7 +62,7 @@ export const obligationFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "GENERAL_PRINCIPLE",
     statement:
-      "An obligation is an amount you already owe to someone, with a date by which it must be paid. It exists from the moment you take it on, so it limits what you can spend before the day you actually pay it.",
+      "An obligation is an amount you owe because of something that has already happened, such as a service you used or an agreement you made; a bill usually also says by when it must be paid. Known bills limit what you can safely spend before you pay them.",
     support: [
       {
         sourceId: "src_iasb_conceptual_framework_2018",
@@ -84,7 +89,7 @@ export const obligationFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "GENERAL_PRINCIPLE",
     statement:
-      "Paying a bill late does not cancel it. What lateness costs depends on the bill and the agreement behind it: some add extra charges, and late payment can harm trust with the person or company you owe.",
+      "Paying a bill late does not cancel it. What lateness costs depends on the bill, its terms and local rules: it can add fees or interest, and for some bills it can lead to the service being cut off, the debt being passed to collectors, or a worse credit record.",
     support: [
       {
         sourceId: "src_cfpb_behind_on_bills",
@@ -133,11 +138,11 @@ export const obligationFacts: readonly ReviewedFact[] = [
 export const obligationUnit: ConceptUnit = {
   conceptId: id,
   explanation: [
-    "An obligation is an amount you already owe someone, with a date by which it must be paid. A bill or a rent notice tells you three things: how much, to whom, and by when.",
-    "An obligation matters from the moment you know about it, not only on the day you pay. Money you will need for a bill is not free to spend, even while it still sits in your account.",
+    "An obligation is an amount you owe someone because of something that has already happened or been agreed, such as a service you used or a lease you signed. A bill or a rent notice tells you three things: how much, to whom, and by when.",
+    "A known bill matters from the moment you know about it, not only on the day you pay. Money you will need for it is not free to spend, even while it still sits in your account.",
     "To plan, add up everything that falls due on or before a given day and compare it with the cash you will have by then. Income that arrives after a due date cannot pay that bill on time.",
-    "If you cannot pay on time, deferring is a legitimate choice. It changes when you pay, not what you owe: the bill becomes overdue and stays owed until you pay it.",
-    "In Waymark, an overdue bill adds no late fee in this version. In real life the cost of paying late varies: some bills add charges, and lateness can damage trust with the person or company you owe.",
+    "In Waymark, if you cannot pay on time, deferring is a legitimate choice. It changes when you pay, not what you owe: the bill becomes overdue and stays owed until you pay it, and this version adds no late fee.",
+    "In real life, a later payment date is something the creditor has to agree to, and paying late is rarely free. Depending on the bill, its terms and local rules, lateness can add fees or interest, and for some bills lead to the service being cut off, collectors, or a worse credit record.",
   ],
   inTheSimulation:
     "In Waymark, bills are obligations with a due day: when one falls due, time stops until you pay or defer it, and a deferred bill becomes overdue but stays owed.",
@@ -171,7 +176,7 @@ export const obligationUnit: ConceptUnit = {
       whyPlausible:
         "Until a bill is paid, the money is still in your account, so it can feel as if nothing has happened yet.",
       correction:
-        "A bill is owed from the moment you take it on. Its due date tells you when the money must be ready, so it limits what you can spend before then.",
+        "A known bill matters from the moment you know about it. Its due date tells you when the money must be ready, so it limits what you can spend before then.",
       factIds: [FACT_OWED],
     },
     {
@@ -180,7 +185,7 @@ export const obligationUnit: ConceptUnit = {
       whyPlausible:
         "After you defer, the bill stops demanding a decision right now, which can feel like it has gone away.",
       correction:
-        "Deferring moves when you pay, not what you owe. The full amount is still owed to the same creditor until you pay it.",
+        "Deferring moves when you pay; it never reduces what you owe. The full amount is still owed to the same creditor until you pay it, and in real life lateness can add to it.",
       factIds: [FACT_LATE, FACT_DEFER],
     },
     {
@@ -189,8 +194,34 @@ export const obligationUnit: ConceptUnit = {
       whyPlausible:
         "In Waymark an overdue bill costs no extra in this version, so it can look no different from a bill that is still on time.",
       correction:
-        "An overdue bill is late: the record shows it was not paid by its due date. In real life lateness can bring charges or damage trust, even though Waymark adds no fee in this version.",
+        "An overdue bill is late: Waymark records that it was not paid when it fell due. In real life lateness can bring charges or other consequences, even though Waymark adds no fee in this version.",
       factIds: [FACT_LATE, FACT_DEFER],
+    },
+    {
+      misconceptionId: MIS_DUE_DAY_ONLY,
+      statement: "Only the bill due on that exact day needs cash by then.",
+      whyPlausible: "The question names one day, so it is easy to look only at the bill due on it.",
+      correction:
+        "Everything due on or before that day must be covered by then, including bills that fell due earlier.",
+      factIds: [FACT_OWED],
+    },
+    {
+      misconceptionId: MIS_ALL_BILLS,
+      statement: "Every bill on the list needs cash by that day.",
+      whyPlausible:
+        "All the bills are already known, so it can seem that all of them must be paid at once.",
+      correction:
+        "Each bill needs its cash by its own due date. A bill due after that day does not have to be paid by then, though you still plan for it.",
+      factIds: [FACT_OWED],
+    },
+    {
+      misconceptionId: MIS_PAYDAY_IS_DUE,
+      statement: "A bill is due when my income arrives.",
+      whyPlausible:
+        "Many people pay their bills just after payday, so payday can feel like the due date.",
+      correction:
+        "The bill sets its own due date. Income that arrives later does not move it, so a bill due before payday needs cash you already have.",
+      factIds: [FACT_OWED],
     },
   ],
   workedExample: {
@@ -200,7 +231,7 @@ export const obligationUnit: ConceptUnit = {
     params: { openingCash, laptopCost, phone, phoneDue, rent, rentDue, salary, salaryDay },
     steps: [
       {
-        text: "Read each bill. The phone provider is owed {{phone}} on {{phoneDue}}, and the landlord is owed {{rent}} on {{rentDue}}. Both are owed from the start of the month, even though neither is paid yet.",
+        text: "Read each bill. The phone bill is {{phone}}, due to the phone provider on {{phoneDue}}; the rent is {{rent}}, due to the landlord on {{rentDue}}. Both bills are known from the start of the month, so you must plan for them even though neither is due or paid yet.",
       },
       {
         text: "Add what falls due on or before {{rentDue}}: {{phone}} plus {{rent}} is {{dueByRent}}.",
@@ -221,14 +252,17 @@ export const obligationUnit: ConceptUnit = {
         },
       },
       {
-        text: "That gap is the amount you are short: {{rent}} minus {{afterPhone}} is {{shortfall}}. Your salary of {{salary}} arrives on {{salaryDay}}, after the rent is due, so it cannot pay the rent on time.",
+        text: "That gap is the amount you are short: {{rent}} minus {{afterPhone}} is {{shortfall}}. Your net salary (take-home pay) of {{salary}} arrives on {{salaryDay}}, after the rent is due, so it cannot pay the rent on time.",
         derive: {
           name: "shortfall",
           expr: { minus: [{ param: "rent" }, { param: "afterPhone" }] },
         },
       },
       {
-        text: "On {{rentDue}} you can defer the rent. It becomes overdue, stays owed, and can be paid once the salary arrives. Waymark adds no late fee in this version; in real life paying late might cost extra.",
+        text: "Paying the rent on {{rentDue}} would be refused: you have {{afterPhone}} and the rent is {{rent}}, so no money would move.",
+      },
+      {
+        text: "Instead you can defer the rent. It becomes overdue, stays owed in full, and can be paid once the salary arrives. Waymark adds no late fee in this version; in real life paying late can cost extra.",
       },
     ],
   },
@@ -244,34 +278,34 @@ export const obligationUnit: ConceptUnit = {
       simulationLink: "FP30_FIXTURE",
       params: { rent, rentDue, salaryDay },
       prompt:
-        "Here are some details about this month's rent. Sort each one: is it the amount owed, who is owed, the due date, or something the rent notice does not set?",
+        "Your landlord's notice says: 'Rent for this month: {{rent}}. Pay to: your landlord. Due by: {{rentDue}}.' Your salary arrives on {{salaryDay}}. Sort each detail: amount owed, who is owed, due date, or not set by the notice.",
       categories: [
         { categoryId: "amount", label: "Amount owed" },
         { categoryId: "creditor", label: "Who is owed" },
         { categoryId: "due", label: "Due date" },
-        { categoryId: "not_on_bill", label: "Not set by the bill" },
+        { categoryId: "not_on_bill", label: "Not set by the notice" },
       ],
       items: [
         { itemId: "rent_amount", text: "{{rent}}", categoryId: "amount" },
-        { itemId: "landlord", text: "The landlord", categoryId: "creditor" },
+        { itemId: "landlord", text: "Your landlord", categoryId: "creditor" },
         { itemId: "rent_due", text: "{{rentDue}}", categoryId: "due" },
         {
-          itemId: "pay_day_choice",
-          text: "The day you decide to pay it",
+          itemId: "salary_day",
+          text: "{{salaryDay}}",
           categoryId: "not_on_bill",
-          misconceptionId: MIS_ONLY_ON_PAYMENT,
+          misconceptionId: MIS_PAYDAY_IS_DUE,
         },
         {
-          itemId: "salary_day",
-          text: "{{salaryDay}}, when your salary arrives",
+          itemId: "pay_day_choice",
+          text: "The day you decide to pay",
           categoryId: "not_on_bill",
           misconceptionId: MIS_ONLY_ON_PAYMENT,
         },
       ],
       feedbackCorrect:
-        "Right. The bill fixes how much, to whom and by when; the day you pay and the day your income arrives are separate from it.",
+        "Right. The notice fixes how much, to whom and by when; the day you pay and the day your income arrives are separate from it.",
       feedbackIncorrect:
-        "Look at what the landlord set: an amount and a due date. The day you choose to pay, or when your salary arrives, does not change when the rent is due.",
+        "Look at what the notice sets: an amount, a creditor and a due date. The day you choose to pay, or when your salary arrives, does not change when the rent is due.",
     },
     {
       exerciseId: "ex_obligation_total_due_by_rent",
@@ -284,7 +318,7 @@ export const obligationUnit: ConceptUnit = {
       simulationLink: "FP30_FIXTURE",
       params: { phone, phoneDue, rent, rentDue, salary, salaryDay },
       prompt:
-        "It is the start of the month. Your phone bill of {{phone}} is due on {{phoneDue}}, your rent of {{rent}} is due on {{rentDue}}, and your salary of {{salary}} arrives on {{salaryDay}}. How much falls due on or before {{rentDue}}?",
+        "It is the start of the month. Your phone bill of {{phone}} is due on {{phoneDue}}, your rent of {{rent}} is due on {{rentDue}}, and your net salary (take-home pay) of {{salary}} arrives on {{salaryDay}}. How much falls due on or before {{rentDue}}?",
       answer: { sum: [{ param: "phone" }, { param: "rent" }] },
       feedbackCorrect:
         "Correct. Both bills fall due by {{rentDue}}, so that much cash must be ready by then.",
@@ -293,7 +327,7 @@ export const obligationUnit: ConceptUnit = {
       diagnostics: [
         {
           expr: { param: "rent" },
-          misconceptionId: MIS_ONLY_ON_PAYMENT,
+          misconceptionId: MIS_DUE_DAY_ONLY,
           feedback:
             "That is the rent alone. The phone bill falls due earlier, on {{phoneDue}}, so it also has to be covered by {{rentDue}}.",
         },
@@ -321,17 +355,18 @@ export const obligationUnit: ConceptUnit = {
         },
       ],
       prompt:
-        "You started with {{openingCash}}, bought the laptop for {{laptopCost}} and paid the phone bill of {{phone}}. On {{rentDue}} time stops at the rent of {{rent}}, and you have {{cashOnRentDay}}. You choose to defer the rent, and your salary of {{salary}} arrives on {{salaryDay}}. After deferring, what is true about the rent?",
+        "You started with {{openingCash}}, bought the laptop for {{laptopCost}} and paid the phone bill of {{phone}}. On {{rentDue}} time stops at the rent of {{rent}}, and you have {{cashOnRentDay}}. Your net salary (take-home pay) of {{salary}} arrives on {{salaryDay}}. You can pay or defer the rent. Which is true?",
       answers: [
         {
           choiceId: "still_owed",
-          text: "The full rent is still owed, now marked as overdue.",
+          text: "Paying is refused and nothing moves; deferring keeps the full rent owed, marked overdue.",
           correct: true,
-          feedback: "Yes. Deferring changed when you pay, not how much you owe.",
+          feedback:
+            "Yes. Paying needs enough cash, and deferring changes when you pay, not how much you owe.",
         },
         {
           choiceId: "cancelled",
-          text: "Nothing is owed for the rent until next month.",
+          text: "Paying is refused and nothing moves; deferring means this month's rent is no longer owed.",
           correct: false,
           feedback:
             "Deferring does not cancel the rent. The landlord is still owed {{rent}}, which you can pay once your salary arrives.",
@@ -339,10 +374,10 @@ export const obligationUnit: ConceptUnit = {
         },
         {
           choiceId: "on_time",
-          text: "The full rent is owed and still counts as on time.",
+          text: "Paying is refused and nothing moves; deferring keeps the full rent owed and still on time.",
           correct: false,
           feedback:
-            "The rent is owed, but it is no longer on time: it passed its due date unpaid, so it is marked overdue.",
+            "The rent is still owed, but it is no longer on time: you chose not to pay it on its due day, so Waymark marks it overdue right away.",
           misconceptionId: MIS_OVERDUE_SAME,
         },
       ],
@@ -350,33 +385,32 @@ export const obligationUnit: ConceptUnit = {
       reasons: [
         {
           choiceId: "when_not_what",
-          text: "Deferring changes when you pay, not what you owe to the landlord.",
+          text: "A payment needs enough cash, and deferring moves the payment past its due day without reducing it.",
           correct: true,
           feedback:
             "That is the key idea. Deferring is a fair recovery choice here, and the debt remains until you pay it.",
         },
         {
           choiceId: "worked_out",
-          text: "Nothing bad happened after deferring, so the rent must be settled.",
+          text: "Nothing bad happened after deferring, so the rent must be paid off.",
           correct: false,
           feedback:
-            "A calm outcome does not show the bill is settled. Check the bill's state: only a payment settles it, and Waymark adds no fee in this version.",
+            "A calm outcome does not show the rent is paid off. Check the bill's state: it stays overdue until you pay it.",
           misconceptionId: MIS_DEFER_CANCELS,
         },
         {
-          choiceId: "matters_on_payment",
-          text: "A bill only counts on the day money leaves your account.",
+          choiceId: "fee_keeps_it_owed",
+          text: "Waymark adds a late fee to deferred rent, and that fee is why the rent stays owed.",
           correct: false,
           feedback:
-            "The rent counted from the start of the month. It shaped your choices well before any money moved.",
-          misconceptionId: MIS_ONLY_ON_PAYMENT,
+            "The rent is still owed, but not because of a fee: this version adds none. It stays owed because only a payment settles it.",
         },
         {
           choiceId: "late_is_same",
           text: "Paying late is the same as paying on time when no fee is added.",
           correct: false,
           feedback:
-            "No fee in Waymark does not make late the same as on time. The bill is recorded as overdue, and in real life lateness can cost charges or trust.",
+            "No fee in Waymark does not make late the same as on time. The bill is recorded as overdue, and in real life lateness can bring fees or other consequences.",
           misconceptionId: MIS_OVERDUE_SAME,
         },
       ],
@@ -409,9 +443,15 @@ export const obligationUnit: ConceptUnit = {
       diagnostics: [
         {
           expr: { param: "power" },
-          misconceptionId: MIS_ONLY_ON_PAYMENT,
+          misconceptionId: MIS_DUE_DAY_ONLY,
           feedback:
             "That is only the bill due on {{powerDue}}. The gym membership fell due earlier, on {{gymDue}}, so it counts too.",
+        },
+        {
+          expr: { sum: [{ param: "gym" }, { param: "power" }, { param: "course" }] },
+          misconceptionId: MIS_ALL_BILLS,
+          feedback:
+            "That includes the course instalment, which is not due until {{courseDue}}. Keep only the bills due on or before {{powerDue}}.",
         },
       ],
     },
@@ -436,14 +476,14 @@ export const obligationUnit: ConceptUnit = {
       choices: [
         {
           choiceId: "still_owed_terms",
-          text: "She still owes it, and lateness may cost charges or trust, depending on the terms.",
+          text: "She still owes the full bill; its terms and local rules decide what paying late costs her.",
           correct: true,
           feedback:
-            "Yes. The debt stays, and what lateness costs depends on the bill's terms, which vary from one bill to another.",
+            "Yes. The debt stays, and depending on the bill, lateness can add fees or interest or lead to other consequences.",
         },
         {
           choiceId: "gone_after_date",
-          text: "Once the due date has passed unpaid, the water company can no longer ask for that bill.",
+          text: "Once the due date passes unpaid, the bill usually lapses and cannot be collected.",
           correct: false,
           feedback:
             "Missing a due date does not cancel a bill. The amount is still owed until it is paid.",
@@ -451,18 +491,19 @@ export const obligationUnit: ConceptUnit = {
         },
         {
           choiceId: "same_as_waymark",
-          text: "Paying late is just like paying on time, as long as she pays the same amount in the end.",
+          text: "Paying late usually costs nothing extra if she pays the full amount in the end.",
           correct: false,
           feedback:
             "Waymark adds no late fee in this version, but real bills can. A late bill is not the same as one paid on time.",
           misconceptionId: MIS_OVERDUE_SAME,
         },
         {
-          choiceId: "proves_misunderstanding",
-          text: "Paying late shows that she does not understand how to manage money.",
+          choiceId: "no_limit_until_paid",
+          text: "Until she pays it, the bill does not limit what she can spend of her wages.",
           correct: false,
           feedback:
-            "A late payment alone says little about understanding: income timing can leave anyone short for a few days. Look at the plan, not only the outcome.",
+            "The bill limits her spending from the moment she knows about it: part of her wages is already spoken for.",
+          misconceptionId: MIS_ONLY_ON_PAYMENT,
         },
       ],
     },

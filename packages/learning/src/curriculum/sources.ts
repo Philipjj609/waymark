@@ -242,7 +242,9 @@ export const VERIFIED_LOCATORS: Readonly<Record<string, readonly string[]>> = {
     "§1 Core rule 5 (receivables and cash are never revenue; net worth vs profit)",
     "§1 Core rule 2 (double entry per entity)",
   ],
-  src_waymark_adr_0003: ["Time stops on blocking decisions; DEFER_OBLIGATION recovery path (I-014)"],
+  src_waymark_adr_0003: [
+    "Time stops on blocking decisions; DEFER_OBLIGATION recovery path (I-014)",
+  ],
   src_waymark_adr_0008: ["Capture verification before settlement; deferral moves DUE to OVERDUE"],
   src_waymark_engine: [
     "PAY_OBLIGATION handler",

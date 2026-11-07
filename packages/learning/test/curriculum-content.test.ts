@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 import {
   allExercises,
   type Exercise,
-  evaluate,
   type ExerciseResponse,
+  evaluate,
   type Param,
   REVIEWED_FACTS,
   renderExercise,
@@ -70,7 +70,11 @@ function correctResponse(ex: Exercise): ExerciseResponse {
     case "SINGLE_CHOICE":
       return { format: ex.format, choiceId: key(ex.choices) };
     case "TWO_TIER":
-      return { format: ex.format, answerChoiceId: key(ex.answers), reasonChoiceId: key(ex.reasons) };
+      return {
+        format: ex.format,
+        answerChoiceId: key(ex.answers),
+        reasonChoiceId: key(ex.reasons),
+      };
     case "NUMERIC_MONEY":
       return {
         format: ex.format,
@@ -141,7 +145,9 @@ describe("starter curriculum (#17)", () => {
       });
       const wrongs: ExerciseResponse[] =
         ex.format === "SINGLE_CHOICE"
-          ? ex.choices.filter((c) => !c.correct).map((c) => ({ format: ex.format, choiceId: c.choiceId }))
+          ? ex.choices
+              .filter((c) => !c.correct)
+              .map((c) => ({ format: ex.format, choiceId: c.choiceId }))
           : ex.format === "TWO_TIER"
             ? ex.reasons
                 .filter((r) => !r.correct)
@@ -170,10 +176,12 @@ describe("starter curriculum (#17)", () => {
         r: { status: "SCORED", outcome: "SUPPORTS" },
       });
       for (const d of ex.diagnostics)
-        expect({ id: ex.exerciseId, r: score(evaluate(d.expr, params).amountMinor) }).toMatchObject({
-          id: ex.exerciseId,
-          r: { outcome: "CONTRADICTS", misconceptionHypotheses: [d.misconceptionId] },
-        });
+        expect({ id: ex.exerciseId, r: score(evaluate(d.expr, params).amountMinor) }).toMatchObject(
+          {
+            id: ex.exerciseId,
+            r: { outcome: "CONTRADICTS", misconceptionHypotheses: [d.misconceptionId] },
+          },
+        );
       const diagValues = new Set(ex.diagnostics.map((d) => evaluate(d.expr, params).amountMinor));
       const near = [answer + 1, answer - 1].find((v) => !diagValues.has(v)) ?? answer + 7;
       const slip = score(near);
@@ -201,4 +209,3 @@ describe("starter curriculum (#17)", () => {
     for (const p of prose) expect(p).not.toMatch(/[0-9€$£]/);
   });
 });
-
