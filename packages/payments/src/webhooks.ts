@@ -1,7 +1,7 @@
 import { type ProviderOperationId, ProviderOperationIdSchema } from "@fle/contracts";
 import { MAX_WEBHOOK_BODY_CHARS, type PayPalSandboxClient } from "./client.js";
 import type { SandboxCheckout, VerifyResult } from "./operations.js";
-import { isPayPalSandboxCertUrl } from "./paypal.js";
+import { isPayPalSandboxCertUrl, PAYPAL_SANDBOX_CERT_HOSTS } from "./paypal.js";
 
 /**
  * PayPal SANDBOX webhooks (#22).
@@ -16,15 +16,26 @@ import { isPayPalSandboxCertUrl } from "./paypal.js";
  *    of the order, and `verifyCapture()` decides on what PayPal says TODAY.
  *  - Because the payload is never applied, duplicate and out-of-order deliveries are harmless: a
  *    late PENDING after a COMPLETED only triggers another read-back of the current state.
- *  - An unverified, unverifiable or unsupported delivery is recorded and does nothing.
+ *  - An unverified, unverifiable or unsupported delivery does nothing. It is not even stored
+ *    unless a postback actually ran for it (#97 review M2).
  * ============================================================================================
  *
  * Verification is PayPal's postback (`POST /v1/notifications/verify-webhook-signature`, ADR-0008).
  * It does not work for events sent from PayPal's webhook simulator (ADR-0008), so those always end
  * NOT_VERIFIED here; that is the safe direction.
+ *
+ * Cost control (#97 review M1): every postback is a PayPal API call that shares our rate limit with
+ * real Orders calls, so a forged delivery must be cheap to refuse. Before any postback: strict
+ * local header checks (algorithm, cert URL, transmission time window), a per-event-id postback cap
+ * and the route's REQUIRED `allowPostback()` limiter. The postback itself is one HTTP call, never
+ * retried here; PayPal redelivers after our 503.
+ *
+ * Refunds and reversals (#97 review L5): PAYMENT.CAPTURE.REFUNDED / REVERSED carry a refund-shaped
+ * resource whose custom_id is often absent, so their hint is usually UNMAPPED. Refund handling is
+ * D1b reconciliation (read the capture back), never a webhook hint.
  */
 
-/** Event types we act on (ADR-0008, #22). Anything else is recorded as IGNORED. */
+/** Event types we act on (ADR-0008, #22). Anything else is answered IGNORED and not stored. */
 export const SUPPORTED_WEBHOOK_EVENT_TYPES = [
   "PAYMENT.CAPTURE.COMPLETED",
   "PAYMENT.CAPTURE.DECLINED",
@@ -94,16 +105,26 @@ export type WebhookDelivery =
             readonly header: string;
           };
     }
-  | { readonly ok: false; readonly reason: "BODY_TOO_LARGE" | "NOT_JSON" | "NOT_AN_EVENT" };
+  | {
+      readonly ok: false;
+      readonly reason: "BODY_TOO_LARGE" | "NOT_JSON" | "DUPLICATE_KEYS" | "NOT_AN_EVENT";
+    };
+
+/** The only algorithm PayPal uses for webhook signatures; anything else is refused locally. */
+export const PAYPAL_WEBHOOK_AUTH_ALGO = "SHA256withRSA";
 
 const HEADER_RULES: ReadonlyArray<
   readonly [keyof TransmissionHeaders, string, (v: string) => boolean]
 > = [
   ["transmissionId", "paypal-transmission-id", (v) => /^[A-Za-z0-9-]{1,128}$/.test(v)],
-  ["transmissionTime", "paypal-transmission-time", (v) => /^[0-9A-Za-z:.+-]{1,64}$/.test(v)],
+  [
+    "transmissionTime",
+    "paypal-transmission-time",
+    (v) => /^\d{4}-\d{2}-\d{2}T[0-9:.+Z-]{1,40}$/.test(v) && Number.isFinite(Date.parse(v)),
+  ],
   ["transmissionSig", "paypal-transmission-sig", (v) => /^[A-Za-z0-9+/=_-]{1,4096}$/.test(v)],
   ["certUrl", "paypal-cert-url", isPayPalSandboxCertUrl],
-  ["authAlgo", "paypal-auth-algo", (v) => /^[A-Za-z0-9]{1,64}$/.test(v)],
+  ["authAlgo", "paypal-auth-algo", (v) => v === PAYPAL_WEBHOOK_AUTH_ALGO],
 ];
 
 /** One header value, case-insensitively; repeated headers are ambiguous and count as missing. */
@@ -169,7 +190,7 @@ function captureIdFromLinks(links: unknown): string | null {
     if (!href) continue;
     try {
       const u = new URL(href);
-      if (u.protocol !== "https:" || !u.hostname.endsWith(".sandbox.paypal.com")) continue;
+      if (u.protocol !== "https:" || !PAYPAL_SANDBOX_CERT_HOSTS.has(u.hostname)) continue;
       const m = /^\/v2\/payments\/captures\/([A-Z0-9]{1,36})$/.exec(u.pathname);
       if (m?.[1]) return m[1];
     } catch {}
@@ -201,7 +222,8 @@ function parseEvent(json: unknown): ParsedWebhookEvent | null {
     const unit = units.length === 1 && isObj(units[0]) ? units[0] : {};
     operationId = operationIdOf(unit.custom_id) ?? operationIdOf(unit.reference_id);
   } else if (resourceType === "refund") {
-    // resource = the refund; the capture is its `up` link.
+    // resource = the refund; the capture is its `up` link. custom_id is often absent on refunds,
+    // so the hint is usually UNMAPPED: refunds are D1b reconciliation's job (#97 review L5).
     refundId = paypalId(resource.id);
     captureId = captureIdFromLinks(resource.links);
     orderId = paypalId(related.order_id);
@@ -229,6 +251,41 @@ function parseEvent(json: unknown): ParsedWebhookEvent | null {
 }
 
 /**
+ * True when any JSON object in `text` repeats a key (compared after unescaping, so "a" and
+ * its a escape collide). `text` must already be valid JSON. Iterative: deep nesting cannot overflow.
+ */
+function hasDuplicateKeys(text: string): boolean {
+  const stack: Array<Set<string> | null> = []; // a Set per object, null per array
+  let expectKey = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      const top = stack.at(-1);
+      if (top && expectKey) {
+        const key = JSON.parse(text.slice(i, j + 1)) as string;
+        if (top.has(key)) return true;
+        top.add(key);
+        expectKey = false;
+      }
+      i = j;
+    } else if (ch === "{") {
+      stack.push(new Set());
+      expectKey = true;
+    } else if (ch === "[") {
+      stack.push(null);
+      expectKey = false;
+    } else if (ch === "}" || ch === "]") {
+      stack.pop();
+      expectKey = false;
+    } else if (ch === ",") expectKey = stack.at(-1) instanceof Set;
+    else if (ch === ":") expectKey = false;
+  }
+  return false;
+}
+
+/**
  * Parses one delivery. Never throws, whatever the body or headers. `rawBody` must be the request
  * body exactly as received (read the route's body as text BEFORE any JSON middleware).
  */
@@ -242,6 +299,8 @@ export function parseWebhookDelivery(rawBody: unknown, headers: HeaderSource): W
     } catch {
       return { ok: false, reason: "NOT_JSON" };
     }
+    // Ambiguous JSON (a repeated key) may be read differently by PayPal and by us (#97 review L3).
+    if (hasDuplicateKeys(rawBody)) return { ok: false, reason: "DUPLICATE_KEYS" };
     const event = parseEvent(json);
     if (!event) return { ok: false, reason: "NOT_AN_EVENT" };
     return { ok: true, rawBody, event, transmission: transmissionOf(headers) };
@@ -256,25 +315,37 @@ export interface WebhookVerifierConfig {
   readonly client: PayPalSandboxClient;
   /** From configuration (PAYPAL_WEBHOOK_ID). NEVER taken from the request. */
   readonly webhookId: string;
+  /** Epoch ms; injectable for tests. Default Date.now. */
+  readonly now?: () => number;
+  /** Accepted distance between PAYPAL-TRANSMISSION-TIME and now(). Default 10 minutes. */
+  readonly maxClockSkewMs?: number;
 }
+
+export const DEFAULT_WEBHOOK_CLOCK_SKEW_MS = 10 * 60_000;
+
+export type NotVerifiedReason =
+  | "SIGNATURE_FAILURE"
+  | "MISSING_HEADER"
+  | "BAD_HEADER"
+  | "BAD_CERT_URL"
+  | "STALE_TRANSMISSION"
+  | "WEBHOOK_ID_NOT_CONFIGURED"
+  | "REJECTED_BY_PAYPAL";
 
 export type WebhookVerification =
   /** PayPal answered verification_status SUCCESS for exactly this body and these headers. */
   | { readonly status: "VERIFIED"; readonly debugId: string | null }
-  /** Definitely not authentic, or not verifiable as sent. Recorded; does nothing. */
+  /** Definitely not authentic, or not verifiable as sent. Does nothing. */
   | {
       readonly status: "NOT_VERIFIED";
-      readonly reason:
-        | "SIGNATURE_FAILURE"
-        | "MISSING_HEADER"
-        | "BAD_HEADER"
-        | "BAD_CERT_URL"
-        | "WEBHOOK_ID_NOT_CONFIGURED"
-        | "REJECTED_BY_PAYPAL";
+      readonly reason: NotVerifiedReason;
       readonly detail: string | null;
       readonly debugId: string | null;
     }
-  /** No answer we can rely on (network, timeout, 5xx, unreadable, no token). Never trusted. */
+  /**
+   * No answer we can rely on (network, timeout, 5xx, unreadable, no token, and 401/403/429, which
+   * are OUR auth/config/rate problems, not proof of a forgery). Never trusted; PayPal redelivers.
+   */
   | {
       readonly status: "UNCERTAIN";
       readonly cause: string;
@@ -282,14 +353,11 @@ export type WebhookVerification =
       readonly debugId: string | null;
     };
 
-/**
- * Asks PayPal (postback) whether this delivery is authentic. Bad or missing headers, a cert URL
- * outside PayPal's sandbox domain, or a missing webhook id end here, without any network call.
- */
-export async function verifyWebhookSignature(
+/** Every check that needs no network. null = a postback may be tried. */
+function localCheck(
   config: WebhookVerifierConfig,
   delivery: Extract<WebhookDelivery, { ok: true }>,
-): Promise<WebhookVerification> {
+): Extract<WebhookVerification, { status: "NOT_VERIFIED" }> | null {
   const t = delivery.transmission;
   if (!t.ok) return { status: "NOT_VERIFIED", reason: t.reason, detail: t.header, debugId: null };
   if (typeof config.webhookId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(config.webhookId))
@@ -299,6 +367,33 @@ export async function verifyWebhookSignature(
       detail: null,
       debugId: null,
     };
+  const skew = config.maxClockSkewMs ?? DEFAULT_WEBHOOK_CLOCK_SKEW_MS;
+  const sent = Date.parse(t.headers.transmissionTime);
+  const now = (config.now ?? Date.now)();
+  if (!Number.isFinite(sent) || Math.abs(now - sent) > skew)
+    return {
+      status: "NOT_VERIFIED",
+      reason: "STALE_TRANSMISSION",
+      detail: "paypal-transmission-time",
+      debugId: null,
+    };
+  return null;
+}
+
+/**
+ * Asks PayPal (postback) whether this delivery is authentic: at most ONE HTTP call. Bad or missing
+ * headers, a cert URL that is not a PayPal sandbox cert URL, an algorithm other than SHA256withRSA,
+ * a transmission time outside the window, or a missing webhook id end here, without any network
+ * call. Code that receives deliveries uses `receiveWebhook`, which also applies the limits.
+ */
+export async function verifyWebhookSignature(
+  config: WebhookVerifierConfig,
+  delivery: Extract<WebhookDelivery, { ok: true }>,
+): Promise<WebhookVerification> {
+  const refused = localCheck(config, delivery);
+  if (refused) return refused;
+  const t = delivery.transmission;
+  if (!t.ok) return { status: "NOT_VERIFIED", reason: t.reason, detail: t.header, debugId: null };
   const r = await config.client.verifyWebhookSignature({
     ...t.headers,
     webhookId: config.webhookId,
@@ -315,6 +410,14 @@ export async function verifyWebhookSignature(
       // Input was validated above, so this is "no token": ask again later.
       return { status: "UNCERTAIN", cause: `NOT_SENT:${r.cause}`, httpStatus: null, debugId: null };
     case "REJECTED":
+      // Our credentials, permissions or rate limit: says nothing about the delivery (#97 L2).
+      if (r.httpStatus === 401 || r.httpStatus === 403 || r.httpStatus === 429)
+        return {
+          status: "UNCERTAIN",
+          cause: `HTTP_${r.httpStatus}`,
+          httpStatus: r.httpStatus,
+          debugId: r.debugId,
+        };
       return {
         status: "NOT_VERIFIED",
         reason: "REJECTED_BY_PAYPAL",
@@ -379,22 +482,27 @@ export async function reconcileFromHint(
 // ------------------------------------------------------------------------------ inbox
 
 /**
- * - PENDING: recorded, verification not finished.
- * - SKIPPED: unsupported event type; never verified, never acted on.
+ * - PENDING: a postback slot was reserved and the postback is running (or crashed mid-way).
  * - VERIFIED: final. Later deliveries of the same event id are duplicates.
- * - NOT_VERIFIED / UNCERTAIN: not final; a later delivery of the same id may still verify (so a
- *   forged body sent first under a real event id cannot swallow the genuine delivery).
+ * - NOT_VERIFIED / UNCERTAIN: a postback ran and did not verify. Not final: a later delivery of the
+ *   same id may still verify (so a forged body sent first under a real event id cannot swallow the
+ *   genuine delivery), up to `maxPostbacksPerEvent` postbacks per event id.
+ *
+ * Deliveries refused locally (malformed, unsupported type, bad headers, stale time, throttled) are
+ * never stored (#97 review M2): a row exists only for an event id we spent a postback on.
  */
-export type InboxVerification = "PENDING" | "SKIPPED" | "VERIFIED" | "NOT_VERIFIED" | "UNCERTAIN";
+export type InboxVerification = "PENDING" | "VERIFIED" | "NOT_VERIFIED" | "UNCERTAIN";
 
 export interface WebhookInboxRecord {
   /** Unique key: PayPal's webhook EVENT id (not a capture id; ADR-0008 "Deliveries"). */
   readonly eventId: string;
   readonly eventType: string;
-  /** First delivery, as passed in by the caller (the package reads no clock). */
+  /** First stored delivery, as passed in by the caller. */
   readonly receivedAt: string;
   readonly lastDeliveryAt: string;
   readonly deliveries: number;
+  /** Postbacks spent on this event id (capped by `maxPostbacksPerEvent`). */
+  readonly postbacks: number;
   readonly verification: InboxVerification;
   /** Short reason/cause only; never a payload, header value or secret. */
   readonly verificationDetail: string | null;
@@ -405,8 +513,11 @@ export interface WebhookInboxRecord {
 }
 
 /**
- * Port; the Postgres implementation needs a UNIQUE index on event_id, `insertIfAbsent` as
- * INSERT … ON CONFLICT DO NOTHING RETURNING, and `update` under a row lock (SELECT … FOR UPDATE).
+ * Port. The Postgres implementation (D1b / route) needs: a UNIQUE index on event_id;
+ * `insertIfAbsent` as INSERT … ON CONFLICT DO NOTHING RETURNING; `update` under a row lock
+ * (SELECT … FOR UPDATE); and bounded growth: delete NOT_VERIFIED/UNCERTAIN/PENDING rows after a
+ * TTL (e.g. 7 days, longer than PayPal's ~3-day redelivery window) and processed VERIFIED rows
+ * after e.g. 30 days, plus a hard row cap at which the route answers 503 without a postback.
  */
 export interface WebhookInbox {
   /** Inserts if absent; returns the STORED record (an existing one wins). */
@@ -459,7 +570,7 @@ export class InMemoryWebhookInbox implements WebhookInbox {
 
 /**
  * What the route should do with one delivery. `respondWith` is the HTTP status for PayPal: 2xx stops
- * redelivery; non-2xx makes PayPal redeliver later (so UNCERTAIN -> 503 retries verification
+ * redelivery; non-2xx makes PayPal redeliver later (UNCERTAIN/DEFERRED -> 503 retries verification
  * without us storing the raw body).
  */
 export type WebhookReceipt =
@@ -469,10 +580,17 @@ export type WebhookReceipt =
   | {
       readonly outcome: "NOT_VERIFIED";
       readonly eventId: string;
-      readonly reason: string;
+      readonly reason: NotVerifiedReason | "POSTBACK_LIMIT";
       readonly respondWith: 400;
     }
   | { readonly outcome: "UNCERTAIN"; readonly eventId: string; readonly respondWith: 503 }
+  /** Not attempted now (limiter said no, or no webhook id configured): no postback, no row. */
+  | {
+      readonly outcome: "DEFERRED";
+      readonly eventId: string;
+      readonly reason: "THROTTLED" | "NOT_CONFIGURED";
+      readonly respondWith: 503;
+    }
   | {
       readonly outcome: "VERIFIED";
       readonly eventId: string;
@@ -481,14 +599,24 @@ export type WebhookReceipt =
       readonly respondWith: 200;
     };
 
+export const DEFAULT_MAX_POSTBACKS_PER_EVENT = 5;
+
 export interface ReceiveWebhookDeps extends WebhookVerifierConfig {
   readonly inbox: WebhookInbox;
+  /**
+   * REQUIRED. The route's global / per-source-IP rate limit and concurrency bound, asked right
+   * before each postback (after all local checks and dedup). `false` -> no PayPal call, no row, 503.
+   * Postbacks share PayPal's rate limit with real Orders calls, so the route MUST bound them.
+   */
+  readonly allowPostback: () => boolean | Promise<boolean>;
+  /** Postbacks per webhook event id, ever. Default 5. */
+  readonly maxPostbacksPerEvent?: number;
 }
 
 /**
- * Receives one delivery: parse, dedupe on the event id, verify by postback, record. The returned
- * hint (if any) is the ONLY follow-up allowed: `reconcileFromHint()`. Never throws for hostile
- * input; inbox/storage errors propagate (the route answers 5xx and PayPal redelivers).
+ * Receives one delivery: parse, local checks, dedupe on the event id, limits, verify by postback,
+ * record. The returned hint (if any) is the ONLY follow-up allowed: `reconcileFromHint()`. Never
+ * throws for hostile input; inbox/storage errors propagate (the route answers 5xx, PayPal redelivers).
  */
 export async function receiveWebhook(
   input: { readonly rawBody: unknown; readonly headers: HeaderSource; readonly receivedAt: string },
@@ -498,29 +626,56 @@ export async function receiveWebhook(
   if (!delivery.ok) return { outcome: "MALFORMED", reason: delivery.reason, respondWith: 400 };
   const { event } = delivery;
   const eventId = event.eventId;
+  // Nothing below writes or calls PayPal until every local check has passed (#97 M1/M2).
+  if (!event.supported) return { outcome: "IGNORED", eventId, respondWith: 200 };
+  const refused = localCheck(deps, delivery);
+  if (refused?.reason === "WEBHOOK_ID_NOT_CONFIGURED")
+    return { outcome: "DEFERRED", eventId, reason: "NOT_CONFIGURED", respondWith: 503 };
+  if (refused)
+    return { outcome: "NOT_VERIFIED", eventId, reason: refused.reason, respondWith: 400 };
 
+  const cap = deps.maxPostbacksPerEvent ?? DEFAULT_MAX_POSTBACKS_PER_EVENT;
   const existing = await deps.inbox.get(eventId);
   if (existing?.verification === "VERIFIED") {
     await deps.inbox.update(eventId, (c) => seen(c, input.receivedAt));
     return { outcome: "DUPLICATE", eventId, respondWith: 200 };
   }
-  const fresh: WebhookInboxRecord = {
+  if (existing && existing.postbacks >= cap)
+    return { outcome: "NOT_VERIFIED", eventId, reason: "POSTBACK_LIMIT", respondWith: 400 };
+  if (!(await deps.allowPostback()))
+    return { outcome: "DEFERRED", eventId, reason: "THROTTLED", respondWith: 503 };
+
+  // Reserve one postback for this event id atomically (the cap holds under concurrency).
+  const ins = await deps.inbox.insertIfAbsent({
     eventId,
     eventType: event.eventType,
     receivedAt: input.receivedAt,
     lastDeliveryAt: input.receivedAt,
     deliveries: 1,
-    verification: event.supported ? "PENDING" : "SKIPPED",
-    verificationDetail: event.supported ? null : "UNSUPPORTED_EVENT_TYPE",
+    postbacks: 1,
+    verification: "PENDING",
+    verificationDetail: null,
     hint: null,
     processed: false,
-  };
-  const ins = await deps.inbox.insertIfAbsent(fresh);
-  if (!ins.inserted) await deps.inbox.update(eventId, (c) => seen(c, input.receivedAt));
-  if (!event.supported)
-    return ins.inserted
-      ? { outcome: "IGNORED", eventId, respondWith: 200 }
-      : { outcome: "DUPLICATE", eventId, respondWith: 200 };
+  });
+  if (!ins.inserted) {
+    let verdict = "RESERVED" as "RESERVED" | "DUPLICATE" | "LIMIT";
+    await deps.inbox.update(eventId, (c) => {
+      if (c.verification === "VERIFIED") {
+        verdict = "DUPLICATE";
+        return seen(c, input.receivedAt);
+      }
+      if (c.postbacks >= cap) {
+        verdict = "LIMIT";
+        return c;
+      }
+      verdict = "RESERVED";
+      return { ...seen(c, input.receivedAt), postbacks: c.postbacks + 1 };
+    });
+    if (verdict === "DUPLICATE") return { outcome: "DUPLICATE", eventId, respondWith: 200 };
+    if (verdict === "LIMIT")
+      return { outcome: "NOT_VERIFIED", eventId, reason: "POSTBACK_LIMIT", respondWith: 400 };
+  }
 
   const v = await verifyWebhookSignature(deps, delivery);
   let won = false;
@@ -547,13 +702,9 @@ export async function receiveWebhook(
     return won
       ? { outcome: "VERIFIED", eventId, hint: after.hint, respondWith: 200 }
       : { outcome: "DUPLICATE", eventId, respondWith: 200 };
-  if (v.status === "UNCERTAIN") return { outcome: "UNCERTAIN", eventId, respondWith: 503 };
-  return {
-    outcome: "NOT_VERIFIED",
-    eventId,
-    reason: v.status === "NOT_VERIFIED" ? v.reason : "UNKNOWN",
-    respondWith: 400,
-  };
+  if (v.status === "NOT_VERIFIED")
+    return { outcome: "NOT_VERIFIED", eventId, reason: v.reason, respondWith: 400 };
+  return { outcome: "UNCERTAIN", eventId, respondWith: 503 };
 }
 
 const seen = (c: WebhookInboxRecord, at: string): WebhookInboxRecord => ({

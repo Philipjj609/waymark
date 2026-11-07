@@ -27,7 +27,9 @@ const { loadEnv } = (await import(pathToFileURL(join(root, "scripts/ops/env.mjs"
 const env = loadEnv();
 if (env.PAYPAL_ENV !== "sandbox") throw new Error("PAYPAL_ENV must be 'sandbox'");
 const maxIdx = process.argv.indexOf("--max-calls");
-const MAX_CALLS = Math.min(6, maxIdx > 0 ? Number(process.argv[maxIdx + 1]) : 6);
+const requested = maxIdx > 0 ? Number(process.argv[maxIdx + 1]) : 6;
+// NaN, 0, negatives or fractions fall back to 6; never more than 6 (#97 review L4).
+const MAX_CALLS = Number.isInteger(requested) && requested > 0 ? Math.min(6, requested) : 6;
 
 let calls = 0;
 const counted: typeof fetch = async (url, init = {}) => {

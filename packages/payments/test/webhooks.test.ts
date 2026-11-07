@@ -1,7 +1,9 @@
 /**
- * #22: PayPal SANDBOX webhooks against a fake PayPal. The verify-webhook-signature responses mirror
- * the shapes recorded in docs/payments/sandbox-evidence.md ("Webhook signature verification").
- * Core rule under test: a webhook, even a verified one, only yields a read-back hint.
+ * #22: PayPal SANDBOX webhooks against a fake PayPal. The fake's postback answers STRUCTURALLY, like
+ * the real one (docs/payments/sandbox-evidence.md, "Webhook signature verification"): SUCCESS only
+ * for our configured webhook id AND a body byte-identical to one PayPal "signed" under that
+ * transmission signature; FAILURE (HTTP 200) otherwise. Core rule under test: a webhook, even a
+ * verified one, only yields a read-back hint. #97 review cases are marked.
  */
 import type { ObligationId, ProviderOperationId, WorldId } from "@fle/contracts";
 import { describe, expect, it } from "vitest";
@@ -9,8 +11,10 @@ import {
   InMemoryOperationStore,
   InMemoryWebhookInbox,
   markWebhookProcessed,
+  normalizeSandboxCertUrl,
   PayPalSandboxClient,
   parseWebhookDelivery,
+  type ReceiveWebhookDeps,
   receiveWebhook,
   reconcileFromHint,
   reconcileHintOf,
@@ -24,22 +28,38 @@ const CLIENT_ID = "sandbox-client-id-value";
 const TOKEN = "A21AA-sandbox-access-token-value";
 const WEBHOOK_ID = "9AB12345CD6789012";
 const OP = "pop_wh_1" as ProviderOperationId;
+const NOW_ISO = "2026-11-07T10:00:00Z";
+const NOW = Date.parse(NOW_ISO);
+const CERT =
+  "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-360caa42-fca2a594-a5cafa77";
+const EVENT_ID = "WH-58D329510W468432D-8HN650336L201105X";
 
-type VerifyReply =
-  | "SUCCESS"
-  | "FAILURE"
+type Fault =
   | "500"
   | "timeout"
   | "network"
   | "garbage"
   | "weird-status"
-  | "400";
+  | "400"
+  | "401"
+  | "403"
+  | "429";
 
-/** Fake PayPal: OAuth, verify-webhook-signature and GET order. Records every request. */
+/** Fake PayPal: OAuth, verify-webhook-signature (structural) and GET order. Records requests. */
 class FakePayPal {
-  replies: VerifyReply[] = [];
+  /** transmission sig -> the exact raw body PayPal signed with it (genuine deliveries). */
+  signed = new Map<string, string>();
+  faults: Fault[] = [];
   requests: Array<{ path: string; body: string | null; headers: Record<string, string> }> = [];
   order: Record<string, unknown> | null = null;
+  #sig = 0;
+
+  /** Headers of a genuine delivery of `raw`: PayPal signed exactly this body. */
+  genuine(raw: string, over: Record<string, string> = {}): Record<string, string> {
+    const sig = Buffer.from(`genuine-signature-${++this.#sig}`).toString("base64");
+    this.signed.set(sig, raw);
+    return { ...headers(sig), ...over };
+  }
 
   fetch = async (url: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
     const u = new URL(String(url));
@@ -55,64 +75,97 @@ class FakePayPal {
       return this.order ? json(200, this.order) : json(404, { name: "RESOURCE_NOT_FOUND" });
     if (u.pathname !== "/v1/notifications/verify-webhook-signature")
       return json(404, { name: "NOT_FOUND" });
-    const r = this.replies.shift() ?? "SUCCESS";
-    switch (r) {
-      case "SUCCESS":
-      case "FAILURE":
-        return json(200, { verification_status: r });
-      case "weird-status":
-        return json(200, { verification_status: "MAYBE" });
-      case "500":
-        return json(500, { name: "INTERNAL_SERVICE_ERROR" });
+    const fault = this.faults.shift();
+    if (fault) return this.#fail(fault);
+    // Structural answer: as observed in the Sandbox, a mismatch is HTTP 200 FAILURE.
+    const marker = ',"webhook_event":';
+    const at = (body ?? "").indexOf(marker);
+    const head = JSON.parse(`${(body ?? "").slice(0, at)}}`) as Record<string, string>;
+    const raw = (body ?? "").slice(at + marker.length, -1);
+    const ok =
+      head.webhook_id === WEBHOOK_ID &&
+      head.auth_algo === "SHA256withRSA" &&
+      this.signed.get(head.transmission_sig ?? "") === raw;
+    return json(200, { verification_status: ok ? "SUCCESS" : "FAILURE" });
+  };
+
+  #fail(f: Fault): Response {
+    switch (f) {
       case "timeout":
         throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
       case "network":
         throw new TypeError("fetch failed");
       case "garbage":
         return new Response("<html>oops</html>", { status: 200 });
+      case "weird-status":
+        return json(200, { verification_status: "MAYBE" });
+      case "500":
+        return json(500, { name: "INTERNAL_SERVICE_ERROR" });
       case "400":
         return json(400, {
           name: "VALIDATION_ERROR",
           details: [{ field: "webhook_id", issue: "INVALID_RESOURCE_ID" }],
         });
+      case "401":
+        return json(401, { error: "invalid_token" });
+      case "403":
+        return json(403, { name: "PERMISSION_DENIED" });
+      case "429":
+        return json(429, { name: "RATE_LIMIT_REACHED" }, { "retry-after": "1" });
     }
-  };
+  }
 
   get verifyCalls() {
     return this.requests.filter((r) => r.path === "/v1/notifications/verify-webhook-signature");
   }
 }
 
-function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+function json(status: number, body: unknown, extra: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", "paypal-debug-id": "dbg123", ...headers },
+    headers: { "content-type": "application/json", "paypal-debug-id": "dbg123", ...extra },
   });
 }
 
-const client = (fake: FakePayPal, extra: { maxAttempts?: number } = {}) =>
+const headers = (sig = "Zm9yZ2VkLXNpZ25hdHVyZQ=="): Record<string, string> => ({
+  "PAYPAL-TRANSMISSION-ID": "69cd13f0-d67a-11e5-baa3-778b53f4ae55",
+  "PAYPAL-TRANSMISSION-TIME": NOW_ISO,
+  "PAYPAL-TRANSMISSION-SIG": sig,
+  "PAYPAL-CERT-URL": CERT,
+  "PAYPAL-AUTH-ALGO": "SHA256withRSA",
+});
+/** Well-formed headers whose signature PayPal never produced. */
+const FORGED = headers();
+
+const client = (fake: FakePayPal, maxAttempts = 3) =>
   new PayPalSandboxClient({
     clientId: CLIENT_ID,
     clientSecret: SECRET,
     fetch: fake.fetch as typeof fetch,
     sleep: async () => {},
-    maxAttempts: extra.maxAttempts ?? 1,
+    maxAttempts,
   });
-
-const HEADERS = {
-  "PAYPAL-TRANSMISSION-ID": "69cd13f0-d67a-11e5-baa3-778b53f4ae55",
-  "PAYPAL-TRANSMISSION-TIME": "2026-11-07T10:00:00Z",
-  "PAYPAL-TRANSMISSION-SIG": "c2lnbmF0dXJlLWJ5dGVzLWJhc2U2NA==",
-  "PAYPAL-CERT-URL":
-    "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-360caa42-fca2a594-a5cafa77",
-  "PAYPAL-AUTH-ALGO": "SHA256withRSA",
-};
+const cfg = (fake: FakePayPal, maxAttempts = 3) => ({
+  client: client(fake, maxAttempts),
+  webhookId: WEBHOOK_ID,
+  now: () => NOW,
+});
+const deps = (
+  fake: FakePayPal,
+  over: Partial<Omit<ReceiveWebhookDeps, "inbox">> = {},
+): ReceiveWebhookDeps & { inbox: InMemoryWebhookInbox } => ({
+  ...cfg(fake),
+  inbox: new InMemoryWebhookInbox(),
+  allowPostback: () => true,
+  ...over,
+});
+const at = (s: number) => `2026-11-07T10:00:${String(s).padStart(2, "0")}Z`;
 
 /** A capture event in PayPal's documented shape. */
 const captureEvent = (
   over: { id?: string; type?: string; status?: string; value?: string; customId?: string } = {},
 ) => ({
-  id: over.id ?? "WH-58D329510W468432D-8HN650336L201105X",
+  id: over.id ?? EVENT_ID,
   event_version: "1.0",
   create_time: "2026-11-07T10:00:00.000Z",
   resource_type: "capture",
@@ -127,20 +180,20 @@ const captureEvent = (
     supplementary_data: { related_ids: { order_id: "5O190127TN364715T" } },
   },
 });
+const RAW = JSON.stringify(captureEvent());
 
-const delivery = (body: string, headers: Record<string, string> = HEADERS) => {
-  const d = parseWebhookDelivery(body, headers);
+const delivery = (body: string, h: Record<string, string> = FORGED) => {
+  const d = parseWebhookDelivery(body, h);
   if (!d.ok) throw new Error(`fixture did not parse: ${d.reason}`);
   return d as Extract<WebhookDelivery, { ok: true }>;
 };
 
 describe("parseWebhookDelivery", () => {
   it("keeps the raw body string and extracts the event and transmission headers", () => {
-    const raw = JSON.stringify(captureEvent());
-    const d = delivery(raw);
-    expect(d.rawBody).toBe(raw);
+    const d = delivery(RAW);
+    expect(d.rawBody).toBe(RAW);
     expect(d.event).toMatchObject({
-      eventId: "WH-58D329510W468432D-8HN650336L201105X",
+      eventId: EVENT_ID,
       eventType: "PAYMENT.CAPTURE.COMPLETED",
       supported: true,
       resourceType: "capture",
@@ -152,44 +205,58 @@ describe("parseWebhookDelivery", () => {
     expect(d.transmission).toEqual({
       ok: true,
       headers: {
-        transmissionId: HEADERS["PAYPAL-TRANSMISSION-ID"],
-        transmissionTime: HEADERS["PAYPAL-TRANSMISSION-TIME"],
-        transmissionSig: HEADERS["PAYPAL-TRANSMISSION-SIG"],
-        certUrl: HEADERS["PAYPAL-CERT-URL"],
+        transmissionId: FORGED["PAYPAL-TRANSMISSION-ID"],
+        transmissionTime: NOW_ISO,
+        transmissionSig: FORGED["PAYPAL-TRANSMISSION-SIG"],
+        certUrl: CERT,
         authAlgo: "SHA256withRSA",
       },
     });
   });
 
   it("reads headers case-insensitively from a fetch Headers object and Node-style arrays", () => {
-    const raw = JSON.stringify(captureEvent());
-    const h = new Headers(HEADERS);
-    expect(delivery(raw, Object.fromEntries(h.entries())).transmission.ok).toBe(true);
-    const fromHeaders = parseWebhookDelivery(raw, h);
+    const h = new Headers(FORGED);
+    expect(delivery(RAW, Object.fromEntries(h.entries())).transmission.ok).toBe(true);
+    const fromHeaders = parseWebhookDelivery(RAW, h);
     expect(fromHeaders.ok && fromHeaders.transmission.ok).toBe(true);
     const arrays = Object.fromEntries(
-      Object.entries(HEADERS).map(([k, v]) => [k.toLowerCase(), [v]]),
+      Object.entries(FORGED).map(([k, v]) => [k.toLowerCase(), [v]]),
     );
-    const fromArrays = parseWebhookDelivery(raw, arrays);
+    const fromArrays = parseWebhookDelivery(RAW, arrays);
     expect(fromArrays.ok && fromArrays.transmission.ok).toBe(true);
   });
 
   it("missing, repeated or bad headers are reported, not thrown", () => {
-    const raw = JSON.stringify(captureEvent());
-    const { "PAYPAL-TRANSMISSION-SIG": _sig, ...noSig } = HEADERS;
-    expect(delivery(raw, noSig).transmission).toEqual({
+    const { "PAYPAL-TRANSMISSION-SIG": _sig, ...noSig } = FORGED;
+    expect(delivery(RAW, noSig).transmission).toEqual({
       ok: false,
       reason: "MISSING_HEADER",
       header: "paypal-transmission-sig",
     });
-    const twice = parseWebhookDelivery(raw, {
-      ...HEADERS,
+    const twice = parseWebhookDelivery(RAW, {
+      ...FORGED,
       "paypal-auth-algo": ["SHA256withRSA", "x"],
     });
     expect(twice.ok && !twice.transmission.ok).toBe(true);
     expect(
-      delivery(raw, { ...HEADERS, "PAYPAL-AUTH-ALGO": "SHA256 withRSA; drop" }).transmission,
+      delivery(RAW, { ...FORGED, "PAYPAL-AUTH-ALGO": "SHA256 withRSA; drop" }).transmission,
     ).toMatchObject({ ok: false, reason: "BAD_HEADER" });
+  });
+
+  it("only SHA256withRSA is accepted as auth algorithm (#97 M1)", () => {
+    for (const algo of ["SHA1withRSA", "sha256withrsa", "SHA256withRSA2", "none"])
+      expect(delivery(RAW, { ...FORGED, "PAYPAL-AUTH-ALGO": algo }).transmission).toEqual({
+        ok: false,
+        reason: "BAD_HEADER",
+        header: "paypal-auth-algo",
+      });
+  });
+
+  it("a transmission time that does not parse is a bad header (#97 M1)", () => {
+    for (const t of ["yesterday", "2026-13-45T99:99:99Z", "1731000000", ""])
+      expect(
+        delivery(RAW, { ...FORGED, "PAYPAL-TRANSMISSION-TIME": t }).transmission,
+      ).toMatchObject({ ok: false });
   });
 
   it("order events carry the order id and our operation id from the purchase unit", () => {
@@ -209,8 +276,8 @@ describe("parseWebhookDelivery", () => {
     expect(d.event.captureId).toBeNull();
   });
 
-  it("refund events take the capture id from the sandbox 'up' link only", () => {
-    const refund = (href: string) =>
+  it("refund events take the capture id from the sandbox 'up' link only; usually UNMAPPED (L5)", () => {
+    const refund = (href: string, customId?: string) =>
       delivery(
         JSON.stringify({
           id: "WH-REFUND-1",
@@ -219,17 +286,44 @@ describe("parseWebhookDelivery", () => {
           resource: {
             id: "1JU08902781691411",
             status: "COMPLETED",
-            custom_id: OP,
+            ...(customId ? { custom_id: customId } : {}),
             links: [{ rel: "up", href }],
           },
         }),
       ).event;
     expect(
-      refund("https://api.sandbox.paypal.com/v2/payments/captures/3C679366HH908993F"),
+      refund("https://api.sandbox.paypal.com/v2/payments/captures/3C679366HH908993F", OP),
     ).toMatchObject({ refundId: "1JU08902781691411", captureId: "3C679366HH908993F" });
     expect(refund("https://evil.example/v2/payments/captures/3C679366HH908993F").captureId).toBe(
       null,
     );
+    // Typical refund: no custom_id -> no operation id in the hint.
+    const typical = refund("https://api.sandbox.paypal.com/v2/payments/captures/3C679366HH908993F");
+    expect(reconcileHintOf(typical)?.operationId).toBeNull();
+  });
+
+  it("a UTF-8 BOM in front of the body is rejected as NOT_JSON (#97)", () => {
+    expect(parseWebhookDelivery(`﻿${RAW}`, FORGED)).toEqual({
+      ok: false,
+      reason: "NOT_JSON",
+    });
+  });
+
+  it("duplicate JSON keys are rejected, also when escaped; quoted text is not mistaken for keys (L3)", () => {
+    const dupTop = `{"id":"${EVENT_ID}","id":"WH-OTHER","event_type":"PAYMENT.CAPTURE.COMPLETED"}`;
+    const dupEscaped = `{"id":"${EVENT_ID}","\\u0069d":"WH-OTHER","event_type":"PAYMENT.CAPTURE.COMPLETED"}`;
+    const dupResource = RAW.replace(
+      '"status":"COMPLETED"',
+      '"status":"PENDING","status":"COMPLETED"',
+    );
+    for (const body of [dupTop, dupEscaped, dupResource])
+      expect(parseWebhookDelivery(body, FORGED)).toEqual({ ok: false, reason: "DUPLICATE_KEYS" });
+    const tricky = JSON.stringify({
+      ...captureEvent(),
+      summary: 'he said "{\\"id\\":1,\\"id\\":2}", [a, b]',
+      list: [{ id: 1 }, { id: 2 }],
+    });
+    expect(parseWebhookDelivery(tricky, FORGED).ok).toBe(true);
   });
 
   it("hostile payloads never throw", () => {
@@ -252,9 +346,10 @@ describe("parseWebhookDelivery", () => {
       `{"id":"${"W".repeat(500)}","event_type":"PAYMENT.CAPTURE.COMPLETED"}`,
       `{"pad":"${"x".repeat(200_000)}"}`,
       "{".repeat(5000),
+      `${"[".repeat(5000)}${"]".repeat(5000)}`,
     ];
     const headerSets: unknown[] = [
-      HEADERS,
+      FORGED,
       {},
       { "paypal-cert-url": 5 },
       { "paypal-cert-url": ["a", "b"] },
@@ -263,11 +358,69 @@ describe("parseWebhookDelivery", () => {
     for (const body of hostile)
       for (const h of headerSets)
         expect(() => parseWebhookDelivery(body, h as Record<string, string>)).not.toThrow();
-    expect(parseWebhookDelivery(`{"pad":"${"x".repeat(200_000)}"}`, HEADERS)).toEqual({
+    expect(parseWebhookDelivery(`{"pad":"${"x".repeat(200_000)}"}`, FORGED)).toEqual({
       ok: false,
       reason: "BODY_TOO_LARGE",
     });
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
+describe("cert URL (#97 L1)", () => {
+  it("accepts exactly the two sandbox API hosts with a certs path, and returns the href", () => {
+    expect(normalizeSandboxCertUrl(CERT)).toBe(CERT);
+    const m = CERT.replace("api.sandbox", "api-m.sandbox");
+    expect(normalizeSandboxCertUrl(m)).toBe(m);
+  });
+
+  const REJECTED: Array<[string, string]> = [
+    ["subdomain", "https://x.api.sandbox.paypal.com/v1/notifications/certs/CERT-1"],
+    ["parent domain", "https://sandbox.paypal.com/v1/notifications/certs/CERT-1"],
+    ["look-alike", "https://api.sandbox.paypal.com.evil.example/v1/notifications/certs/CERT-1"],
+    ["Live", "https://api.paypal.com/v1/notifications/certs/CERT-1"],
+    ["query", `${CERT}?x=1`],
+    ["empty query", `${CERT}?`],
+    ["fragment", `${CERT}#x`],
+    ["fullwidth dot", "https://api.sandbox．paypal.com/v1/notifications/certs/CERT-1"],
+    ["comma-joined duplicate", `${CERT}, https://evil.example/v1/notifications/certs/CERT-1`],
+    ["uppercase host", "https://API.SANDBOX.PAYPAL.COM/v1/notifications/certs/CERT-1"],
+    ["explicit :443", "https://api.sandbox.paypal.com:443/v1/notifications/certs/CERT-1"],
+    ["port", "https://api.sandbox.paypal.com:8443/v1/notifications/certs/CERT-1"],
+    ["userinfo", "https://user:pw@api.sandbox.paypal.com/v1/notifications/certs/CERT-1"],
+    ["user only", "https://user@api.sandbox.paypal.com/v1/notifications/certs/CERT-1"],
+    ["trailing dot", "https://api.sandbox.paypal.com./v1/notifications/certs/CERT-1"],
+    ["http", "http://api.sandbox.paypal.com/v1/notifications/certs/CERT-1"],
+    ["other path", "https://api.sandbox.paypal.com/v1/oauth2/token"],
+    ["dot segments", "https://api.sandbox.paypal.com/v1/notifications/certs/../certs/CERT-1"],
+    ["percent-encoded", "https://api.sandbox.paypal.com/v1/notifications/certs/CERT%2D1"],
+    ["trailing slash", `${CERT}/`],
+    ["backslash", "https:\\\\api.sandbox.paypal.com\\v1\\notifications\\certs\\CERT-1"],
+    ["space", `${CERT} `.replace("CERT-", "CERT -")],
+    ["file", "file:///etc/passwd"],
+    ["evil", "https://evil.example/cert.pem"],
+  ];
+  it.each(REJECTED)("rejects %s without any network call", async (_name, certUrl) => {
+    expect(normalizeSandboxCertUrl(certUrl)).toBeNull();
+    const fake = new FakePayPal();
+    const d = deps(fake);
+    const r = await receiveWebhook(
+      {
+        rawBody: RAW,
+        headers: fake.genuine(RAW, { "PAYPAL-CERT-URL": certUrl }),
+        receivedAt: at(0),
+      },
+      d,
+    );
+    expect(r).toMatchObject({ outcome: "NOT_VERIFIED", respondWith: 400 });
+    expect(fake.requests).toHaveLength(0);
+    expect(d.inbox.size).toBe(0);
+  });
+
+  it("a cert header sent twice through fetch Headers (comma-joined) is refused", () => {
+    const h = new Headers(FORGED);
+    h.append("paypal-cert-url", "https://evil.example/c");
+    const d = parseWebhookDelivery(RAW, h);
+    expect(d.ok && d.transmission).toMatchObject({ ok: false });
   });
 });
 
@@ -278,80 +431,65 @@ describe("verifyWebhookSignature (postback)", () => {
     const raw =
       '{ "event_type" : "PAYMENT.CAPTURE.COMPLETED", "id":"WH-RAW-1",\n "resource_type":"capture",' +
       ' "summary":"caf\\u00e9", "resource":{"id":"3C679366HH908993F","amount":{"value":30.10}} }';
-    const v = await verifyWebhookSignature(
-      { client: client(fake), webhookId: WEBHOOK_ID },
-      delivery(raw),
-    );
-    expect(v.status).toBe("VERIFIED");
+    const v = await verifyWebhookSignature(cfg(fake), delivery(raw, fake.genuine(raw)));
+    expect(v.status).toBe("VERIFIED"); // the fake only says SUCCESS for the exact signed bytes
     const sent = fake.verifyCalls[0]?.body ?? "";
     expect(sent).toContain(`"webhook_event":${raw}}`);
-    const parsed = JSON.parse(sent);
-    expect(parsed).toMatchObject({
+    expect(JSON.parse(sent)).toMatchObject({
       auth_algo: "SHA256withRSA",
-      cert_url: HEADERS["PAYPAL-CERT-URL"],
-      transmission_id: HEADERS["PAYPAL-TRANSMISSION-ID"],
-      transmission_sig: HEADERS["PAYPAL-TRANSMISSION-SIG"],
-      transmission_time: HEADERS["PAYPAL-TRANSMISSION-TIME"],
+      cert_url: CERT,
+      transmission_id: FORGED["PAYPAL-TRANSMISSION-ID"],
+      transmission_time: NOW_ISO,
       webhook_id: WEBHOOK_ID,
     });
     expect(fake.verifyCalls[0]?.headers.authorization).toBe(`Bearer ${TOKEN}`);
   });
 
+  it("a re-serialized body would not verify: the signature covers the exact bytes", async () => {
+    const fake = new FakePayPal();
+    const raw = '{"id":"WH-RAW-2", "event_type":"PAYMENT.CAPTURE.COMPLETED"}';
+    const h = fake.genuine(raw);
+    const reserialized = JSON.stringify(JSON.parse(raw));
+    expect((await verifyWebhookSignature(cfg(fake), delivery(reserialized, h))).status).toBe(
+      "NOT_VERIFIED",
+    );
+  });
+
   it("webhook_id comes from configuration, never from the request", async () => {
     const fake = new FakePayPal();
     const raw = JSON.stringify({ ...captureEvent(), webhook_id: "WH-ATTACKER" });
-    await verifyWebhookSignature(
-      { client: client(fake), webhookId: WEBHOOK_ID },
-      delivery(raw, { ...HEADERS, "paypal-webhook-id": "WH-ATTACKER" }),
+    const v = await verifyWebhookSignature(
+      cfg(fake),
+      delivery(raw, fake.genuine(raw, { "paypal-webhook-id": "WH-ATTACKER" })),
     );
+    expect(v.status).toBe("VERIFIED");
     expect(JSON.parse(fake.verifyCalls[0]?.body ?? "{}").webhook_id).toBe(WEBHOOK_ID);
+    // Another configured id -> PayPal says FAILURE (observed in the Sandbox: HTTP 200 FAILURE).
+    const other = await verifyWebhookSignature(
+      { ...cfg(fake), webhookId: "0OTHER00000000000" },
+      delivery(raw, fake.genuine(raw)),
+    );
+    expect(other).toMatchObject({ status: "NOT_VERIFIED", reason: "SIGNATURE_FAILURE" });
     // No configured id: refused locally, no network.
     const none = new FakePayPal();
-    const v = await verifyWebhookSignature(
-      { client: client(none), webhookId: "" },
-      delivery(JSON.stringify(captureEvent())),
-    );
-    expect(v).toMatchObject({ status: "NOT_VERIFIED", reason: "WEBHOOK_ID_NOT_CONFIGURED" });
+    const v2 = await verifyWebhookSignature({ ...cfg(none), webhookId: "" }, delivery(RAW));
+    expect(v2).toMatchObject({ status: "NOT_VERIFIED", reason: "WEBHOOK_ID_NOT_CONFIGURED" });
     expect(none.requests).toHaveLength(0);
   });
 
-  it("a cert URL outside PayPal's sandbox domain is rejected without any network call", async () => {
-    for (const certUrl of [
-      "https://evil.example/cert.pem",
-      "http://api.sandbox.paypal.com/v1/notifications/certs/CERT-1",
-      "https://api.sandbox.paypal.com.evil.example/cert",
-      "https://user:pw@api.sandbox.paypal.com/cert",
-      "https://api.sandbox.paypal.com:8443/cert",
-      "https://api.paypal.com/v1/notifications/certs/CERT-1", // Live: never
-      "file:///etc/passwd",
-    ]) {
-      const fake = new FakePayPal();
-      const d = delivery(JSON.stringify(captureEvent()), {
-        ...HEADERS,
-        "PAYPAL-CERT-URL": certUrl,
-      });
-      expect(d.transmission).toMatchObject({ ok: false, reason: "BAD_CERT_URL" });
-      const v = await verifyWebhookSignature({ client: client(fake), webhookId: WEBHOOK_ID }, d);
-      expect(v).toMatchObject({ status: "NOT_VERIFIED", reason: "BAD_CERT_URL" });
-      expect(fake.requests).toHaveLength(0);
-    }
-  });
-
-  it("SUCCESS -> VERIFIED; FAILURE -> NOT_VERIFIED", async () => {
+  it("genuine -> VERIFIED; forged signature -> NOT_VERIFIED (FAILURE)", async () => {
     const fake = new FakePayPal();
-    fake.replies = ["SUCCESS", "FAILURE"];
-    const cfg = { client: client(fake), webhookId: WEBHOOK_ID };
-    const d = delivery(JSON.stringify(captureEvent()));
-    expect((await verifyWebhookSignature(cfg, d)).status).toBe("VERIFIED");
-    expect(await verifyWebhookSignature(cfg, d)).toMatchObject({
+    expect((await verifyWebhookSignature(cfg(fake), delivery(RAW, fake.genuine(RAW)))).status).toBe(
+      "VERIFIED",
+    );
+    expect(await verifyWebhookSignature(cfg(fake), delivery(RAW, FORGED))).toMatchObject({
       status: "NOT_VERIFIED",
       reason: "SIGNATURE_FAILURE",
     });
   });
 
   it("5xx, timeout, network errors, unreadable or unknown answers -> UNCERTAIN, never VERIFIED", async () => {
-    const d = delivery(JSON.stringify(captureEvent()));
-    for (const [reply, cause] of [
+    for (const [fault, cause] of [
       ["500", "SERVER_ERROR"],
       ["timeout", "TIMEOUT"],
       ["network", "NETWORK"],
@@ -359,58 +497,87 @@ describe("verifyWebhookSignature (postback)", () => {
       ["weird-status", "MALFORMED_RESPONSE"],
     ] as const) {
       const fake = new FakePayPal();
-      fake.replies = [reply];
-      const v = await verifyWebhookSignature({ client: client(fake), webhookId: WEBHOOK_ID }, d);
+      fake.faults = [fault];
+      const v = await verifyWebhookSignature(cfg(fake), delivery(RAW, fake.genuine(RAW)));
       expect(v).toMatchObject({ status: "UNCERTAIN", cause });
     }
   });
 
-  it("retries a 5xx with the same body, then reports UNCERTAIN", async () => {
-    const fake = new FakePayPal();
-    fake.replies = ["500", "500", "500"];
-    const v = await verifyWebhookSignature(
-      { client: client(fake, { maxAttempts: 3 }), webhookId: WEBHOOK_ID },
-      delivery(JSON.stringify(captureEvent())),
-    );
-    expect(v.status).toBe("UNCERTAIN");
-    expect(fake.verifyCalls).toHaveLength(3);
-    expect(new Set(fake.verifyCalls.map((c) => c.body)).size).toBe(1);
+  it("exactly ONE postback per verification, even for 5xx/429 with maxAttempts 3 (#97 M1)", async () => {
+    for (const fault of ["500", "429", "timeout"] as const) {
+      const fake = new FakePayPal();
+      fake.faults = [fault, fault, fault];
+      const v = await verifyWebhookSignature(cfg(fake, 3), delivery(RAW, fake.genuine(RAW)));
+      expect(v.status).toBe("UNCERTAIN");
+      expect(fake.verifyCalls).toHaveLength(1);
+    }
   });
 
-  it("a 4xx from PayPal (e.g. unknown webhook id) is NOT_VERIFIED, with ids only", async () => {
+  it("401/403/429 on the postback are OUR problem: UNCERTAIN, one call, no token repeat (#97 L2)", async () => {
+    for (const [fault, cause] of [
+      ["401", "HTTP_401"],
+      ["403", "HTTP_403"],
+      ["429", "RATE_LIMITED"],
+    ] as const) {
+      const fake = new FakePayPal();
+      fake.faults = [fault];
+      const v = await verifyWebhookSignature(cfg(fake), delivery(RAW, fake.genuine(RAW)));
+      expect(v).toMatchObject({ status: "UNCERTAIN", cause });
+      expect(fake.verifyCalls).toHaveLength(1);
+    }
+  });
+
+  it("other 4xx from PayPal are NOT_VERIFIED, with ids only", async () => {
     const fake = new FakePayPal();
-    fake.replies = ["400"];
-    const v = await verifyWebhookSignature(
-      { client: client(fake), webhookId: WEBHOOK_ID },
-      delivery(JSON.stringify(captureEvent())),
-    );
-    expect(v).toEqual({
+    fake.faults = ["400"];
+    expect(await verifyWebhookSignature(cfg(fake), delivery(RAW, fake.genuine(RAW)))).toEqual({
       status: "NOT_VERIFIED",
       reason: "REJECTED_BY_PAYPAL",
       detail: "400:VALIDATION_ERROR:INVALID_RESOURCE_ID",
       debugId: "dbg123",
     });
   });
+
+  it("transmission time outside the window is refused without network (#97 M1)", async () => {
+    const minutes = (m: number) => new Date(NOW + m * 60_000).toISOString();
+    for (const [t, ok] of [
+      [minutes(-11), false],
+      [minutes(11), false],
+      [minutes(-9), true],
+      [minutes(9), true],
+    ] as const) {
+      const fake = new FakePayPal();
+      const v = await verifyWebhookSignature(
+        cfg(fake),
+        delivery(RAW, fake.genuine(RAW, { "PAYPAL-TRANSMISSION-TIME": t })),
+      );
+      if (ok) expect(v.status).toBe("VERIFIED");
+      else {
+        expect(v).toMatchObject({ status: "NOT_VERIFIED", reason: "STALE_TRANSMISSION" });
+        expect(fake.requests).toHaveLength(0);
+      }
+    }
+    // The window is configurable.
+    const fake = new FakePayPal();
+    const wide = await verifyWebhookSignature(
+      { ...cfg(fake), maxClockSkewMs: 60 * 60_000 },
+      delivery(RAW, fake.genuine(RAW, { "PAYPAL-TRANSMISSION-TIME": minutes(-30) })),
+    );
+    expect(wide.status).toBe("VERIFIED");
+  });
 });
 
 describe("receiveWebhook + inbox", () => {
-  const deps = (fake: FakePayPal, inbox = new InMemoryWebhookInbox()) => ({
-    inbox,
-    client: client(fake),
-    webhookId: WEBHOOK_ID,
-  });
-  const at = (s: number) => `2026-11-07T10:00:${String(s).padStart(2, "0")}Z`;
-
   it("a verified delivery yields one read-back hint with ids only (no amount, no status)", async () => {
     const fake = new FakePayPal();
     const d = deps(fake);
     const r = await receiveWebhook(
-      { rawBody: JSON.stringify(captureEvent()), headers: HEADERS, receivedAt: at(0) },
+      { rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(0) },
       d,
     );
     expect(r).toEqual({
       outcome: "VERIFIED",
-      eventId: "WH-58D329510W468432D-8HN650336L201105X",
+      eventId: EVENT_ID,
       respondWith: 200,
       hint: {
         action: "READ_BACK",
@@ -426,10 +593,11 @@ describe("receiveWebhook + inbox", () => {
   it("duplicate deliveries of one event id: one record, one hint, no second verification", async () => {
     const fake = new FakePayPal();
     const d = deps(fake);
-    const raw = JSON.stringify(captureEvent());
     const outcomes = [];
     for (let i = 0; i < 4; i++)
-      outcomes.push(await receiveWebhook({ rawBody: raw, headers: HEADERS, receivedAt: at(i) }, d));
+      outcomes.push(
+        await receiveWebhook({ rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(i) }, d),
+      );
     expect(outcomes.map((o) => o.outcome)).toEqual([
       "VERIFIED",
       "DUPLICATE",
@@ -439,38 +607,193 @@ describe("receiveWebhook + inbox", () => {
     expect(outcomes.filter((o) => "hint" in o && o.hint)).toHaveLength(1);
     expect(fake.verifyCalls).toHaveLength(1);
     expect(d.inbox.size).toBe(1);
-    const rec = await d.inbox.get("WH-58D329510W468432D-8HN650336L201105X");
-    expect(rec).toMatchObject({ deliveries: 4, receivedAt: at(0), lastDeliveryAt: at(3) });
+    expect(await d.inbox.get(EVENT_ID)).toMatchObject({
+      deliveries: 4,
+      postbacks: 1,
+      receivedAt: at(0),
+      lastDeliveryAt: at(3),
+    });
   });
 
   it("concurrent duplicate deliveries still produce exactly one hint", async () => {
     const fake = new FakePayPal();
     const d = deps(fake);
-    const raw = JSON.stringify(captureEvent());
     const all = await Promise.all(
       [0, 1, 2].map((i) =>
-        receiveWebhook({ rawBody: raw, headers: HEADERS, receivedAt: at(i) }, d),
+        receiveWebhook({ rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(i) }, d),
       ),
     );
     expect(all.filter((o) => o.outcome === "VERIFIED")).toHaveLength(1);
     expect(d.inbox.size).toBe(1);
   });
 
+  it("a forged body concurrent with the genuine one: genuine wins, one hint, either order (#97)", async () => {
+    for (const forgedFirst of [true, false]) {
+      const fake = new FakePayPal();
+      const d = deps(fake);
+      const forgedBody = JSON.stringify(captureEvent({ value: "0.01" })); // same event id
+      const forged = () =>
+        receiveWebhook({ rawBody: forgedBody, headers: FORGED, receivedAt: at(0) }, d);
+      const genuine = () =>
+        receiveWebhook({ rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(1) }, d);
+      const all = await Promise.all(forgedFirst ? [forged(), genuine()] : [genuine(), forged()]);
+      expect(all.filter((o) => o.outcome === "VERIFIED")).toHaveLength(1);
+      expect(await d.inbox.get(EVENT_ID)).toMatchObject({ verification: "VERIFIED" });
+      expect(await d.inbox.unprocessed(10)).toHaveLength(1);
+      expect(d.inbox.size).toBe(1);
+    }
+  });
+
+  it("NOT_VERIFIED is recorded only after a postback and does nothing; a later genuine delivery verifies", async () => {
+    const fake = new FakePayPal();
+    const d = deps(fake);
+    const forged = JSON.stringify(captureEvent({ value: "0.01" }));
+    const r1 = await receiveWebhook({ rawBody: forged, headers: FORGED, receivedAt: at(0) }, d);
+    expect(r1).toEqual({
+      outcome: "NOT_VERIFIED",
+      eventId: EVENT_ID,
+      reason: "SIGNATURE_FAILURE",
+      respondWith: 400,
+    });
+    expect(await d.inbox.get(EVENT_ID)).toMatchObject({
+      verification: "NOT_VERIFIED",
+      postbacks: 1,
+      hint: null,
+    });
+    expect(await d.inbox.unprocessed(10)).toHaveLength(0);
+    const r2 = await receiveWebhook(
+      { rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(1) },
+      d,
+    );
+    expect(r2.outcome).toBe("VERIFIED");
+    expect(d.inbox.size).toBe(1);
+  });
+
+  it("an unsupported-type squat under a real event id stores nothing; the genuine delivery verifies (#97 M2)", async () => {
+    const fake = new FakePayPal();
+    const d = deps(fake);
+    const squat = JSON.stringify({ ...captureEvent(), event_type: "CUSTOMER.DISPUTE.CREATED" });
+    const r1 = await receiveWebhook({ rawBody: squat, headers: FORGED, receivedAt: at(0) }, d);
+    expect(r1).toEqual({ outcome: "IGNORED", eventId: EVENT_ID, respondWith: 200 });
+    expect(fake.requests).toHaveLength(0);
+    expect(d.inbox.size).toBe(0);
+    const r2 = await receiveWebhook(
+      { rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(1) },
+      d,
+    );
+    expect(r2.outcome).toBe("VERIFIED");
+  });
+
+  it("forged traffic does not grow storage: 100 header-less / unsupported / stale deliveries -> 0 rows, 0 calls (#97 M2)", async () => {
+    const fake = new FakePayPal();
+    const d = deps(fake);
+    const stale = { ...FORGED, "PAYPAL-TRANSMISSION-TIME": "2026-11-01T10:00:00Z" };
+    for (let i = 0; i < 100; i++) {
+      const body = JSON.stringify(captureEvent({ id: `WH-FORGED-${i}` }));
+      expect(
+        (await receiveWebhook({ rawBody: body, headers: {}, receivedAt: at(0) }, d)).respondWith,
+      ).toBe(400);
+      await receiveWebhook({ rawBody: body, headers: stale, receivedAt: at(0) }, d);
+      await receiveWebhook(
+        {
+          rawBody: JSON.stringify({ ...captureEvent({ id: `WH-U-${i}` }), event_type: "X.Y" }),
+          headers: FORGED,
+          receivedAt: at(0),
+        },
+        d,
+      );
+    }
+    expect(d.inbox.size).toBe(0);
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it("postbacks per event id are capped (default 5), then refused without network (#97 M1)", async () => {
+    const fake = new FakePayPal();
+    const d = deps(fake);
+    const outcomes = [];
+    for (let i = 0; i < 8; i++)
+      outcomes.push(await receiveWebhook({ rawBody: RAW, headers: FORGED, receivedAt: at(i) }, d));
+    expect(fake.verifyCalls).toHaveLength(5);
+    expect(outcomes.slice(5).map((o) => "reason" in o && o.reason)).toEqual([
+      "POSTBACK_LIMIT",
+      "POSTBACK_LIMIT",
+      "POSTBACK_LIMIT",
+    ]);
+    expect(await d.inbox.get(EVENT_ID)).toMatchObject({ postbacks: 5 });
+    // The cap holds under concurrency too.
+    const fake2 = new FakePayPal();
+    const d2 = deps(fake2, { maxPostbacksPerEvent: 2 });
+    await Promise.all(
+      [0, 1, 2, 3, 4, 5].map((i) =>
+        receiveWebhook({ rawBody: RAW, headers: FORGED, receivedAt: at(i) }, d2),
+      ),
+    );
+    expect(fake2.verifyCalls).toHaveLength(2);
+  });
+
+  it("allowPostback() = false -> DEFERRED 503, no network call, no row (#97 M1)", async () => {
+    const fake = new FakePayPal();
+    let asked = 0;
+    const d = deps(fake, {
+      allowPostback: async () => {
+        asked++;
+        return false;
+      },
+    });
+    const r = await receiveWebhook(
+      { rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(0) },
+      d,
+    );
+    expect(r).toEqual({
+      outcome: "DEFERRED",
+      eventId: EVENT_ID,
+      reason: "THROTTLED",
+      respondWith: 503,
+    });
+    expect(asked).toBe(1);
+    expect(fake.requests).toHaveLength(0);
+    expect(d.inbox.size).toBe(0);
+  });
+
+  it("the limiter is not consulted for deliveries refused locally", async () => {
+    const fake = new FakePayPal();
+    let asked = 0;
+    const d = deps(fake, {
+      allowPostback: () => {
+        asked++;
+        return true;
+      },
+    });
+    await receiveWebhook({ rawBody: RAW, headers: {}, receivedAt: at(0) }, d);
+    await receiveWebhook({ rawBody: "nope", headers: FORGED, receivedAt: at(0) }, d);
+    expect(asked).toBe(0);
+  });
+
+  it("no configured webhook id -> DEFERRED 503 (PayPal redelivers after the fix), no row", async () => {
+    const fake = new FakePayPal();
+    const d = deps(fake, { webhookId: "" });
+    const r = await receiveWebhook(
+      { rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(0) },
+      d,
+    );
+    expect(r).toMatchObject({ outcome: "DEFERRED", reason: "NOT_CONFIGURED", respondWith: 503 });
+    expect(fake.requests).toHaveLength(0);
+    expect(d.inbox.size).toBe(0);
+  });
+
   it("out of order (PENDING after COMPLETED) produces only read-back hints, never a fact", async () => {
     const fake = new FakePayPal();
     const d = deps(fake);
-    const completed = captureEvent({ id: "WH-C", type: "PAYMENT.CAPTURE.COMPLETED" });
-    const pending = captureEvent({
-      id: "WH-P",
-      type: "PAYMENT.CAPTURE.PENDING",
-      status: "PENDING",
-    });
+    const completed = JSON.stringify(captureEvent({ id: "WH-C" }));
+    const pending = JSON.stringify(
+      captureEvent({ id: "WH-P", type: "PAYMENT.CAPTURE.PENDING", status: "PENDING" }),
+    );
     const a = await receiveWebhook(
-      { rawBody: JSON.stringify(completed), headers: HEADERS, receivedAt: at(1) },
+      { rawBody: completed, headers: fake.genuine(completed), receivedAt: at(1) },
       d,
     );
     const b = await receiveWebhook(
-      { rawBody: JSON.stringify(pending), headers: HEADERS, receivedAt: at(2) },
+      { rawBody: pending, headers: fake.genuine(pending), receivedAt: at(2) },
       d,
     );
     for (const r of [a, b]) {
@@ -486,91 +809,59 @@ describe("receiveWebhook + inbox", () => {
       expect(r.hint.action).toBe("READ_BACK");
       expect(r).not.toHaveProperty("event");
     }
-    // Both hints point at the same thing to read back; neither carries a status to apply.
     const strip = (r: typeof a) => (r.outcome === "VERIFIED" ? { ...r.hint, eventType: "" } : null);
     expect(strip(a)).toEqual(strip(b));
   });
 
-  it("an unsupported event type is recorded as IGNORED, with no verification and no hint", async () => {
-    const fake = new FakePayPal();
-    const d = deps(fake);
-    const raw = JSON.stringify({
-      ...captureEvent({ id: "WH-X" }),
-      event_type: "CUSTOMER.DISPUTE.CREATED",
-    });
-    const r = await receiveWebhook({ rawBody: raw, headers: HEADERS, receivedAt: at(0) }, d);
-    expect(r).toEqual({ outcome: "IGNORED", eventId: "WH-X", respondWith: 200 });
-    expect(fake.requests).toHaveLength(0);
-    expect(await d.inbox.get("WH-X")).toMatchObject({ verification: "SKIPPED", hint: null });
-    const again = await receiveWebhook({ rawBody: raw, headers: HEADERS, receivedAt: at(1) }, d);
-    expect(again.outcome).toBe("DUPLICATE");
-  });
-
-  it("NOT_VERIFIED is recorded and does nothing; a later genuine delivery of the same id still verifies", async () => {
-    const fake = new FakePayPal();
-    fake.replies = ["FAILURE", "SUCCESS"];
-    const d = deps(fake);
-    const forged = JSON.stringify(captureEvent({ value: "0.01" }));
-    const genuine = JSON.stringify(captureEvent());
-    const r1 = await receiveWebhook({ rawBody: forged, headers: HEADERS, receivedAt: at(0) }, d);
-    expect(r1).toEqual({
-      outcome: "NOT_VERIFIED",
-      eventId: "WH-58D329510W468432D-8HN650336L201105X",
-      reason: "SIGNATURE_FAILURE",
-      respondWith: 400,
-    });
-    expect(await d.inbox.unprocessed(10)).toHaveLength(0);
-    const r2 = await receiveWebhook({ rawBody: genuine, headers: HEADERS, receivedAt: at(1) }, d);
-    expect(r2.outcome).toBe("VERIFIED");
-    expect(d.inbox.size).toBe(1);
-  });
-
   it("UNCERTAIN asks PayPal to redeliver (503) and leaves no hint", async () => {
     const fake = new FakePayPal();
-    fake.replies = ["timeout"];
+    fake.faults = ["timeout"];
     const d = deps(fake);
     const r = await receiveWebhook(
-      { rawBody: JSON.stringify(captureEvent()), headers: HEADERS, receivedAt: at(0) },
+      { rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(0) },
       d,
     );
     expect(r).toMatchObject({ outcome: "UNCERTAIN", respondWith: 503 });
-    expect(await d.inbox.get("WH-58D329510W468432D-8HN650336L201105X")).toMatchObject({
-      verification: "UNCERTAIN",
-      hint: null,
-    });
+    expect(await d.inbox.get(EVENT_ID)).toMatchObject({ verification: "UNCERTAIN", hint: null });
   });
 
-  it("malformed bodies are rejected with 400 and create no record", async () => {
-    const d = deps(new FakePayPal());
-    const r = await receiveWebhook({ rawBody: "nope", headers: HEADERS, receivedAt: at(0) }, d);
-    expect(r).toEqual({ outcome: "MALFORMED", reason: "NOT_JSON", respondWith: 400 });
+  it("malformed bodies (incl. BOM, duplicate keys) are rejected with 400 and create no record", async () => {
+    const fake = new FakePayPal();
+    const d = deps(fake);
+    for (const [body, reason] of [
+      ["nope", "NOT_JSON"],
+      [`﻿${RAW}`, "NOT_JSON"],
+      [RAW.replace('"id":"WH', '"id":"WH-X","id":"WH'), "DUPLICATE_KEYS"],
+    ] as const) {
+      const r = await receiveWebhook({ rawBody: body, headers: FORGED, receivedAt: at(0) }, d);
+      expect(r).toEqual({ outcome: "MALFORMED", reason, respondWith: 400 });
+    }
     expect(d.inbox.size).toBe(0);
+    expect(fake.requests).toHaveLength(0);
   });
 
   it("results and inbox records never contain secrets, tokens or the raw body", async () => {
     const fake = new FakePayPal();
-    fake.replies = ["SUCCESS", "400"];
     const d = deps(fake);
+    const genuineHeaders = fake.genuine(RAW);
     const r1 = await receiveWebhook(
-      { rawBody: JSON.stringify(captureEvent()), headers: HEADERS, receivedAt: at(0) },
+      { rawBody: RAW, headers: genuineHeaders, receivedAt: at(0) },
       d,
     );
+    const other = JSON.stringify(captureEvent({ id: "WH-2" }));
+    fake.faults = ["400"];
     const r2 = await receiveWebhook(
-      {
-        rawBody: JSON.stringify(captureEvent({ id: "WH-2" })),
-        headers: HEADERS,
-        receivedAt: at(1),
-      },
+      { rawBody: other, headers: fake.genuine(other), receivedAt: at(1) },
       d,
     );
     const dump = JSON.stringify([
       r1,
       r2,
-      await d.inbox.get("WH-58D329510W468432D-8HN650336L201105X"),
+      await d.inbox.get(EVENT_ID),
       await d.inbox.get("WH-2"),
       d.client,
     ]);
-    for (const s of [SECRET, CLIENT_ID, TOKEN, HEADERS["PAYPAL-TRANSMISSION-SIG"], "30.00"])
+    for (const s of [SECRET, CLIENT_ID, TOKEN, genuineHeaders["PAYPAL-TRANSMISSION-SIG"], "30.00"])
       expect(dump).not.toContain(s);
   });
 });
@@ -578,7 +869,7 @@ describe("receiveWebhook + inbox", () => {
 describe("a verified webhook never settles: the read-back decides", () => {
   it("amounts in the webhook are never used; the fact comes from a GET via verify()", async () => {
     const fake = new FakePayPal();
-    const c = client(fake);
+    const d = deps(fake);
     const store = new InMemoryOperationStore();
     await store.begin({
       operationId: OP,
@@ -592,23 +883,18 @@ describe("a verified webhook never settles: the read-back decides", () => {
       captureState: "NOT_STARTED",
       lastResult: null,
     });
-    const checkout = new SandboxCheckout(c, store);
-    const inbox = new InMemoryWebhookInbox();
-    // The (verified) webhook claims a huge amount; PayPal's order says 30.00.
+    const checkout = new SandboxCheckout(d.client, store);
+    // A GENUINE (verified) webhook that claims a huge amount; PayPal's order says 30.00.
+    const body = JSON.stringify(captureEvent({ value: "99999.00" }));
     const r = await receiveWebhook(
-      {
-        rawBody: JSON.stringify(captureEvent({ value: "99999.00" })),
-        headers: HEADERS,
-        receivedAt: "2026-11-07T10:00:00Z",
-      },
-      { inbox, client: c, webhookId: WEBHOOK_ID },
+      { rawBody: body, headers: fake.genuine(body), receivedAt: NOW_ISO },
+      d,
     );
     if (r.outcome !== "VERIFIED" || !r.hint) throw new Error("expected a verified hint");
     expect(JSON.stringify(r.hint)).not.toContain("99999");
 
     // No order at PayPal yet -> nothing verified, whatever the webhook said.
-    const before = await reconcileFromHint(r.hint, checkout, "2026-11-07T10:00:01Z");
-    expect(before.ok).toBe(false);
+    expect((await reconcileFromHint(r.hint, checkout, "2026-11-07T10:00:01Z")).ok).toBe(false);
 
     fake.order = {
       id: "5O190127TN364715T",
@@ -637,8 +923,8 @@ describe("a verified webhook never settles: the read-back decides", () => {
       expect(out.event.verification.method).toBe("ORDER_LOOKUP");
       expect(out.event.providerEventId).toBe("3C679366HH908993F");
     }
-    await markWebhookProcessed(inbox, r.eventId);
-    expect(await inbox.unprocessed(10)).toHaveLength(0);
+    await markWebhookProcessed(d.inbox, r.eventId);
+    expect(await d.inbox.unprocessed(10)).toHaveLength(0);
   });
 
   it("a hint without an operation id is UNMAPPED (no read-back guessed)", async () => {
@@ -648,7 +934,7 @@ describe("a verified webhook never settles: the read-back decides", () => {
     expect(hint?.operationId).toBeNull();
     const checkout = new SandboxCheckout(client(new FakePayPal()), new InMemoryOperationStore());
     if (!hint) throw new Error("expected a hint");
-    expect(await reconcileFromHint(hint, checkout, "2026-11-07T10:00:00Z")).toEqual({
+    expect(await reconcileFromHint(hint, checkout, NOW_ISO)).toEqual({
       ok: false,
       reason: "UNMAPPED",
     });

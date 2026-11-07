@@ -1,7 +1,7 @@
 import type { Money } from "@fle/contracts";
 import {
   formatPayPalAmount,
-  isPayPalSandboxCertUrl,
+  normalizeSandboxCertUrl,
   type ObservedCapture,
   PAYPAL_CAPTURE_STATUSES,
   PAYPAL_ORDER_STATUSES,
@@ -296,6 +296,7 @@ export class PayPalSandboxClient {
   async #send(
     path: string,
     init: { method: "GET" | "POST"; headers: Record<string, string>; body?: string },
+    maxAttempts: number = this.#cfg.maxAttempts,
   ): Promise<Raw> {
     let last: Raw = {
       kind: "UNCERTAIN",
@@ -307,7 +308,7 @@ export class PayPalSandboxClient {
     // Once an attempt may have reached PayPal, a later definite-looking answer is not definite for
     // the call as a whole (#95 review H1).
     let maybeReached = false;
-    for (let attempt = 1; attempt <= this.#cfg.maxAttempts; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       if (attempt > 1) maybeReached = true;
       let res: Response;
       try {
@@ -328,7 +329,7 @@ export class PayPalSandboxClient {
           httpStatus: null,
           debugId: null,
         };
-        await this.#backoff(attempt, null);
+        await this.#backoff(attempt, null, maxAttempts);
         continue;
       }
       const debugId = res.headers.get("paypal-debug-id");
@@ -349,7 +350,7 @@ export class PayPalSandboxClient {
           httpStatus: res.status,
           debugId,
         };
-        await this.#backoff(attempt, res.headers.get("retry-after"));
+        await this.#backoff(attempt, res.headers.get("retry-after"), maxAttempts);
         continue;
       }
       let json: unknown = null;
@@ -374,42 +375,58 @@ export class PayPalSandboxClient {
     return last;
   }
 
-  async #backoff(attempt: number, retryAfter: string | null): Promise<void> {
-    if (attempt >= this.#cfg.maxAttempts) return;
+  async #backoff(attempt: number, retryAfter: string | null, maxAttempts: number): Promise<void> {
+    if (attempt >= maxAttempts) return;
     const hinted =
       retryAfter !== null && /^\d{1,3}$/.test(retryAfter) ? Number(retryAfter) * 1000 : 0;
     await this.#cfg.sleep(Math.min(Math.max(hinted, 250 * 2 ** (attempt - 1)), 5_000));
   }
 
-  /** Authenticated API call; on 401 the token is dropped and the call repeated once (same request id). */
+  /**
+   * Authenticated API call; on 401 the token is dropped and the call repeated once (same request id).
+   * `singleShot`: exactly one HTTP attempt and no 401 repeat (webhook postback, #97 review M1: a
+   * forged delivery must cost at most one PayPal call; PayPal redelivers after our 503 instead).
+   */
   async #api(
     method: "GET" | "POST",
     path: string,
     headers: Record<string, string> = {},
     body?: unknown,
+    singleShot = false,
   ): Promise<Raw> {
-    for (let pass = 0; pass < 2; pass++) {
+    for (let pass = 0; pass < (singleShot ? 1 : 2); pass++) {
       const token = await this.#accessToken();
       if (!token)
         return { kind: "NOT_SENT", cause: "no sandbox access token (credentials or network)" };
-      const raw = await this.#send(path, {
-        method,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-          ...headers,
+      const raw = await this.#send(
+        path,
+        {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+            ...headers,
+          },
+          body:
+            body === undefined
+              ? undefined
+              : body instanceof RawJson
+                ? body.text
+                : JSON.stringify(body),
         },
-        body:
-          body === undefined
-            ? undefined
-            : body instanceof RawJson
-              ? body.text
-              : JSON.stringify(body),
-      });
-      if (!("kind" in raw) && raw.status === 401 && pass === 0 && !raw.afterUncertain) {
-        // A 401 is a definite "not processed": drop THIS token (not one a concurrent caller just
-        // refreshed) and repeat once with the same request id.
-        if (this.#token?.value === token) this.#token = null;
+        singleShot ? 1 : this.#cfg.maxAttempts,
+      );
+      if (!("kind" in raw) && raw.status === 401 && this.#token?.value === token)
+        this.#token = null; // never reuse a token PayPal refused
+      if (
+        !("kind" in raw) &&
+        raw.status === 401 &&
+        pass === 0 &&
+        !raw.afterUncertain &&
+        !singleShot
+      ) {
+        // A 401 is a definite "not processed": THIS token was dropped above (not one a concurrent
+        // caller just refreshed); repeat once with the same request id.
         continue;
       }
       return raw;
@@ -535,8 +552,8 @@ export class PayPalSandboxClient {
   // ---------------------------------------------------------------------------- Webhooks (#22)
 
   /**
-   * Asks PayPal whether a webhook delivery is authentic (postback verification). Read-only at
-   * PayPal, so retrying it is safe. Outcomes: OK with "SUCCESS" or "FAILURE" (PayPal's answer);
+   * Asks PayPal whether a webhook delivery is authentic (postback verification). Exactly ONE HTTP
+   * call (after the cached token), never retried here: PayPal redelivers instead. Outcomes: OK with "SUCCESS" or "FAILURE" (PayPal's answer);
    * REJECTED (PayPal refused the verification request, e.g. an unknown webhook id); UNCERTAIN
    * (network, timeout, 5xx, unreadable: ask again later); NOT_SENT (invalid input or no token).
    * It says nothing about money: a verified delivery only tells the server to read PayPal back.
@@ -544,8 +561,8 @@ export class PayPalSandboxClient {
   async verifyWebhookSignature(
     input: WebhookSignatureInput,
   ): Promise<PayPalResult<WebhookSignatureStatus>> {
-    if (!isPayPalSandboxCertUrl(input.certUrl))
-      return { kind: "NOT_SENT", cause: "cert URL is not on PayPal's sandbox domain" };
+    const certUrl = normalizeSandboxCertUrl(input.certUrl);
+    if (!certUrl) return { kind: "NOT_SENT", cause: "cert URL is not a PayPal sandbox cert URL" };
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(input.webhookId))
       return { kind: "NOT_SENT", cause: "invalid webhook id" };
     for (const [v, max] of [
@@ -570,14 +587,21 @@ export class PayPalSandboxClient {
       return { kind: "NOT_SENT", cause: "webhook body is not a JSON object" };
     const head = JSON.stringify({
       auth_algo: input.authAlgo,
-      cert_url: input.certUrl,
+      cert_url: certUrl,
       transmission_id: input.transmissionId,
       transmission_sig: input.transmissionSig,
       transmission_time: input.transmissionTime,
       webhook_id: input.webhookId,
     });
     const body = new RawJson(`${head.slice(0, -1)},"webhook_event":${input.rawEvent}}`);
-    const raw = await this.#api("POST", "/v1/notifications/verify-webhook-signature", {}, body);
+    // Single shot: one HTTP call per verification, no retry, no 401 repeat (#97 review M1).
+    const raw = await this.#api(
+      "POST",
+      "/v1/notifications/verify-webhook-signature",
+      {},
+      body,
+      true,
+    );
     if ("kind" in raw) return raw;
     if (raw.status !== 200) return this.#failure(raw);
     const status = (raw.json as { verification_status?: unknown } | null)?.verification_status;

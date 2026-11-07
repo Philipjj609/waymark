@@ -35,28 +35,46 @@ export type PayPalCaptureStatus = (typeof PAYPAL_CAPTURE_STATUSES)[number];
 
 export const PAYPAL_SANDBOX_BASE_URL = "https://api-m.sandbox.paypal.com" as const;
 
+/** The only hosts a webhook cert URL may name (Sandbox; Live is never processed). */
+export const PAYPAL_SANDBOX_CERT_HOSTS: ReadonlySet<string> = new Set([
+  "api.sandbox.paypal.com",
+  "api-m.sandbox.paypal.com",
+]);
+const CERT_PATH = /^\/v1\/notifications\/certs\/[A-Za-z0-9-]{1,128}$/;
+
 /**
- * A webhook's `PAYPAL-CERT-URL` is attacker-controlled input. It is accepted only as https on
- * PayPal's SANDBOX domain (e.g. api.sandbox.paypal.com, api-m.sandbox.paypal.com), with no
- * credentials and no explicit port; anything else is refused before any network call (#22). A Live
- * cert URL (api.paypal.com) is refused too: this product never processes Live events.
+ * A webhook's `PAYPAL-CERT-URL` is attacker-controlled input (#22, #97 review L1). Accepted only
+ * when ALL hold: printable ASCII (\x21-\x7e) without commas; https; host exactly
+ * api.sandbox.paypal.com or api-m.sandbox.paypal.com; path /v1/notifications/certs/<id>; no
+ * userinfo, port, query or fragment; and the input is already in canonical form (`URL.href`
+ * equals it), which also rejects ":443", uppercase hosts, dot segments and trailing dots.
+ * Returns the normalized href (sent to PayPal) or null. Checked before any network call.
  */
-export function isPayPalSandboxCertUrl(value: unknown): boolean {
-  if (typeof value !== "string" || value.length === 0 || value.length > 512) return false;
+export function normalizeSandboxCertUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512) return null;
+  if (!/^[\x21-\x7e]+$/.test(value) || value.includes(",")) return null;
+  if (value.includes("?") || value.includes("#")) return null;
   let u: URL;
   try {
     u = new URL(value);
   } catch {
-    return false;
+    return null;
   }
-  return (
+  const ok =
     u.protocol === "https:" &&
     u.username === "" &&
     u.password === "" &&
     u.port === "" &&
-    u.hostname.endsWith(".sandbox.paypal.com")
-  );
+    u.search === "" &&
+    u.hash === "" &&
+    PAYPAL_SANDBOX_CERT_HOSTS.has(u.hostname) &&
+    CERT_PATH.test(u.pathname) &&
+    u.href === value;
+  return ok ? u.href : null;
 }
+
+export const isPayPalSandboxCertUrl = (value: unknown): boolean =>
+  normalizeSandboxCertUrl(value) !== null;
 
 export class AmountFormatError extends Error {
   override readonly name = "AmountFormatError";

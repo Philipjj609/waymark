@@ -106,26 +106,50 @@ calls used: 4/6
 3. A cert URL outside `*.sandbox.paypal.com` is refused locally, before any network call (W0).
 
 **Design consequences:**
-1. Only `verification_status: "SUCCESS"` verifies. `FAILURE` maps to `NOT_VERIFIED`; any other value, a 5xx, a timeout or an unreadable body maps to `UNCERTAIN`, and a 4xx maps to `NOT_VERIFIED` (`REJECTED_BY_PAYPAL`).
+1. Only `verification_status: "SUCCESS"` verifies.
+   - `FAILURE` maps to `NOT_VERIFIED`.
+   - Any other value, a 5xx, a timeout, an unreadable body, and 401/403/429 map to `UNCERTAIN`. The last three are our credentials, permissions or rate limit, not proof of a forgery (#97 review L2).
+   - Other 4xx answers map to `NOT_VERIFIED` (`REJECTED_BY_PAYPAL`).
 2. **A wrong `PAYPAL_WEBHOOK_ID` looks exactly like a forged delivery** (observation 1). Misconfiguration therefore fails closed: every delivery is `NOT_VERIFIED`, nothing happens, and the poll-based reconciler still settles verified captures. It is silent, though. The route must alert on a run of `NOT_VERIFIED` results.
 3. The webhook id comes only from configuration. The raw body is sent byte-for-byte as `webhook_event`, never re-serialized (unit tests in `packages/payments/test/webhooks.test.ts`).
 
 **Not observed yet:**
 - A `SUCCESS` from a genuine PayPal delivery. That needs a registered webhook on a verified HTTPS deploy (owner decision).
-- Real delivery bodies for `PAYMENT.CAPTURE.REFUNDED` and `REVERSED`. The parser follows PayPal's documented shape, where the refund resource's `up` link names the capture.
+- Real delivery bodies for `PAYMENT.CAPTURE.REFUNDED` and `REVERSED`. The parser follows PayPal's documented shape, where the refund resource's `up` link names the capture. A refund resource often has no `custom_id`, so its hint is usually `UNMAPPED`. **Refunds are handled by D1b reconciliation (reading the capture back), not by webhook hints** (#97 review L5).
 - Events from PayPal's webhook simulator. ADR-0008 says postback does not support them, so they end `NOT_VERIFIED`.
 
 ### Webhook design (`packages/payments/src/webhooks.ts`)
 
 - **A webhook never settles anything.** A webhook whose signature PayPal confirmed yields only a `ReconcileHint` (`READ_BACK` with operation, order and capture ids; no amount, no status). `reconcileFromHint()` then runs `SandboxCheckout.verify()`, which does a GET and `verifyCapture()`. Any `VerifiedProviderEvent` comes from that read, with method `ORDER_LOOKUP`.
 - **The inbox is unique on the webhook event id.** `VERIFIED` is final, and later deliveries are `DUPLICATE` with no network call. `NOT_VERIFIED` and `UNCERTAIN` are not final, so a forged body sent first under a real event id cannot swallow the genuine delivery. Out-of-order deliveries are harmless because the payload is never applied.
-- **Unsupported event types are recorded as `IGNORED`.** They are not verified and not acted on.
-- **`receiveWebhook()` tells the route how to respond:** 200 (verified, duplicate, ignored), 400 (malformed or not verified) or 503 (uncertain), so PayPal redelivers and the raw body is never stored.
+- **Unsupported event types are answered `IGNORED` (200).** They are not stored, not verified and not acted on.
+- **`receiveWebhook()` tells the route how to respond:** 200 (verified, duplicate, ignored), 400 (malformed, not verified, or the per-event postback cap reached) or 503 (uncertain, throttled, or no webhook id configured). PayPal redelivers after a non-2xx, so the raw body is never stored.
+
+**Cost and storage limits (#97 review M1, M2).** Each postback is a PayPal API call that shares our rate limit with real Orders calls. A forged delivery is therefore refused as cheaply as possible:
+1. **Local checks run first, with no network call and no inbox write.** The body must be valid JSON without duplicate keys and without a BOM. All five transmission headers must be present, once each. `PAYPAL-AUTH-ALGO` must be exactly `SHA256withRSA`. `PAYPAL-TRANSMISSION-TIME` must parse and lie within ±10 minutes (configurable) of an injected `now()`.
+2. **The cert URL must be canonical.** It must be `https://api.sandbox.paypal.com` or `https://api-m.sandbox.paypal.com`, with path `/v1/notifications/certs/<id>`, no userinfo, port, query or fragment, printable ASCII only and no commas, and equal to its own `URL.href`. The normalized href is what PayPal receives.
+3. **Duplicates of a `VERIFIED` event cost nothing.**
+4. **At most 5 postbacks per event id** (configurable), enforced atomically in the inbox.
+5. **The route must provide `allowPostback()`.** It is the global, per-source-IP and concurrency limit, asked right before each postback. `false` means no call, no row, and a 503.
+6. **One HTTP call per postback.** There is no client retry and no repeat after a 401. PayPal redelivers after our 503.
+7. **An inbox row exists only for an event id we spent a postback on.** Header-less, stale, unsupported or throttled traffic writes nothing (tested: 100 header-less, 100 stale and 100 unsupported deliveries leave 0 rows and make 0 calls).
+
+The probe output above was recorded with commit `1f2c95a`. It was not re-run after the #97 fixes, because that round allowed no live calls. The probe's cert URL already meets the stricter rule.
 
 ### Still needed before webhooks are live (not in this change)
 
-1. **A route in `apps/web`.** It must read the body as raw text before any JSON parsing, cap the body size, rate-limit, call `receiveWebhook`, and answer with `respondWith`. Hints are enqueued, not acted on inline.
-2. **A Postgres `WebhookInbox`.** It needs a UNIQUE index on `event_id`, `INSERT … ON CONFLICT DO NOTHING`, row-locked updates, and a retention policy. Records hold no payloads.
+1. **A route in `apps/web`.** It must:
+   - read the body as raw text before any JSON parsing, and cap its size;
+   - provide `allowPostback()` (required): a global and per-IP rate limit plus a concurrency bound;
+   - call `receiveWebhook` and answer with `respondWith`.
+
+   Hints are enqueued, not acted on inline.
+2. **A Postgres `WebhookInbox`.** It needs:
+   - a UNIQUE index on `event_id`, `INSERT … ON CONFLICT DO NOTHING`, and row-locked updates;
+   - a TTL: delete `NOT_VERIFIED`/`UNCERTAIN`/`PENDING` rows after about 7 days (longer than PayPal's roughly 3-day redelivery window) and processed `VERIFIED` rows after about 30 days;
+   - a hard row cap, at which the route answers 503 without a postback.
+
+   Records hold no payloads.
 3. **A worker.** It drains `unprocessed()`, runs `reconcileFromHint()`, marks records processed, and applies verified events through `APPLY_VERIFIED_PROVIDER_EVENT` (D1b, #81). It needs backoff, plus `NEEDS_ATTENTION` per ADR-0008.
 4. **Registration.** `POST /v1/notifications/webhooks` for the supported event types, done only after a verified HTTPS deploy and with owner approval. `PAYPAL_WEBHOOK_ID` is then set in the host's secret store. Follow with one real `SUCCESS` probe.
 5. **Alerting** on sustained `NOT_VERIFIED`, which would point to a wrong `PAYPAL_WEBHOOK_ID` (observation 1).
