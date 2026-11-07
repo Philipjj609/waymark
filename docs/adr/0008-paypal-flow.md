@@ -226,6 +226,14 @@ release keeps it, a different order for a bound operation and an order already b
 (`PROVIDER_ORDER_MISMATCH`). Until the bind, no fact or reconciliation for the operation has any effect, so a read-back
 of a foreign order can never settle a bill, promote a checkout or be remembered as one of its captures.
 
+**Crash recovery between createOrder and BIND (D1b obligation).** Facts refused while the operation is unbound are
+**not recorded** by the engine. If the server crashes after createOrder and before BIND, the earmark stays reserved
+(PAY/START refused, DEFER and time unaffected). Recovery is the server's job: (1) re-send createOrder with the same
+`PayPal-Request-Id` (PayPal returns the original order, Sandbox evidence P3), (2) send `BIND_PROVIDER_ORDER`,
+(3) re-deliver or re-read every provider fact refused as unbound, then reconcile (an EXPIRED/VOIDED read-back
+releases; a COMPLETED capture settles once). If the order was never created, bind a fresh order and let it expire or
+void it. The server therefore MUST keep refused-while-unbound facts (or re-read the order) until the bind succeeds.
+
 **Supersedes** "a known operation of the same bill without a reservation (late capture after a void) still settles":
 such a capture is `CAPTURE_AFTER_VOID` and settles only through a reconciliation.
 
@@ -237,8 +245,8 @@ such a capture is `CAPTURE_AFTER_VOID` and settles only through a reconciliation
 - RESOLVED_REFUNDED marks a released operation `VOIDED` (the engine's "ended without settling") even when PayPal's order
   is COMPLETED.
 - A second `ORDER_VOIDED` for an already-voided operation (another order id) is still rejected, not recorded.
-- The order id becomes known to the engine only from a verified void or an applied reconciliation; until then
-  `KEPT_ORDER_MISMATCH` cannot trigger.
+- The order id becomes known to the engine only through `BIND_PROVIDER_ORDER` (see "Order binding" above); before the
+  bind, facts are refused (`PROVIDER_ORDER_UNBOUND`) and reconciliations are `KEPT_ORDER_UNBOUND`.
 - L3 (reviewer): stays documented.
 - `ORDER_VOIDED`'s `providerEventId` should be the order id, but the engine validates the order through `orderId` only;
   `providerEventId` remains the void's dedup key.
