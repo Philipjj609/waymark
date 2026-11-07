@@ -123,9 +123,27 @@ describe("deterministic scoring", () => {
       misconceptionHypotheses: ["mis_added"],
       flags: ["SINGLE_OBSERVATION"],
     });
+    // An unexplained wrong value names no belief, so it must not CONTRADICT (invariant 9).
     const slip = scoreExercise(numeric, { format: "NUMERIC_MONEY", amountMinor: 7_449 }, ctx);
-    expect(slip).toMatchObject({ misconceptionHypotheses: [] });
+    expect(slip).toMatchObject({ outcome: "INCONCLUSIVE", misconceptionHypotheses: [] });
     if (slip.status === "SCORED") expect(slip.flags).toContain("ARITHMETIC_SLIP_POSSIBLE");
+  });
+
+  it("numeric: a known procedural slip gets its own feedback but is never a misconception", () => {
+    const withSlip: Exercise = {
+      ...numeric,
+      diagnostics: [
+        ...(numeric.format === "NUMERIC_MONEY" ? numeric.diagnostics : []),
+        { expr: { param: "have" }, feedback: "It looks like the bill was left out." },
+      ],
+    } as Exercise;
+    const r = scoreExercise(withSlip, { format: "NUMERIC_MONEY", amountMinor: 10_000 }, ctx);
+    expect(r).toMatchObject({
+      outcome: "INCONCLUSIVE",
+      misconceptionHypotheses: [],
+      feedback: ["It looks like the bill was left out."],
+    });
+    if (r.status === "SCORED") expect(r.flags).toContain("ARITHMETIC_SLIP_POSSIBLE");
   });
 
   it("two-tier: a right answer for a wrong reason is INCONCLUSIVE, never SUPPORTS", () => {
@@ -192,6 +210,85 @@ describe("deterministic scoring", () => {
       ),
     ).toMatchObject({ status: "INVALID_RESPONSE" });
   });
+
+  it("rejects malformed JSON shapes instead of throwing", () => {
+    const bad: unknown[] = [
+      null,
+      42,
+      [],
+      { format: "NUMERIC_MONEY" },
+      { format: "NUMERIC_MONEY", amountMinor: "7450" },
+      { format: "NUMERIC_MONEY", amountMinor: Number.NaN },
+      { format: "NUMERIC_MONEY", amountMinor: Number.POSITIVE_INFINITY },
+    ];
+    for (const b of bad)
+      expect(scoreExercise(numeric, b, ctx)).toMatchObject({ status: "INVALID_RESPONSE" });
+    expect(scoreExercise(twoTier, { format: "TWO_TIER", answerChoiceId: 1 }, ctx)).toMatchObject({
+      status: "INVALID_RESPONSE",
+    });
+  });
+});
+
+describe("classify scoring", () => {
+  const classify: Exercise = {
+    exerciseId: "ex_test_classify",
+    conceptIds: [cash, cash],
+    objectiveId: "obj_test",
+    competence: "KNOWLEDGE",
+    difficulty: 1,
+    context: "TRANSFER",
+    transferOf: "ex_x",
+    simulationLink: "NONE",
+    params: {},
+    prompt: "Sort these.",
+    format: "CLASSIFY",
+    categories: [
+      { categoryId: "cash", label: "Cash" },
+      { categoryId: "not", label: "Not cash" },
+    ],
+    items: [
+      { itemId: "coins", text: "Coins in your pocket", categoryId: "cash" },
+      { itemId: "bike", text: "Your bike", categoryId: "not", misconceptionId: "mis_owned" },
+      { itemId: "owed", text: "Money a friend owes you", categoryId: "not" },
+    ],
+    feedbackCorrect: "Right.",
+    feedbackIncorrect: "Only money you hold now is cash.",
+  };
+  const place = (p: Record<string, string>) =>
+    scoreExercise(classify, { format: "CLASSIFY", placements: p }, ctx);
+
+  it("all right supports; a tagged slip contradicts; an untagged slip stays inconclusive", () => {
+    expect(place({ coins: "cash", bike: "not", owed: "not" })).toMatchObject({
+      outcome: "SUPPORTS",
+    });
+    expect(place({ coins: "cash", bike: "cash", owed: "not" })).toMatchObject({
+      outcome: "CONTRADICTS",
+      misconceptionHypotheses: ["mis_owned"],
+      earned: 2,
+    });
+    const r = place({ coins: "cash", bike: "not", owed: "cash" });
+    expect(r).toMatchObject({ outcome: "INCONCLUSIVE", misconceptionHypotheses: [] });
+    if (r.status === "SCORED") expect(r.flags).toContain("PARTIALLY_CORRECT");
+  });
+
+  it("rejects missing, unknown, inherited and prototype-named placements", () => {
+    for (const p of [
+      { coins: "cash", bike: "not" },
+      { coins: "cash", bike: "not", owed: "not", extra: "cash" },
+      { coins: "cash", bike: "not", owed: "elsewhere" },
+      JSON.parse('{"coins":"cash","bike":"not","owed":"not","__proto__":"cash"}'),
+      Object.assign(Object.create({ owed: "not" }), { coins: "cash", bike: "not" }),
+    ])
+      expect(place(p)).toMatchObject({ status: "INVALID_RESPONSE" });
+    expect(scoreExercise(classify, { format: "CLASSIFY", placements: null }, ctx)).toMatchObject({
+      status: "INVALID_RESPONSE",
+    });
+  });
+
+  it("emits one evidence row per distinct concept, even if a concept is listed twice", () => {
+    const r = place({ coins: "cash", bike: "not", owed: "not" });
+    expect(r.status === "SCORED" && r.evidence.length).toBe(1);
+  });
 });
 
 describe("learner-facing view", () => {
@@ -201,6 +298,24 @@ describe("learner-facing view", () => {
       expect(view).not.toContain(leak);
     expect(renderExercise(numeric)).toMatchObject({
       prompt: "You hold 100.00 EUR and pay 25.50 EUR. What is left?",
+      moneyRealm: "FICTIONAL",
     });
+  });
+
+  it("shows options in a deterministic order that does not depend on authoring order", () => {
+    const view = renderExercise(twoTier);
+    const reversed = renderExercise({
+      ...twoTier,
+      ...(twoTier.format === "TWO_TIER"
+        ? { answers: [...twoTier.answers].reverse(), reasons: [...twoTier.reasons].reverse() }
+        : {}),
+    } as Exercise);
+    expect(reversed).toEqual(view);
+    expect(renderExercise(twoTier)).toEqual(view);
+  });
+
+  it("never resolves a placeholder to an Object.prototype member", () => {
+    expect(() => renderTemplate("{{constructor}} {{toString}}", {})).toThrow(/unknown param/);
+    expect(() => evaluate({ param: "valueOf" }, {})).toThrow(/unknown param/);
   });
 });

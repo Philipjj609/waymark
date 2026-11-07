@@ -1,5 +1,10 @@
 import { formatMinor } from "../bridge.js";
-import type { Derived, Expr, MoneyParam, Params } from "./types.js";
+import type { Derived, Expr, MoneyParam, Param, Params } from "./types.js";
+
+/** Own-property lookup: "toString" or "constructor" must never resolve to a prototype member. */
+export function own(params: Params, name: string): Param | undefined {
+  return Object.hasOwn(params, name) ? params[name] : undefined;
+}
 
 /** Content error: thrown only for malformed curriculum data, never for learner input. */
 export class CurriculumError extends Error {
@@ -9,7 +14,7 @@ export class CurriculumError extends Error {
 /** Evaluate integer money arithmetic. All operands must be money params of one currency. */
 export function evaluate(expr: Expr, params: Params): MoneyParam {
   if ("param" in expr) {
-    const p = params[expr.param];
+    const p = own(params, expr.param);
     if (!p) throw new CurriculumError(`unknown param "${expr.param}"`);
     if (p.kind !== "money") throw new CurriculumError(`param "${expr.param}" is not money`);
     return p;
@@ -34,7 +39,8 @@ export function evaluate(expr: Expr, params: Params): MoneyParam {
 export function withDerived(params: Params, derived: readonly Derived[] = []): Params {
   let out: Params = params;
   for (const d of derived) {
-    if (out[d.name]) throw new CurriculumError(`derived "${d.name}" shadows a param`);
+    if (Object.hasOwn(out, d.name))
+      throw new CurriculumError(`derived "${d.name}" shadows a param`);
     out = { ...out, [d.name]: evaluate(d.expr, out) };
   }
   return out;
@@ -52,7 +58,7 @@ export function placeholders(template: string): string[] {
  */
 export function renderTemplate(template: string, params: Params): string {
   return template.replace(PLACEHOLDER, (_, name: string) => {
-    const p = params[name];
+    const p = own(params, name);
     if (!p) throw new CurriculumError(`template references unknown param "${name}"`);
     return p.kind === "money" ? formatMinor(p.amountMinor, p.currency) : `day ${p.day}`;
   });

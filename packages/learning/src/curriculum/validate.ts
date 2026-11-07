@@ -1,5 +1,5 @@
 import type { Concept, ConceptId } from "@fle/contracts";
-import { CurriculumError, evaluate, exprParams, placeholders, withDerived } from "./expr.js";
+import { CurriculumError, evaluate, exprParams, own, placeholders, withDerived } from "./expr.js";
 import type {
   Choice,
   ConceptUnit,
@@ -73,9 +73,16 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
     if (seen.has(id)) add(path, "DUPLICATE_ID", id);
     seen.add(id);
   };
+  /** Template text: figures may appear only through well-formed `{{param}}` placeholders. */
   const text = (path: string, value: string) => {
-    if (FIGURE.test(value.replace(/\{\{[a-zA-Z0-9]+\}\}/g, "")))
+    if (FIGURE.test(value.replace(/\{\{[a-zA-Z][a-zA-Z0-9]*\}\}/g, "")))
       add(path, "FIGURE_IN_TEXT", `"${value.slice(0, 80)}"`);
+  };
+  /** Plain prose (never rendered with params): no figures and no placeholders at all. */
+  const prose = (path: string, value: string) => {
+    if (FIGURE.test(value)) add(path, "FIGURE_IN_TEXT", `"${value.slice(0, 80)}"`);
+    if (/\{\{|\}\}/.test(value))
+      add(path, "BAD_TEMPLATE", `placeholder in prose "${value.slice(0, 60)}"`);
   };
 
   // ---- sources & facts
@@ -87,7 +94,7 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
     const path = `fact:${f.factId}`;
     claimId(path, f.factId, "fact_");
     factById.set(f.factId, f);
-    text(path, f.statement);
+    prose(path, f.statement);
     for (const c of f.conceptIds) if (!conceptById.has(c)) add(path, "UNKNOWN_CONCEPT", c);
     if (f.support.length === 0) add(path, "TOO_FEW", "a fact needs at least one source");
     for (const s of f.support) {
@@ -137,8 +144,8 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
   const misconceptionIds = new Set(
     b.curriculum.units.flatMap((u) => u.misconceptions.map((m) => m.misconceptionId)),
   );
-  const exerciseIds = new Set(
-    b.curriculum.units.flatMap((u) => u.exercises.map((e) => e.exerciseId)),
+  const exerciseById = new Map(
+    b.curriculum.units.flatMap((u) => u.exercises.map((e) => [e.exerciseId, e] as const)),
   );
 
   for (const u of b.curriculum.units) validateUnit(u);
@@ -149,8 +156,8 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
     const facts = (path: string, ids: readonly string[]) => {
       for (const id of ids) if (!factById.has(id)) add(path, "UNKNOWN_REFERENCE", id);
     };
-    for (const [i, p] of u.explanation.entries()) text(`${up}.explanation[${i}]`, p);
-    text(`${up}.inTheSimulation`, u.inTheSimulation);
+    for (const [i, p] of u.explanation.entries()) prose(`${up}.explanation[${i}]`, p);
+    prose(`${up}.inTheSimulation`, u.inTheSimulation);
     facts(up, u.factIds);
     if (!u.factIds.some((id) => factById.get(id)?.conceptIds.includes(u.conceptId)))
       add(up, "TOO_FEW", "the unit needs at least one fact about its own concept");
@@ -172,7 +179,7 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
       add(up, "TOO_FEW", "needs an APPLICATION or REASONING objective");
     for (const o of u.objectives) {
       claimId(`${up}.${o.objectiveId}`, o.objectiveId, "obj_");
-      text(`${up}.${o.objectiveId}`, o.statement);
+      prose(`${up}.${o.objectiveId}`, o.statement);
       facts(`${up}.${o.objectiveId}`, o.factIds);
       if (!u.exercises.some((e) => e.objectiveId === o.objectiveId))
         add(`${up}.${o.objectiveId}`, "UNASSESSED_OBJECTIVE", o.statement.slice(0, 60));
@@ -188,7 +195,7 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
         ["whyPlausible", m.whyPlausible],
         ["correction", m.correction],
       ] as const)
-        text(`${mp}.${k}`, v);
+        prose(`${mp}.${k}`, v);
       facts(mp, m.factIds);
       if (!u.exercises.some((e) => targets(e).includes(m.misconceptionId)))
         add(mp, "UNDIAGNOSABLE_MISCONCEPTION", "no distractor or diagnostic points at it");
@@ -216,7 +223,7 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
       case "TWO_TIER":
         return [...fromChoices(e.answers), ...fromChoices(e.reasons)];
       case "NUMERIC_MONEY":
-        return e.diagnostics.map((d) => d.misconceptionId);
+        return e.diagnostics.map((d) => d.misconceptionId).filter((m): m is string => !!m);
       case "CLASSIFY":
         return e.items.map((i) => i.misconceptionId).filter((m): m is string => !!m);
     }
@@ -245,7 +252,7 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
       text(path, t);
       for (const name of placeholders(t)) {
         used.add(name);
-        if (!params[name]) add(path, "BAD_TEMPLATE", `unknown placeholder {{${name}}}`);
+        if (!own(params, name)) add(path, "BAD_TEMPLATE", `unknown placeholder {{${name}}}`);
       }
       if (/\{\{|\}\}/.test(t.replace(/\{\{[a-zA-Z][a-zA-Z0-9]*\}\}/g, "")))
         add(path, "BAD_TEMPLATE", `malformed placeholder in "${t.slice(0, 60)}"`);
@@ -254,6 +261,7 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
   }
 
   function validateExample(path: string, ex: WorkedExample) {
+    prose(`${path}.title`, ex.title);
     provenance(path, ex.context, ex.simulationLink, ex.params);
     let params = ex.params;
     for (const [i, step] of ex.steps.entries()) {
@@ -289,6 +297,8 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
     if (e.conceptIds[0] !== u.conceptId)
       add(path, "UNKNOWN_REFERENCE", "the primary concept must be the unit's concept");
     for (const c of e.conceptIds) if (!conceptById.has(c)) add(path, "UNKNOWN_CONCEPT", c);
+    if (new Set(e.conceptIds).size !== e.conceptIds.length)
+      add(path, "DUPLICATE_ID", "a concept is listed twice (one answer would count twice)");
     if (!u.objectives.some((o) => o.objectiveId === e.objectiveId))
       add(path, "UNKNOWN_REFERENCE", `objective ${e.objectiveId} is not in this unit`);
     const objective = u.objectives.find((o) => o.objectiveId === e.objectiveId);
@@ -328,9 +338,9 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
           for (const d of e.diagnostics) {
             const v = evaluate(d.expr, params).amountMinor;
             if (values.has(v))
-              add(path, "BAD_ANSWER_KEY", `diagnostic ${d.misconceptionId} collides (${v})`);
+              add(path, "BAD_ANSWER_KEY", `diagnostic ${d.misconceptionId ?? "(slip)"} collides`);
             values.add(v);
-            if (!misconceptionIds.has(d.misconceptionId))
+            if (d.misconceptionId && !misconceptionIds.has(d.misconceptionId))
               add(path, "UNKNOWN_REFERENCE", d.misconceptionId);
           }
         } catch (err) {
@@ -344,6 +354,8 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
         if (cats.size < 2 || cats.size !== e.categories.length)
           add(path, "BAD_ANSWER_KEY", "needs at least two distinct categories");
         if (e.items.length < 3) add(path, "TOO_FEW", "needs at least three items");
+        if (new Set(e.items.map((i) => i.itemId)).size !== e.items.length)
+          add(path, "DUPLICATE_ID", "two items share an id");
         for (const i of e.items) {
           if (!cats.has(i.categoryId)) add(path, "UNKNOWN_REFERENCE", i.categoryId);
           if (i.misconceptionId && !misconceptionIds.has(i.misconceptionId))
@@ -352,29 +364,47 @@ export function validateCurriculum(b: CurriculumBundle): CurriculumIssue[] {
         for (const c of cats)
           if (!e.items.some((i) => i.categoryId === c))
             add(path, "BAD_ANSWER_KEY", `category ${c} has no items`);
-        for (const c of e.categories) text(path, c.label);
+        for (const c of e.categories) prose(path, c.label);
         break;
       }
     }
-    const used = templates(path, texts, params);
-    const exprUses = [
-      ...(e.derived ?? []).flatMap((d) => exprParams(d.expr)),
-      ...(e.format === "NUMERIC_MONEY"
-        ? [...exprParams(e.answer), ...e.diagnostics.flatMap((d) => exprParams(d.expr))]
-        : []),
-    ];
-    for (const name of Object.keys(e.params))
-      if (!used.has(name) && !exprUses.includes(name))
-        add(path, "BAD_TEMPLATE", `param "${name}" is never shown or used`);
+    templates(path, texts, params);
+    // Reachability: every param and derived value must feed something the learner sees or
+    // the answer key; a value read only by an unused derived value does not count.
+    const derivedExpr = new Map((e.derived ?? []).map((d) => [d.name, d.expr]));
+    const reached = new Set<string>();
+    const reach = (name: string) => {
+      if (reached.has(name)) return;
+      reached.add(name);
+      const ex = derivedExpr.get(name);
+      if (ex) for (const n of exprParams(ex)) reach(n);
+    };
+    for (const t of texts) for (const n of placeholders(t)) reach(n);
     if (e.format === "NUMERIC_MONEY")
-      for (const name of exprParams(e.answer))
-        if (e.params[name] && !used.has(name))
-          add(path, "BAD_TEMPLATE", `the answer uses "${name}" but the prompt never shows it`);
+      for (const ex of [e.answer, ...e.diagnostics.map((d) => d.expr)])
+        for (const n of exprParams(ex)) reach(n);
+    for (const name of [...Object.keys(e.params), ...derivedExpr.keys()])
+      if (!reached.has(name)) add(path, "BAD_TEMPLATE", `"${name}" is never shown or used`);
+    if (e.format === "NUMERIC_MONEY") {
+      // Everything the answer depends on must be visible in the PROMPT (feedback is shown
+      // only after answering), either directly or through a shown derived value.
+      const shown = new Set(placeholders(e.prompt));
+      const hidden = (name: string): string[] => {
+        if (shown.has(name)) return [];
+        const ex = derivedExpr.get(name);
+        return ex ? exprParams(ex).flatMap(hidden) : [name];
+      };
+      for (const name of new Set(exprParams(e.answer).flatMap(hidden)))
+        add(path, "BAD_TEMPLATE", `the answer uses "${name}" but the prompt never shows it`);
+    }
 
     if (e.context === "TRANSFER") {
-      if (!e.transferOf || !exerciseIds.has(e.transferOf))
-        add(path, "UNKNOWN_REFERENCE", `transferOf "${e.transferOf ?? ""}"`);
-      const source = u.exercises.find((x) => x.exerciseId === e.transferOf);
+      const source = e.transferOf ? exerciseById.get(e.transferOf) : undefined;
+      if (!source) add(path, "UNKNOWN_REFERENCE", `transferOf "${e.transferOf ?? ""}"`);
+      else if (!u.exercises.includes(source))
+        add(path, "UNKNOWN_REFERENCE", "a transfer must transfer an exercise of its own unit");
+      else if (source.context === "TRANSFER")
+        add(path, "UNKNOWN_REFERENCE", "a transfer must point at a core (FP30) exercise");
       if (source) {
         const money = (ps: Params) =>
           new Set(

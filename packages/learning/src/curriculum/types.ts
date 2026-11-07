@@ -157,10 +157,14 @@ export interface Choice {
   readonly misconceptionId?: string;
 }
 
+/**
+ * A known wrong numeric answer with its own feedback. With a misconceptionId it is the
+ * value a specific BELIEF would produce; without one it is a known procedural slip (a step
+ * left out, a misread), which must never be recorded as a misconception (invariant 9).
+ */
 export interface DiagnosticValue {
-  /** A wrong numeric answer that a specific misconception would produce. */
   readonly expr: Expr;
-  readonly misconceptionId: string;
+  readonly misconceptionId?: string;
   readonly feedback: string;
 }
 
