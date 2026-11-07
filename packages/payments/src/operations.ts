@@ -113,12 +113,18 @@ const stepState = (r: PayPalResult<unknown>): StepState | null => {
  * Monotonic step updates (#95 review M3, re-review N1/N2):
  * - CONFIRMED is final;
  * - STARTED only marks a step that had not started (it never hides what PayPal already said);
- * - a refusal never hides money that may be in flight or captured (PENDING, CAPTURED_ELSEWHERE).
+ * - a refusal never hides money that may be in flight or captured (PENDING, CAPTURED_ELSEWHERE,
+ *   UNCERTAIN).
  */
 const merge = (prev: StepState, next: StepState | null): StepState => {
   if (next === null || prev === "CONFIRMED") return prev;
   if (next === "STARTED") return prev === "NOT_STARTED" ? "STARTED" : prev;
-  if (next === "REFUSED" && (prev === "PENDING" || prev === "CAPTURED_ELSEWHERE")) return prev;
+  // UNCERTAIN too: a lost earlier attempt may have succeeded; D1b reconciliation resolves it.
+  if (
+    next === "REFUSED" &&
+    (prev === "PENDING" || prev === "CAPTURED_ELSEWHERE" || prev === "UNCERTAIN")
+  )
+    return prev;
   return next;
 };
 /** NOT_SENT: undo only our own STARTED marker; never touch what someone else recorded meanwhile. */

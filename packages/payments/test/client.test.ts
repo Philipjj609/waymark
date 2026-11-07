@@ -1365,3 +1365,26 @@ describe("second re-review of #95: stale money signals, authoritative reads", ()
     expect((await store.get(opId))?.captureState).toBe("CONFIRMED");
   });
 });
+
+describe("final review pass of #95", () => {
+  it("a refusal after an UNCERTAIN capture keeps UNCERTAIN and the same capture id", async () => {
+    const { pp, client } = setup({ maxAttempts: 1 });
+    const store = new InMemoryOperationStore();
+    const co = new SandboxCheckout(client, store, () => crypto.randomUUID());
+    const opId = "pop_final_1" as ProviderOperationId;
+    await co.start({
+      operationId: opId,
+      worldId: "wld_demo" as WorldId,
+      obligationId: "obl_phone_d8" as ObligationId,
+      amount: EUR(3000),
+    });
+    const id = (await store.get(opId))?.captureRequestId;
+    pp.faults = ["timeout"];
+    expect((await co.capture(opId)).kind).toBe("UNCERTAIN");
+    expect((await co.capture(opId)).kind).toBe("NOT_APPROVED"); // clean answer on the same id
+    expect(await store.get(opId)).toMatchObject({
+      captureState: "UNCERTAIN",
+      captureRequestId: id,
+    });
+  });
+});
