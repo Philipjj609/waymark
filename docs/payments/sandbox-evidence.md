@@ -130,7 +130,8 @@ calls used: 4/6
    - **Pending evidence (#97 re-review N1a):** it is not yet observed whether a PayPal redelivery carries a fresh transmission time. Until a registered webhook shows that it does, the window covers PayPal's roughly 3-day redelivery period with a margin, so a genuine event that was throttled or uncertain is never refused as stale on a later redelivery. Narrow the window once there is evidence.
 2. **The cert URL must be canonical.** It must be `https://api.sandbox.paypal.com` or `https://api-m.sandbox.paypal.com`, with path `/v1/notifications/certs/<id>`, no userinfo, port, query or fragment, printable ASCII only and no commas, and equal to its own `URL.href`. The normalized href is what PayPal receives.
 3. **Duplicates of a `VERIFIED` event cost nothing.**
-4. **At most 5 definite refusals per event id** (configurable). A definite refusal is a `FAILURE` answer or a 4xx other than 401/403/429. Our own failures never count: 5xx, timeout, no token, 401/403/429 and throttling (#97 re-review N1b). The cap is re-checked under the row lock when a slot is reserved. Concurrent forged deliveries are bounded by `allowPostback()`.
+4. **At most 5 definite refusals per event id** (configurable). A definite refusal is a `FAILURE` answer or a 4xx other than 401/403/429. Our own failures never count: 5xx, timeout, no token, 401/403/429 and throttling (#97 re-review N1b). The cap is re-checked under the row lock when a slot is reserved.
+   - **In flight (#97 final check):** each event id also has a `pending` counter, at most 2 at a time and refused while `failures + pending >= 5`. It is incremented atomically when a slot is reserved and released on every outcome, including `UNCERTAIN` and thrown errors (`try/finally`). A reservation older than a 2-minute lease counts as released, so a crash does not block the event id. Concurrent copies beyond the in-flight cap get `DEFERRED` `BUSY` (503) and PayPal redelivers. Tested: 30 concurrent copies of one forged id cost at most 2 postbacks per wave and at most 5 in total; a genuine delivery after 10 concurrent 503s still verifies.
 5. **The route must provide `allowPostback()`.** It is the global, per-source-IP and concurrency limit. It is asked only after dedup, the local checks and the read-only cap check, immediately before a slot is reserved (N3). `false` means no call, no row, and a 503.
    - **Order (N2):** a redelivery of an already-`VERIFIED` event id is always a 200 `DUPLICATE` with no call, however old its transmission time.
    - **Alerting (N1c):** an optional `onRefused({ reason, eventId, eventType, failures })` hook fires for `STALE_TRANSMISSION`, `POSTBACK_LIMIT` and every definite refusal. A wrong `PAYPAL_WEBHOOK_ID` shows up as repeated `SIGNATURE_FAILURE`. The route keeps a small bounded counter and alerts on bursts.
@@ -143,7 +144,7 @@ The probe output above was recorded with commit `1f2c95a`. It was not re-run aft
 
 1. **A route in `apps/web`.** It must:
    - read the body as raw text before any JSON parsing, and cap its size;
-   - provide `allowPostback()` (required): a global and per-IP rate limit plus a concurrency bound;
+   - **supply a real limiter through `allowPostback()` (mandatory):** a global and per-IP rate limit with a concurrency cap. It is the **primary bound on PayPal calls**; the per-event caps only stop amplification for one event id, not floods of distinct forged ids;
    - call `receiveWebhook` and answer with `respondWith`.
 
    Hints are enqueued, not acted on inline.

@@ -536,6 +536,13 @@ export interface WebhookInboxRecord {
   readonly postbacks: number;
   /** DEFINITE refusals by PayPal (FAILURE or a 4xx other than 401/403/429); capped. */
   readonly failures: number;
+  /**
+   * Postbacks reserved and not yet recorded (in flight). Released on every outcome, including
+   * UNCERTAIN and thrown errors; a reservation older than the lease counts as released (crash).
+   */
+  readonly pending: number;
+  /** Epoch ms of the latest reservation while `pending > 0`, else null. */
+  readonly pendingSince: number | null;
   readonly verification: InboxVerification;
   /** Short reason/cause only; never a payload, header value or secret. */
   readonly verificationDetail: string | null;
@@ -617,11 +624,14 @@ export type WebhookReceipt =
       readonly respondWith: 400;
     }
   | { readonly outcome: "UNCERTAIN"; readonly eventId: string; readonly respondWith: 503 }
-  /** Not attempted now (limiter said no, or no webhook id configured): no postback, no row. */
+  /**
+   * Not attempted now: the limiter said no, no webhook id is configured, or this event id already
+   * has postbacks in flight (BUSY). No postback; PayPal redelivers.
+   */
   | {
       readonly outcome: "DEFERRED";
       readonly eventId: string;
-      readonly reason: "THROTTLED" | "NOT_CONFIGURED";
+      readonly reason: "THROTTLED" | "NOT_CONFIGURED" | "BUSY";
       readonly respondWith: 503;
     }
   | {
@@ -633,6 +643,10 @@ export type WebhookReceipt =
     };
 
 export const DEFAULT_MAX_FAILURES_PER_EVENT = 5;
+/** Postbacks in flight per event id at any moment. */
+export const DEFAULT_MAX_PENDING_PER_EVENT = 2;
+/** A reservation older than this is treated as released (process crashed mid-postback). */
+export const DEFAULT_PENDING_LEASE_MS = 2 * 60_000;
 
 /** Refusals worth counting/alerting on (a wrong PAYPAL_WEBHOOK_ID shows as repeated FAILURE). */
 export interface WebhookRefusal {
@@ -659,17 +673,26 @@ export interface ReceiveWebhookDeps extends WebhookVerifierConfig {
   /** Definite refusals (FAILURE / 4xx) per webhook event id before we stop asking. Default 5. */
   readonly maxFailuresPerEvent?: number;
   /**
-   * Optional alert hook (#97 re-review N1c): called for stale transmissions, the per-event cap and
-   * every definite refusal. The route keeps a small bounded counter and alerts on bursts. It must
-   * not throw (errors are swallowed) and must not block for long.
+   * Postbacks in flight per event id (default 2). A reservation is refused (DEFERRED BUSY, 503)
+   * while `failures + pending >= maxFailuresPerEvent` or `pending >= maxPendingPerEvent`, so N
+   * concurrent copies of one forged event id cannot cost N postbacks (#97 final check).
    */
-  readonly onRefused?: (refusal: WebhookRefusal) => void;
+  readonly maxPendingPerEvent?: number;
+  /** Default 2 minutes. */
+  readonly pendingLeaseMs?: number;
+  /**
+   * Optional alert hook (#97 re-review N1c): called for stale transmissions, the per-event cap and
+   * every definite refusal. The route keeps a small bounded counter and alerts on bursts. It is
+   * called asynchronously and never awaited; sync throws and async rejections are both swallowed.
+   */
+  readonly onRefused?: (refusal: WebhookRefusal) => void | Promise<void>;
 }
 
 /**
  * Receives one delivery. Order (#97 re-review N2/N3): parse; ignore unsupported types; header
  * shape; dedup (a VERIFIED event id is ALWAYS a 200 DUPLICATE, whatever its age); configuration;
- * time window; read-only failure cap; `allowPostback()`; reserve the slot; one postback; record.
+ * time window; read-only failure/in-flight cap; `allowPostback()`; reserve the slot (atomic,
+ * re-checking both caps); one postback; record and release the slot (always, via finally).
  * The returned hint (if any) is the ONLY follow-up allowed: `reconcileFromHint()`. Never throws for
  * hostile input; inbox/storage errors propagate (the route answers 5xx, PayPal redelivers).
  */
@@ -682,11 +705,12 @@ export async function receiveWebhook(
   const { event } = delivery;
   const eventId = event.eventId;
   const refusedBy = (reason: WebhookRefusal["reason"], failures: number) => {
-    try {
-      deps.onRefused?.({ reason, eventId, eventType: event.eventType, failures });
-    } catch {
-      // alerting must never change the answer
-    }
+    const hook = deps.onRefused;
+    if (!hook) return;
+    // Alerting must never change the answer: sync throws and async rejections are swallowed.
+    Promise.resolve()
+      .then(() => hook({ reason, eventId, eventType: event.eventType, failures }))
+      .catch(() => {});
   };
   // Nothing below writes or calls PayPal until every local check has passed (#97 M1/M2).
   if (!event.supported) return { outcome: "IGNORED", eventId, respondWith: 200 };
@@ -706,6 +730,18 @@ export async function receiveWebhook(
     return { outcome: "NOT_VERIFIED", eventId, reason: stale.reason, respondWith: 400 };
   }
   const cap = deps.maxFailuresPerEvent ?? DEFAULT_MAX_FAILURES_PER_EVENT;
+  const maxPending = deps.maxPendingPerEvent ?? DEFAULT_MAX_PENDING_PER_EVENT;
+  const lease = deps.pendingLeaseMs ?? DEFAULT_PENDING_LEASE_MS;
+  const now = (deps.now ?? Date.now)();
+  /** In-flight reservations that still hold (an expired lease means a crashed postback). */
+  const livePending = (c: WebhookInboxRecord) =>
+    c.pending > 0 && c.pendingSince !== null && now - c.pendingSince <= lease ? c.pending : 0;
+  /** null = a slot may be reserved. */
+  const blocked = (c: WebhookInboxRecord): "LIMIT" | "BUSY" | null => {
+    if (c.failures >= cap) return "LIMIT";
+    const p = livePending(c);
+    return c.failures + p >= cap || p >= maxPending ? "BUSY" : null;
+  };
   const overCap = () => {
     refusedBy("POSTBACK_LIMIT", cap);
     return {
@@ -715,11 +751,14 @@ export async function receiveWebhook(
       respondWith: 400,
     } as const;
   };
-  if (existing && existing.failures >= cap) return overCap();
+  const busy = () => ({ outcome: "DEFERRED", eventId, reason: "BUSY", respondWith: 503 }) as const;
+  const pre = existing ? blocked(existing) : null;
+  if (pre === "LIMIT") return overCap();
+  if (pre === "BUSY") return busy();
   if (!(await deps.allowPostback()))
     return { outcome: "DEFERRED", eventId, reason: "THROTTLED", respondWith: 503 };
 
-  // Reserve the postback (re-checking dedup and cap under the row lock).
+  // Reserve one in-flight slot atomically (re-checking dedup and both caps under the row lock).
   const ins = await deps.inbox.insertIfAbsent({
     eventId,
     eventType: event.eventType,
@@ -728,64 +767,85 @@ export async function receiveWebhook(
     deliveries: 1,
     postbacks: 1,
     failures: 0,
+    pending: 1,
+    pendingSince: now,
     verification: "PENDING",
     verificationDetail: null,
     hint: null,
     processed: false,
   });
   if (!ins.inserted) {
-    let verdict = "RESERVED" as "RESERVED" | "DUPLICATE" | "LIMIT";
+    let verdict = "RESERVED" as "RESERVED" | "DUPLICATE" | "LIMIT" | "BUSY";
     await deps.inbox.update(eventId, (c) => {
       if (c.verification === "VERIFIED") {
         verdict = "DUPLICATE";
         return seen(c, input.receivedAt);
       }
-      if (c.failures >= cap) {
-        verdict = "LIMIT";
+      const b = blocked(c);
+      if (b) {
+        verdict = b;
         return c;
       }
       verdict = "RESERVED";
-      return { ...seen(c, input.receivedAt), postbacks: c.postbacks + 1 };
+      return {
+        ...seen(c, input.receivedAt),
+        postbacks: c.postbacks + 1,
+        pending: livePending(c) + 1,
+        pendingSince: now,
+      };
     });
     if (verdict === "DUPLICATE") return { outcome: "DUPLICATE", eventId, respondWith: 200 };
     if (verdict === "LIMIT") return overCap();
+    if (verdict === "BUSY") return busy();
   }
 
-  const v = await verifyWebhookSignature(deps, delivery);
-  // Only PayPal's definite refusals count toward the cap; our failures never do (N1b).
-  const definite =
-    v.status === "NOT_VERIFIED" &&
-    (v.reason === "SIGNATURE_FAILURE" || v.reason === "REJECTED_BY_PAYPAL");
-  let won = false;
-  const after = await deps.inbox.update(eventId, (c) => {
-    if (c.verification === "VERIFIED") return c; // a concurrent delivery already verified it
-    if (v.status === "VERIFIED") {
-      won = true;
+  const release = (c: WebhookInboxRecord): WebhookInboxRecord => {
+    const pending = Math.max(0, c.pending - 1);
+    return { ...c, pending, pendingSince: pending > 0 ? c.pendingSince : null };
+  };
+  let released = false;
+  try {
+    const v = await verifyWebhookSignature(deps, delivery);
+    // Only PayPal's definite refusals count toward the cap; our failures never do (N1b).
+    const definite =
+      v.status === "NOT_VERIFIED" &&
+      (v.reason === "SIGNATURE_FAILURE" || v.reason === "REJECTED_BY_PAYPAL");
+    let won = false;
+    const after = await deps.inbox.update(eventId, (c) => {
+      released = true;
+      const r = release(c);
+      if (c.verification === "VERIFIED") return r; // a concurrent delivery already verified it
+      if (v.status === "VERIFIED") {
+        won = true;
+        return {
+          ...r,
+          eventType: event.eventType,
+          verification: "VERIFIED",
+          verificationDetail: null,
+          hint: reconcileHintOf(event),
+          processed: false,
+        };
+      }
       return {
-        ...c,
-        eventType: event.eventType,
-        verification: "VERIFIED",
-        verificationDetail: null,
-        hint: reconcileHintOf(event),
-        processed: false,
+        ...r,
+        failures: definite ? c.failures + 1 : c.failures,
+        verification: v.status,
+        verificationDetail: v.status === "NOT_VERIFIED" ? v.reason : v.cause.slice(0, 64),
       };
+    });
+    if (after.verification === "VERIFIED")
+      return won
+        ? { outcome: "VERIFIED", eventId, hint: after.hint, respondWith: 200 }
+        : { outcome: "DUPLICATE", eventId, respondWith: 200 };
+    if (v.status === "NOT_VERIFIED") {
+      if (definite) refusedBy(v.reason as WebhookRefusal["reason"], after.failures);
+      return { outcome: "NOT_VERIFIED", eventId, reason: v.reason, respondWith: 400 };
     }
-    return {
-      ...c,
-      failures: definite ? c.failures + 1 : c.failures,
-      verification: v.status,
-      verificationDetail: v.status === "NOT_VERIFIED" ? v.reason : v.cause.slice(0, 64),
-    };
-  });
-  if (after.verification === "VERIFIED")
-    return won
-      ? { outcome: "VERIFIED", eventId, hint: after.hint, respondWith: 200 }
-      : { outcome: "DUPLICATE", eventId, respondWith: 200 };
-  if (v.status === "NOT_VERIFIED") {
-    if (definite) refusedBy(v.reason as WebhookRefusal["reason"], after.failures);
-    return { outcome: "NOT_VERIFIED", eventId, reason: v.reason, respondWith: 400 };
+    return { outcome: "UNCERTAIN", eventId, respondWith: 503 };
+  } finally {
+    // Thrown errors (client, storage) must not leave the slot held: release it, best effort.
+    if (!released) await deps.inbox.update(eventId, release).catch(() => {});
   }
-  return { outcome: "UNCERTAIN", eventId, respondWith: 503 };
 }
 
 const seen = (c: WebhookInboxRecord, at: string): WebhookInboxRecord => ({

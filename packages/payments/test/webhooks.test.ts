@@ -52,6 +52,9 @@ class FakePayPal {
   faults: Fault[] = [];
   requests: Array<{ path: string; body: string | null; headers: Record<string, string> }> = [];
   order: Record<string, unknown> | null = null;
+  postbackDelayMs = 0;
+  inflight = 0;
+  maxInflight = 0;
   #sig = 0;
 
   /** Headers of a genuine delivery of `raw`: PayPal signed exactly this body. */
@@ -75,6 +78,14 @@ class FakePayPal {
       return this.order ? json(200, this.order) : json(404, { name: "RESOURCE_NOT_FOUND" });
     if (u.pathname !== "/v1/notifications/verify-webhook-signature")
       return json(404, { name: "NOT_FOUND" });
+    // In-flight measurement: postbacks overlap while each waits `postbackDelayMs`.
+    this.inflight++;
+    this.maxInflight = Math.max(this.maxInflight, this.inflight);
+    try {
+      if (this.postbackDelayMs > 0) await new Promise((r) => setTimeout(r, this.postbackDelayMs));
+    } finally {
+      this.inflight--;
+    }
     const fault = this.faults.shift();
     if (fault) return this.#fail(fault);
     // Structural answer: as observed in the Sandbox, a mismatch is HTTP 200 FAILURE.
@@ -830,7 +841,135 @@ describe("receiveWebhook + inbox", () => {
     await receiveWebhook({ rawBody: RAW, headers: {}, receivedAt: at(3) }, d);
     const other = JSON.stringify(captureEvent({ id: "WH-OTHER" }));
     await receiveWebhook({ rawBody: other, headers: fake.genuine(other), receivedAt: at(4) }, d);
+    await new Promise((r) => setTimeout(r, 0));
     expect(seenReasons).toHaveLength(3);
+  });
+
+  it("an async onRefused that rejects is swallowed (no unhandled rejection)", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let calls = 0;
+      const d = deps(new FakePayPal(), {
+        onRefused: async () => {
+          calls++;
+          throw new Error("alerting is down (async)");
+        },
+      });
+      const r = await receiveWebhook({ rawBody: RAW, headers: FORGED, receivedAt: at(0) }, d);
+      expect(r).toMatchObject({ outcome: "NOT_VERIFIED", reason: "SIGNATURE_FAILURE" });
+      await new Promise((r) => setTimeout(r, 10));
+      expect(calls).toBe(1);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("30 concurrent copies of one forged event id: postbacks bounded by the in-flight and failure caps (#97 final)", async () => {
+    const fake = new FakePayPal();
+    fake.postbackDelayMs = 5;
+    const d = deps(fake);
+    const all = await Promise.all(
+      Array.from({ length: 30 }, (_, i) =>
+        receiveWebhook({ rawBody: RAW, headers: FORGED, receivedAt: at(i % 60) }, d),
+      ),
+    );
+    expect(fake.verifyCalls.length).toBeLessThanOrEqual(2); // in-flight cap
+    expect(fake.maxInflight).toBeLessThanOrEqual(2);
+    expect(all.filter((o) => o.outcome === "DEFERRED" && o.reason === "BUSY").length).toBe(
+      30 - fake.verifyCalls.length,
+    );
+    expect(await d.inbox.get(EVENT_ID)).toMatchObject({ pending: 0, pendingSince: null });
+    // Waves of 30 concurrent copies never exceed maxFailuresPerEvent postbacks in total.
+    for (let wave = 0; wave < 5; wave++)
+      await Promise.all(
+        Array.from({ length: 30 }, (_, i) =>
+          receiveWebhook({ rawBody: RAW, headers: FORGED, receivedAt: at(i % 60) }, d),
+        ),
+      );
+    expect(fake.verifyCalls.length).toBeLessThanOrEqual(5);
+    expect(await d.inbox.get(EVENT_ID)).toMatchObject({ failures: 5, pending: 0 });
+  });
+
+  it("a genuine delivery after 10 concurrent 503s still verifies; nothing stays in flight", async () => {
+    const fake = new FakePayPal();
+    fake.postbackDelayMs = 5;
+    fake.faults = Array.from({ length: 10 }, () => "500" as const);
+    const d = deps(fake);
+    const all = await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        receiveWebhook({ rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(i) }, d),
+      ),
+    );
+    expect(all.every((o) => o.respondWith === 503)).toBe(true);
+    expect(await d.inbox.get(EVENT_ID)).toMatchObject({ failures: 0, pending: 0 });
+    fake.faults = [];
+    const r = await receiveWebhook(
+      { rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(20) },
+      d,
+    );
+    expect(r.outcome).toBe("VERIFIED");
+  });
+
+  it("the in-flight slot is released after every outcome, including a thrown error", async () => {
+    for (const fault of [undefined, "500", "timeout", "401", "400"] as const) {
+      const fake = new FakePayPal();
+      if (fault) fake.faults = [fault];
+      const d = deps(fake);
+      const h = fault === undefined ? fake.genuine(RAW) : FORGED;
+      await receiveWebhook({ rawBody: RAW, headers: h, receivedAt: at(0) }, d);
+      expect(await d.inbox.get(EVENT_ID)).toMatchObject({ pending: 0, pendingSince: null });
+    }
+    // The client throws (a bug or an unexpected runtime error): the error propagates, the slot is freed.
+    const throwing = {
+      verifyWebhookSignature: async () => {
+        throw new Error("boom");
+      },
+    } as unknown as PayPalSandboxClient;
+    const d = deps(new FakePayPal(), { client: throwing });
+    await expect(
+      receiveWebhook({ rawBody: RAW, headers: FORGED, receivedAt: at(0) }, d),
+    ).rejects.toThrow("boom");
+    expect(await d.inbox.get(EVENT_ID)).toMatchObject({ pending: 0, failures: 0 });
+  });
+
+  it("a reservation older than the lease (crashed postback) no longer blocks the event id", async () => {
+    const fake = new FakePayPal();
+    let now = NOW;
+    const d = deps(fake, { now: () => now, maxPendingPerEvent: 1 });
+    await d.inbox.insertIfAbsent({
+      eventId: EVENT_ID,
+      eventType: "PAYMENT.CAPTURE.COMPLETED",
+      receivedAt: at(0),
+      lastDeliveryAt: at(0),
+      deliveries: 1,
+      postbacks: 1,
+      failures: 0,
+      pending: 1,
+      pendingSince: NOW,
+      verification: "PENDING",
+      verificationDetail: null,
+      hint: null,
+      processed: false,
+    });
+    const busy = await receiveWebhook(
+      { rawBody: RAW, headers: fake.genuine(RAW), receivedAt: at(1) },
+      d,
+    );
+    expect(busy).toMatchObject({ outcome: "DEFERRED", reason: "BUSY", respondWith: 503 });
+    expect(fake.requests).toHaveLength(0);
+    now = NOW + 3 * 60_000; // past the 2-minute lease
+    const r = await receiveWebhook(
+      {
+        rawBody: RAW,
+        headers: fake.genuine(RAW, { "PAYPAL-TRANSMISSION-TIME": NOW_ISO }),
+        receivedAt: at(2),
+      },
+      d,
+    );
+    expect(r.outcome).toBe("VERIFIED");
   });
 
   it("allowPostback() = false -> DEFERRED 503, no network call, no row (#97 M1)", async () => {
