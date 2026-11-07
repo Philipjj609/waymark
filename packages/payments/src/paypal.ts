@@ -35,6 +35,29 @@ export type PayPalCaptureStatus = (typeof PAYPAL_CAPTURE_STATUSES)[number];
 
 export const PAYPAL_SANDBOX_BASE_URL = "https://api-m.sandbox.paypal.com" as const;
 
+/**
+ * A webhook's `PAYPAL-CERT-URL` is attacker-controlled input. It is accepted only as https on
+ * PayPal's SANDBOX domain (e.g. api.sandbox.paypal.com, api-m.sandbox.paypal.com), with no
+ * credentials and no explicit port; anything else is refused before any network call (#22). A Live
+ * cert URL (api.paypal.com) is refused too: this product never processes Live events.
+ */
+export function isPayPalSandboxCertUrl(value: unknown): boolean {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512) return false;
+  let u: URL;
+  try {
+    u = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    u.protocol === "https:" &&
+    u.username === "" &&
+    u.password === "" &&
+    u.port === "" &&
+    u.hostname.endsWith(".sandbox.paypal.com")
+  );
+}
+
 export class AmountFormatError extends Error {
   override readonly name = "AmountFormatError";
 }

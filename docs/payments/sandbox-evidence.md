@@ -73,5 +73,59 @@ Every Orders response carried a `PayPal-Debug-Id` header.
 
 - A capture after a **real buyer approval** (PayPal login in the sandbox checkout). This is planned with the owner for D1b and the end-to-end checkout.
 - A `PENDING` capture (for example `PENDING_REVIEW`). The client reports `PENDING` and never `OK` (covered by a unit test only).
-- Refunds, reversals and webhooks belong to #22.
+- Refunds and reversals belong to #22. Webhook signature verification is recorded below.
 - How long PayPal keeps a `PayPal-Request-Id` (the retention period) has not been measured. The operation store keeps our ids for good, and reconciliation always uses GET.
+
+## Webhook signature verification (#22)
+
+**Date:** 2026-11-07, around 13:10 UTC. **Command:** `pnpm exec tsx packages/payments/scripts/webhook-verify-probe.ts --max-calls 6`, which used **4 calls**: one OAuth token and three `POST /v1/notifications/verify-webhook-signature`.
+
+**Scope:**
+- Failure path only.
+- The event is synthetic, the signature is random bytes, and the webhook ids are deliberately bogus (never `PAYPAL_WEBHOOK_ID`).
+- No webhook was registered. The probe refuses every path except OAuth and the verification postback.
+
+Probe output, verbatim (debug ids are PayPal correlation ids, not secrets):
+
+```
+W0   cert URL off PayPal's sandbox domain (local check)           {"status":"NOT_VERIFIED","reason":"BAD_CERT_URL","detail":"paypal-cert-url","debugId":null}
+     raw: http=200 debug-id=present keys=verification_status verification_status=FAILURE
+W1   synthetic event, bogus webhook id 'WHPROBEBOGUS'             {"status":"NOT_VERIFIED","reason":"SIGNATURE_FAILURE","detail":null,"debugId":"f2959110a3967"}
+     raw: http=200 debug-id=present keys=verification_status verification_status=FAILURE
+W2   synthetic event, unregistered id in PayPal's format          {"status":"NOT_VERIFIED","reason":"SIGNATURE_FAILURE","detail":null,"debugId":"f295911a825a6"}
+     raw: http=200 debug-id=present keys=verification_status verification_status=FAILURE
+W3   as W2, cert URL host api-m.sandbox.paypal.com                {"status":"NOT_VERIFIED","reason":"SIGNATURE_FAILURE","detail":null,"debugId":"f7843970b64b1"}
+calls used: 4/6
+```
+
+(Each `raw:` line is printed by the probe's fetch wrapper when the response arrives, so it appears just above the result line of the call it belongs to.)
+
+**Observed:**
+1. A bad signature with an unknown webhook id is **not** an HTTP error. PayPal answers **HTTP 200** with a body that has exactly one key, `{"verification_status":"FAILURE"}`, plus a `PayPal-Debug-Id` header. This held for a malformed id (W1) and for a well-formed but unregistered id (W2).
+2. `api.sandbox.paypal.com` and `api-m.sandbox.paypal.com` cert URLs behave the same (W2, W3).
+3. A cert URL outside `*.sandbox.paypal.com` is refused locally, before any network call (W0).
+
+**Design consequences:**
+1. Only `verification_status: "SUCCESS"` verifies. `FAILURE` maps to `NOT_VERIFIED`; any other value, a 5xx, a timeout or an unreadable body maps to `UNCERTAIN`, and a 4xx maps to `NOT_VERIFIED` (`REJECTED_BY_PAYPAL`).
+2. **A wrong `PAYPAL_WEBHOOK_ID` looks exactly like a forged delivery** (observation 1). Misconfiguration therefore fails closed: every delivery is `NOT_VERIFIED`, nothing happens, and the poll-based reconciler still settles verified captures. It is silent, though. The route must alert on a run of `NOT_VERIFIED` results.
+3. The webhook id comes only from configuration. The raw body is sent byte-for-byte as `webhook_event`, never re-serialized (unit tests in `packages/payments/test/webhooks.test.ts`).
+
+**Not observed yet:**
+- A `SUCCESS` from a genuine PayPal delivery. That needs a registered webhook on a verified HTTPS deploy (owner decision).
+- Real delivery bodies for `PAYMENT.CAPTURE.REFUNDED` and `REVERSED`. The parser follows PayPal's documented shape, where the refund resource's `up` link names the capture.
+- Events from PayPal's webhook simulator. ADR-0008 says postback does not support them, so they end `NOT_VERIFIED`.
+
+### Webhook design (`packages/payments/src/webhooks.ts`)
+
+- **A webhook never settles anything.** A webhook whose signature PayPal confirmed yields only a `ReconcileHint` (`READ_BACK` with operation, order and capture ids; no amount, no status). `reconcileFromHint()` then runs `SandboxCheckout.verify()`, which does a GET and `verifyCapture()`. Any `VerifiedProviderEvent` comes from that read, with method `ORDER_LOOKUP`.
+- **The inbox is unique on the webhook event id.** `VERIFIED` is final, and later deliveries are `DUPLICATE` with no network call. `NOT_VERIFIED` and `UNCERTAIN` are not final, so a forged body sent first under a real event id cannot swallow the genuine delivery. Out-of-order deliveries are harmless because the payload is never applied.
+- **Unsupported event types are recorded as `IGNORED`.** They are not verified and not acted on.
+- **`receiveWebhook()` tells the route how to respond:** 200 (verified, duplicate, ignored), 400 (malformed or not verified) or 503 (uncertain), so PayPal redelivers and the raw body is never stored.
+
+### Still needed before webhooks are live (not in this change)
+
+1. **A route in `apps/web`.** It must read the body as raw text before any JSON parsing, cap the body size, rate-limit, call `receiveWebhook`, and answer with `respondWith`. Hints are enqueued, not acted on inline.
+2. **A Postgres `WebhookInbox`.** It needs a UNIQUE index on `event_id`, `INSERT … ON CONFLICT DO NOTHING`, row-locked updates, and a retention policy. Records hold no payloads.
+3. **A worker.** It drains `unprocessed()`, runs `reconcileFromHint()`, marks records processed, and applies verified events through `APPLY_VERIFIED_PROVIDER_EVENT` (D1b, #81). It needs backoff, plus `NEEDS_ATTENTION` per ADR-0008.
+4. **Registration.** `POST /v1/notifications/webhooks` for the supported event types, done only after a verified HTTPS deploy and with owner approval. `PAYPAL_WEBHOOK_ID` is then set in the host's secret store. Follow with one real `SUCCESS` probe.
+5. **Alerting** on sustained `NOT_VERIFIED`, which would point to a wrong `PAYPAL_WEBHOOK_ID` (observation 1).

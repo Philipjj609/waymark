@@ -1,6 +1,7 @@
 import type { Money } from "@fle/contracts";
 import {
   formatPayPalAmount,
+  isPayPalSandboxCertUrl,
   type ObservedCapture,
   PAYPAL_CAPTURE_STATUSES,
   PAYPAL_ORDER_STATUSES,
@@ -147,6 +148,31 @@ export interface CreateOrderInput {
    * human approving the order. Our product never handles card numbers.
    */
   readonly sandboxTestCard?: typeof SANDBOX_TEST_CARD;
+}
+
+/**
+ * Input for PayPal's webhook signature POSTBACK (`POST /v1/notifications/verify-webhook-signature`,
+ * #22). `rawEvent` is the delivery body exactly as received: it is sent byte-for-byte as
+ * `webhook_event`, never re-serialized, so PayPal checks the event it actually signed. `webhookId`
+ * comes from OUR configuration (PAYPAL_WEBHOOK_ID), never from the request.
+ */
+export interface WebhookSignatureInput {
+  readonly authAlgo: string;
+  readonly certUrl: string;
+  readonly transmissionId: string;
+  readonly transmissionSig: string;
+  readonly transmissionTime: string;
+  readonly webhookId: string;
+  readonly rawEvent: string;
+}
+/** PayPal's `verification_status`. Only SUCCESS means the delivery is authentic. */
+export type WebhookSignatureStatus = "SUCCESS" | "FAILURE";
+/** Webhook bodies larger than this are not verified (PayPal events are a few KB). */
+export const MAX_WEBHOOK_BODY_CHARS = 128 * 1024;
+
+/** A request body that is already JSON text and must be sent exactly as is. */
+class RawJson {
+  constructor(readonly text: string) {}
 }
 
 export class SandboxOnlyError extends Error {
@@ -373,7 +399,12 @@ export class PayPalSandboxClient {
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           ...headers,
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body:
+          body === undefined
+            ? undefined
+            : body instanceof RawJson
+              ? body.text
+              : JSON.stringify(body),
       });
       if (!("kind" in raw) && raw.status === 401 && pass === 0 && !raw.afterUncertain) {
         // A 401 is a definite "not processed": drop THIS token (not one a concurrent caller just
@@ -499,6 +530,66 @@ export class PayPalSandboxClient {
         debugId: raw.debugId,
       };
     return this.#orderOutcome(order, raw.status === 200, raw.debugId, true);
+  }
+
+  // ---------------------------------------------------------------------------- Webhooks (#22)
+
+  /**
+   * Asks PayPal whether a webhook delivery is authentic (postback verification). Read-only at
+   * PayPal, so retrying it is safe. Outcomes: OK with "SUCCESS" or "FAILURE" (PayPal's answer);
+   * REJECTED (PayPal refused the verification request, e.g. an unknown webhook id); UNCERTAIN
+   * (network, timeout, 5xx, unreadable: ask again later); NOT_SENT (invalid input or no token).
+   * It says nothing about money: a verified delivery only tells the server to read PayPal back.
+   */
+  async verifyWebhookSignature(
+    input: WebhookSignatureInput,
+  ): Promise<PayPalResult<WebhookSignatureStatus>> {
+    if (!isPayPalSandboxCertUrl(input.certUrl))
+      return { kind: "NOT_SENT", cause: "cert URL is not on PayPal's sandbox domain" };
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(input.webhookId))
+      return { kind: "NOT_SENT", cause: "invalid webhook id" };
+    for (const [v, max] of [
+      [input.authAlgo, 64],
+      [input.transmissionId, 128],
+      [input.transmissionSig, 4096],
+      [input.transmissionTime, 64],
+    ] as const)
+      if (typeof v !== "string" || v.length === 0 || v.length > max || /[^\x21-\x7e]/.test(v))
+        return { kind: "NOT_SENT", cause: "invalid transmission header" };
+    if (typeof input.rawEvent !== "string" || input.rawEvent.length > MAX_WEBHOOK_BODY_CHARS)
+      return { kind: "NOT_SENT", cause: "webhook body missing or too large" };
+    // The raw text is spliced into the request, so it must be exactly ONE JSON object: JSON.parse
+    // succeeding on the whole string guarantees no extra keys can be smuggled next to webhook_id.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(input.rawEvent);
+    } catch {
+      return { kind: "NOT_SENT", cause: "webhook body is not JSON" };
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      return { kind: "NOT_SENT", cause: "webhook body is not a JSON object" };
+    const head = JSON.stringify({
+      auth_algo: input.authAlgo,
+      cert_url: input.certUrl,
+      transmission_id: input.transmissionId,
+      transmission_sig: input.transmissionSig,
+      transmission_time: input.transmissionTime,
+      webhook_id: input.webhookId,
+    });
+    const body = new RawJson(`${head.slice(0, -1)},"webhook_event":${input.rawEvent}}`);
+    const raw = await this.#api("POST", "/v1/notifications/verify-webhook-signature", {}, body);
+    if ("kind" in raw) return raw;
+    if (raw.status !== 200) return this.#failure(raw);
+    const status = (raw.json as { verification_status?: unknown } | null)?.verification_status;
+    if (status !== "SUCCESS" && status !== "FAILURE")
+      return {
+        kind: "UNCERTAIN",
+        cause: "MALFORMED_RESPONSE",
+        attempts: 1,
+        httpStatus: raw.status,
+        debugId: raw.debugId,
+      };
+    return { kind: "OK", value: status, replayed: false, debugId: raw.debugId };
   }
 
   /**
