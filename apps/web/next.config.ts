@@ -1,4 +1,9 @@
 import type { NextConfig } from "next";
+// One local secrets file for the whole repo: Next itself only reads apps/web/.env*, so load the
+// repo-root .env (or, in a worktree, the main checkout's) without overriding host-provided values.
+import { applyEnvFile } from "../../scripts/ops/env.mjs";
+
+applyEnvFile();
 
 const config: NextConfig = {
   // Workspace packages ship TypeScript source (exports point at src/*.ts), so Next compiles them.
