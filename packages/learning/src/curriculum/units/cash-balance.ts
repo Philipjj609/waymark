@@ -20,6 +20,8 @@ const fp = {
 const MIS_SAFE = "mis_cash_balance_safe_to_spend";
 const MIS_INCOMING = "mis_cash_balance_incoming_counts";
 const MIS_OWNED = "mis_cash_balance_owned_items_count";
+// Canonical outcome-bias belief, owned by the opportunity-cost unit (one belief, one home).
+const MIS_OUTCOME = "mis_opportunity_cost_outcome";
 
 const FACT_DEFINITION = "fact_cash_balance_definition";
 const FACT_SNAPSHOT = "fact_cash_balance_snapshot";
@@ -89,7 +91,7 @@ export const cashBalanceFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "SIMULATION_RULE",
     statement:
-      "In Waymark, your cash balance changes only when a payment, a purchase or an income is recorded. Receiving a bill or deferring it leaves cash where it was, and a payment or purchase that needs more cash than you hold is rejected, so nothing moves. Your salary is not recorded anywhere until the day it arrives.",
+      "In Waymark, your cash balance changes only when a payment, a purchase or an income is recorded. Receiving a bill or deferring it leaves cash where it was, and a payment or purchase that needs more cash than you hold is refused, so nothing moves. Your salary is not recorded anywhere until the day it arrives.",
     support: [
       {
         sourceId: "src_waymark_agents_invariants",
@@ -126,9 +128,9 @@ export const cashBalanceUnit: ConceptUnit = {
   conceptId: id,
   explanation: [
     "Your cash balance is the money you hold right now and can use to pay today. That means notes and coins, plus money in an account you can spend from straight away.",
-    "Money you expect to receive, such as a salary on its way, is not cash yet. Things you own, such as a laptop, are not cash either: you cannot pay a bill with them unless you sell them first.",
+    "Money you expect to receive, such as a salary on its way, is not cash yet. Things you own, such as a laptop, are not cash either: you cannot pay a bill with them unless you sell them first, and Waymark has no way to sell an item yet.",
     "The balance tells you what you hold, not what is safe to spend. Bills due before your next income come off first, and everyday costs such as food need a share too.",
-    "In Waymark, cash changes only when a payment, a purchase or an income is recorded. Receiving a bill or deferring it leaves your cash where it was, and a payment you cannot cover is rejected, so nothing moves.",
+    "In Waymark, cash changes only when a payment, a purchase or an income is recorded. Receiving a bill or deferring it leaves your cash where it was, and a payment you cannot cover is refused, so nothing moves.",
   ],
   inTheSimulation:
     "In Waymark, your cash balance is the Cash account in your personal books, counted in fictional euros.",
@@ -160,7 +162,7 @@ export const cashBalanceUnit: ConceptUnit = {
       misconceptionId: MIS_SAFE,
       statement: "Cash balance equals what is safe to spend.",
       whyPlausible:
-        "The balance is the clearest number on screen, and it is money you really hold, so treating all of it as safe to spend feels natural.",
+        "The balance is the clearest number on screen, and it is money you actually hold, so treating all of it as safe to spend feels natural.",
       correction:
         "Look at the bills due before your next income and take them away first. What is left is the most you could spend without missing one of those bills, and it still has to cover everyday costs such as food and any later bill your next income will not cover.",
       factIds: [FACT_SNAPSHOT],
@@ -180,7 +182,7 @@ export const cashBalanceUnit: ConceptUnit = {
       whyPlausible:
         "A laptop or a phone is worth something and could be sold, so it can feel like part of your money.",
       correction:
-        "An item can have value without being cash. Buying it turned cash into the item, and you cannot pay a bill with it unless you sell it first.",
+        "An item can have value without being cash. Buying it turned cash into the item, and you cannot pay a bill with it unless you sell it first. Waymark has no way to sell an item yet.",
       factIds: [FACT_DEFINITION, FACT_SIM],
     },
   ],
@@ -205,7 +207,7 @@ export const cashBalanceUnit: ConceptUnit = {
         },
       },
       {
-        text: "Is {{afterPhone}} safe to spend? Check what is due before your next income. Rent of {{rentAmount}} is due on {{rentDue}}, and your salary of {{salaryAmount}} (already after tax) only arrives on {{salaryDay}}.",
+        text: "Is {{afterPhone}} safe to spend? Check what is due before your next income. Rent of {{rentAmount}} is due on {{rentDue}}, and your net salary (take-home pay) of {{salaryAmount}} only arrives on {{salaryDay}}.",
       },
       {
         text: "The rent needs {{rentAmount}} and you hold {{afterPhone}}, so you are {{shortfall}} short on {{rentDue}}. The balance looked like spending money, but all of it, and more, was already needed for the rent.",
@@ -215,7 +217,7 @@ export const cashBalanceUnit: ConceptUnit = {
         },
       },
       {
-        text: "In Waymark, the game pauses on {{rentDue}} and asks you to pay or defer the rent. A payment you cannot cover is rejected and nothing moves. Deferring makes the rent overdue but still owed, with no late fee in this version. In real life, paying late can bring fees and cost trust.",
+        text: "In Waymark, time stops on {{rentDue}} until you pay or defer the rent. A payment you cannot cover is refused and nothing moves. Deferring makes the rent overdue but still owed, with no late fee in this version, and you can pay it later, for example from the salary. In real life, paying rent late can bring late fees, a worse relationship with your landlord or a worse credit record, and risk to your home.",
       },
     ],
   },
@@ -253,7 +255,7 @@ export const cashBalanceUnit: ConceptUnit = {
         { itemId: "held", text: "The {{cashNow}} in your account", categoryId: "cash_now" },
         {
           itemId: "salary",
-          text: "Your salary of {{salaryAmount}} (already after tax), arriving on {{salaryDay}}",
+          text: "Your net salary (take-home pay) of {{salaryAmount}}, arriving on {{salaryDay}}",
           categoryId: "not_cash",
           misconceptionId: MIS_INCOMING,
         },
@@ -270,9 +272,9 @@ export const cashBalanceUnit: ConceptUnit = {
         },
       ],
       feedbackCorrect:
-        "Right. Only the money in your account can pay today. The salary has not arrived, the laptop is an item, and the bill is money you owe.",
+        "Right. Only the money in your account can pay today. The salary has not arrived, the laptop is an item you own, and the bill is money you owe.",
       feedbackIncorrect:
-        "Ask of each item: could I hand this over as payment right now? The salary is still on its way, the laptop would have to be sold first, and the bill is something you owe, not something you hold.",
+        "Ask of each item: could I hand this over as payment right now? The salary is still on its way, the laptop is an item you own (and Waymark has no way to sell an item yet), and the bill is something you owe, not something you hold.",
     },
     {
       exerciseId: "ex_cash_balance_after_payments",
@@ -292,7 +294,7 @@ export const cashBalanceUnit: ConceptUnit = {
         salaryDay: fp.salaryDay,
       },
       prompt:
-        "You started the month with {{openingCash}} in cash. On the first day you bought a laptop for {{laptopCost}}. On {{phoneDue}} you paid the phone bill of {{phoneAmount}}. Your salary of {{salaryAmount}} (already after tax) arrives on {{salaryDay}}. What is your cash balance at the end of {{phoneDue}}?",
+        "You started the month with {{openingCash}} in cash. On the first day you bought a laptop for {{laptopCost}}. On {{phoneDue}} you paid the phone bill of {{phoneAmount}}. Your net salary (take-home pay) of {{salaryAmount}} arrives on {{salaryDay}}. What is your cash balance at the end of {{phoneDue}}?",
       answer: {
         minus: [
           { minus: [{ param: "openingCash" }, { param: "laptopCost" }] },
@@ -306,7 +308,6 @@ export const cashBalanceUnit: ConceptUnit = {
       diagnostics: [
         {
           expr: { minus: [{ param: "openingCash" }, { param: "phoneAmount" }] },
-          misconceptionId: MIS_OWNED,
           feedback:
             "It looks like the laptop payment was left out. Buying the laptop turned {{laptopCost}} of cash into an item, so it comes off too.",
         },
@@ -359,7 +360,7 @@ export const cashBalanceUnit: ConceptUnit = {
         },
       ],
       prompt:
-        "It is the end of {{phoneDue}}. You have bought the laptop and paid the phone bill, and you now hold {{afterPhone}} in cash. Rent of {{rentAmount}} is due on {{rentDue}}. Your salary of {{salaryAmount}} (already after tax) arrives on {{salaryDay}}. Could you spend any of your {{afterPhone}} on something new today and still pay the rent in full on its due date?",
+        "It is the end of {{phoneDue}}. You have bought the laptop and paid the phone bill, and you now hold {{afterPhone}} in cash. Rent of {{rentAmount}} is due on {{rentDue}}. Your net salary (take-home pay) of {{salaryAmount}} arrives on {{salaryDay}}. Could you spend any of your {{afterPhone}} on something new today and still pay the rent in full on its due date?",
       answers: [
         {
           choiceId: "no",
@@ -381,7 +382,7 @@ export const cashBalanceUnit: ConceptUnit = {
           text: "Yes. The salary arrives soon and will make up for anything I spend.",
           correct: false,
           feedback:
-            "The salary arrives on {{salaryDay}}, after the rent is due on {{rentDue}}. Deferring the rent and paying it from the salary is a real option in Waymark, but that is paying late, and this question asks about paying on time.",
+            "The salary arrives on {{salaryDay}}, after the rent is due on {{rentDue}}. Deferring the rent and paying it from the salary is an option in Waymark, but that is paying late, and this question asks about paying on time.",
           misconceptionId: MIS_INCOMING,
         },
       ],
@@ -392,7 +393,7 @@ export const cashBalanceUnit: ConceptUnit = {
           text: "Rent is due on {{rentDue}}, before the salary, and it needs more than I hold.",
           correct: true,
           feedback:
-            "Yes. You compared the cash with what is due before the next income, and every euro spent now would make the gap bigger. In real life you could often pay part of the rent now; in Waymark a bill is paid in full or deferred, but the reasoning is the same.",
+            "Yes. You compared the cash with what is due before the next income, and every euro spent now would make the gap bigger. In real life a landlord may accept part of the rent now; in Waymark a bill is paid in full or deferred, but the reasoning is the same.",
         },
         {
           choiceId: "never_before_payday",
@@ -413,7 +414,7 @@ export const cashBalanceUnit: ConceptUnit = {
           text: "The salary of {{salaryAmount}} arrives on {{salaryDay}}, so anything I spend now is replaced.",
           correct: false,
           feedback:
-            "The salary is real but late for this bill. It arrives on {{salaryDay}}, and the rent is due on {{rentDue}}.",
+            "The salary will come, but too late for this bill. It arrives on {{salaryDay}}, and the rent is due on {{rentDue}}.",
           misconceptionId: MIS_INCOMING,
         },
         {
@@ -422,6 +423,7 @@ export const cashBalanceUnit: ConceptUnit = {
           correct: false,
           feedback:
             "Things working out later is not a plan. Judge the choice by what you know now: the rent is due before the salary, so spending now means paying the rent late.",
+          misconceptionId: MIS_OUTCOME,
         },
       ],
     },
@@ -471,7 +473,6 @@ export const cashBalanceUnit: ConceptUnit = {
               { param: "supplierPaid" },
             ],
           },
-          misconceptionId: MIS_OWNED,
           feedback:
             "It looks like the table was left out. The table is something Amira owns now, but the {{tableCost}} she paid for it has left her cash.",
         },
@@ -513,9 +514,8 @@ export const cashBalanceUnit: ConceptUnit = {
               { param: "spotFee" },
             ],
           },
-          misconceptionId: MIS_SAFE,
           feedback:
-            "It looks like the spot fee was taken off, but it is not due until {{spotFeeDue}}. The balance counts what she holds; setting money aside for the fee is a separate check.",
+            "It looks like the spot fee was taken off too. It is not due until {{spotFeeDue}}, so that money is still in her cash at the end of {{payDay}}. Setting money aside for the fee is a sensible, separate check.",
         },
       ],
     },

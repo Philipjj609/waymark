@@ -3,10 +3,13 @@ import type { ConceptUnit, Expr, Params, ReviewedFact } from "../types.js";
 
 /**
  * Liquidity (#17): the heart of the FP-30 demo. Buying the laptop on the first day leaves
- * too little cash on rent day even though net worth (cash plus the laptop at cost, minus the
- * rent owed) stays positive and the salary is on its way. The salary is never counted as net
- * worth: the engine records it only when it is paid. Every figure is rendered from
- * fixture-checked params.
+ * too little cash on rent day even though a simple count of net worth (cash plus the laptop at
+ * what was paid for it, minus the rent now due) stays positive and the salary is on its way.
+ * The salary is left out of that count because it has not arrived yet; counting it would not
+ * change rent day's cash gap. The count is a hand calculation, not something Waymark's books
+ * record (a bill posts nothing until it is paid). The purchase is a trade-off, not an error:
+ * this unit teaches seeing the gap before buying; whether the laptop is worth it belongs to
+ * opportunity cost. Every figure is rendered from fixture-checked params.
  */
 const id = "cpt_liquidity" as ConceptId;
 
@@ -17,6 +20,9 @@ const FACT_ENGINE = "fact_liquidity_engine";
 const MIS_WEALTH = "mis_liquidity_wealth_positive";
 const MIS_MONTHLY = "mis_liquidity_monthly_total";
 const MIS_SALE = "mis_liquidity_instant_sale";
+/** Canonical ids owned by cash-balance (R2): referenced here, not redefined. */
+const MIS_INCOMING = "mis_cash_balance_incoming_counts";
+const MIS_OWNED = "mis_cash_balance_owned_items_count";
 
 const OBJ_GAP = "obj_liquidity_purchase_gap";
 const OBJ_NET_WORTH = "obj_liquidity_net_worth";
@@ -69,7 +75,7 @@ export const liquidityFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "GENERAL_PRINCIPLE",
     statement:
-      "When cash runs short before a due date, each way out has a cost: paying late once income arrives, borrowing to pay on time, selling something, or agreeing a later date or a partial payment with the creditor. Avoiding the purchase in the first place is the planning lesson, not a way out. In real life paying late can bring fees, damage a credit record and, for rent or utilities, put the home or the service at risk; how serious it is depends on the bill, the contract and the country.",
+      "When cash runs short before a due date, each way out has a cost: paying late once income arrives, borrowing to pay on time, selling something, or agreeing a later date or a partial payment with the creditor. Seeing the gap before a purchase is the planning lesson; whether the purchase is worth the gap it opens is a separate trade-off. In real life paying late can bring fees, damage a credit record and, for rent or utilities, put the home or the service at risk; how serious it is depends on the bill, the contract and the country.",
     support: [
       {
         sourceId: "src_cfpb_behind_on_bills",
@@ -92,7 +98,7 @@ export const liquidityFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "SIMULATION_RULE",
     statement:
-      "In Waymark a purchase or a bill payment that needs more cash than the person holds is rejected and nothing moves. Time stops at a blocking bill and the player pays or defers it; a deferred bill becomes overdue, is still owed, carries no late fee in this version, and can be paid later.",
+      "In Waymark a purchase or a bill payment that needs more cash than the person holds is refused and nothing moves. Time stops at a blocking bill and the player pays or defers it; a deferred bill becomes overdue, is still owed, carries no late fee in this version, and can be paid later.",
     support: [
       {
         sourceId: "src_waymark_engine",
@@ -158,7 +164,7 @@ export const liquidityUnit: ConceptUnit = {
     "When a gap opens, every way out has a cost. In Waymark a deferred bill becomes overdue with no late fee in this version. In real life paying late can bring fees, damage your credit record and, for rent or utilities, put your home or the service at risk; the rules differ by country and contract.",
   ],
   inTheSimulation:
-    "In Waymark, time stops at each bill on its due date; if you try to pay with less cash than is due, the payment is rejected and nothing moves, so you defer the bill, which makes it overdue, and pay it once more cash has arrived.",
+    "In Waymark, time stops at each bill on its due date; if you try to pay with less cash than is due, the payment is refused and nothing moves, so you defer the bill, which makes it overdue, and pay it once more cash has arrived.",
   objectives: [
     {
       objectiveId: OBJ_GAP,
@@ -241,17 +247,17 @@ export const liquidityUnit: ConceptUnit = {
         derive: { name: "rentGap", expr: gapExpr("rentAmount", "cashAfterPhone") },
       },
       {
-        text: "Your take-home (net) salary of {{salaryAmount}} arrives on {{salaryDay}}, after the rent is due. It cannot close the gap on {{rentDue}}, even though it is larger than the rent.",
+        text: "Your net salary (take-home pay) of {{salaryAmount}} arrives on {{salaryDay}}, after the rent is due. It cannot close the gap on {{rentDue}}, even though it is larger than the rent.",
       },
       {
-        text: "Without the laptop you would still hold {{cashWithoutLaptop}} after paying rent on {{rentDue}}. The purchase created the gap, not the month's totals.",
+        text: "Without the laptop you would still hold {{cashWithoutLaptop}} after paying rent on {{rentDue}}. The purchase created the gap, not the month's totals. The point is to see the gap before you buy; whether the laptop is worth it is a trade-off you weigh.",
         derive: {
           name: "cashWithoutLaptop",
           expr: { minus: [{ minus: [p("openingCash"), p("phoneAmount")] }, p("rentAmount")] },
         },
       },
       {
-        text: "On {{rentDue}} you hold {{cashAfterPhone}} and a laptop recorded at its cost of {{laptopCost}}, and you owe {{rentAmount}}. Your net worth at cost is {{netWorthAtCost}}: positive, because buying the laptop swapped cash for an item. You are short of cash on one particular day, and that is what liquidity measures. The salary is not part of this figure: in Waymark it is recorded only when it is paid.",
+        text: "Now a simple count of your net worth on {{rentDue}}: your cash of {{cashAfterPhone}}, plus the laptop at what you paid for it, {{laptopCost}}, minus the rent of {{rentAmount}} now due. That gives {{netWorthAtCost}}: positive, because buying the laptop swapped cash for an item. The salary is left out because it has not arrived yet, and even if you counted it, your cash gap on {{rentDue}} would be the same. You are short of cash on one particular day, and that is what liquidity measures.",
         derive: {
           name: "netWorthAtCost",
           expr: { minus: [{ sum: [p("cashAfterPhone"), p("laptopCost")] }, p("rentAmount")] },

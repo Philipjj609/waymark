@@ -7,6 +7,8 @@ import type { ConceptUnit, DayParam, MoneyParam, ReviewedFact } from "../types.j
  * (ADR-0003 I-014), so no item scores a deferral as a mistake by itself (invariant 9).
  * Bills stay SCHEDULED (not payable) until their due day in the engine, so the text says a
  * bill is "known" from the start of the month, never "already owed".
+ * Leaving out a bill or adding one too many when totalling is a slip, not a belief, so those
+ * diagnostics carry no misconceptionId (#17 decision R1).
  */
 const id = "cpt_obligation" as ConceptId;
 
@@ -48,9 +50,9 @@ const salaryDay: DayParam = { kind: "day", day: 15, ref: "fp30.salary.day" };
 const MIS_ONLY_ON_PAYMENT = "mis_obligation_only_on_payment";
 const MIS_DEFER_CANCELS = "mis_obligation_defer_cancels";
 const MIS_OVERDUE_SAME = "mis_obligation_overdue_same";
-const MIS_DUE_DAY_ONLY = "mis_obligation_due_day_only";
-const MIS_ALL_BILLS = "mis_obligation_ignores_due_date";
 const MIS_PAYDAY_IS_DUE = "mis_obligation_payday_sets_due_date";
+// Canonical outcome-bias belief, owned by the opportunity-cost unit (#17 decision R2).
+const MIS_OUTCOME = "mis_opportunity_cost_outcome";
 
 const FACT_OWED = "fact_obligation_owed_before_paid";
 const FACT_LATE = "fact_obligation_late_consequences_vary";
@@ -194,25 +196,8 @@ export const obligationUnit: ConceptUnit = {
       whyPlausible:
         "In Waymark an overdue bill costs no extra in this version, so it can look no different from a bill that is still on time.",
       correction:
-        "An overdue bill is late: Waymark records that it was not paid when it fell due. In real life lateness can bring charges or other consequences, even though Waymark adds no fee in this version.",
+        "An overdue bill is late: Waymark marks it overdue because it was not paid when it fell due. In real life lateness can bring charges or other consequences, even though Waymark adds no fee in this version.",
       factIds: [FACT_LATE, FACT_DEFER],
-    },
-    {
-      misconceptionId: MIS_DUE_DAY_ONLY,
-      statement: "Only the bill due on that exact day needs cash by then.",
-      whyPlausible: "The question names one day, so it is easy to look only at the bill due on it.",
-      correction:
-        "Everything due on or before that day must be covered by then, including bills that fell due earlier.",
-      factIds: [FACT_OWED],
-    },
-    {
-      misconceptionId: MIS_ALL_BILLS,
-      statement: "Every bill on the list needs cash by that day.",
-      whyPlausible:
-        "All the bills are already known, so it can seem that all of them must be paid at once.",
-      correction:
-        "Each bill needs its cash by its own due date. A bill due after that day does not have to be paid by then, though you still plan for it.",
-      factIds: [FACT_OWED],
     },
     {
       misconceptionId: MIS_PAYDAY_IS_DUE,
@@ -278,7 +263,7 @@ export const obligationUnit: ConceptUnit = {
       simulationLink: "FP30_FIXTURE",
       params: { rent, rentDue, salaryDay },
       prompt:
-        "Your landlord's notice says: 'Rent for this month: {{rent}}. Pay to: your landlord. Due by: {{rentDue}}.' Your salary arrives on {{salaryDay}}. Sort each detail: amount owed, who is owed, due date, or not set by the notice.",
+        "Your landlord's notice says: 'Rent for this month: {{rent}}. Pay to: your landlord. Due by: {{rentDue}}.' Your net salary (take-home pay) arrives on {{salaryDay}}. Sort each detail: amount owed, who is owed, due date, or not set by the notice.",
       categories: [
         { categoryId: "amount", label: "Amount owed" },
         { categoryId: "creditor", label: "Who is owed" },
@@ -327,9 +312,8 @@ export const obligationUnit: ConceptUnit = {
       diagnostics: [
         {
           expr: { param: "rent" },
-          misconceptionId: MIS_DUE_DAY_ONLY,
           feedback:
-            "That is the rent alone. The phone bill falls due earlier, on {{phoneDue}}, so it also has to be covered by {{rentDue}}.",
+            "It looks like the phone bill was left out. It falls due earlier, on {{phoneDue}}, so it also has to be covered by {{rentDue}}.",
         },
       ],
     },
@@ -396,7 +380,7 @@ export const obligationUnit: ConceptUnit = {
           correct: false,
           feedback:
             "A calm outcome does not show the rent is paid off. Check the bill's state: it stays overdue until you pay it.",
-          misconceptionId: MIS_DEFER_CANCELS,
+          misconceptionId: MIS_OUTCOME,
         },
         {
           choiceId: "fee_keeps_it_owed",
@@ -410,7 +394,7 @@ export const obligationUnit: ConceptUnit = {
           text: "Paying late is the same as paying on time when no fee is added.",
           correct: false,
           feedback:
-            "No fee in Waymark does not make late the same as on time. The bill is recorded as overdue, and in real life lateness can bring fees or other consequences.",
+            "No fee in Waymark does not make late the same as on time. The bill is marked overdue, and in real life lateness can bring fees or other consequences.",
           misconceptionId: MIS_OVERDUE_SAME,
         },
       ],
@@ -434,7 +418,7 @@ export const obligationUnit: ConceptUnit = {
         courseDue: { kind: "day", day: 20 },
       },
       prompt:
-        "Omar shares a flat and keeps a list of his bills: a gym membership of {{gym}} due on {{gymDue}}, his share of the electricity, {{power}}, due on {{powerDue}}, and a course instalment of {{course}} due on {{courseDue}}. How much falls due on or before {{powerDue}}?",
+        "Ravi shares a flat and keeps a list of his bills: a gym membership of {{gym}} due on {{gymDue}}, his share of the electricity, {{power}}, due on {{powerDue}}, and a course instalment of {{course}} due on {{courseDue}}. How much falls due on or before {{powerDue}}?",
       answer: { sum: [{ param: "gym" }, { param: "power" }] },
       feedbackCorrect:
         "Correct. The gym and electricity bills are both due by {{powerDue}}; the course instalment comes later.",
@@ -443,15 +427,13 @@ export const obligationUnit: ConceptUnit = {
       diagnostics: [
         {
           expr: { param: "power" },
-          misconceptionId: MIS_DUE_DAY_ONLY,
           feedback:
-            "That is only the bill due on {{powerDue}}. The gym membership fell due earlier, on {{gymDue}}, so it counts too.",
+            "It looks like the gym membership was left out. It fell due earlier, on {{gymDue}}, so it counts too.",
         },
         {
           expr: { sum: [{ param: "gym" }, { param: "power" }, { param: "course" }] },
-          misconceptionId: MIS_ALL_BILLS,
           feedback:
-            "That includes the course instalment, which is not due until {{courseDue}}. Keep only the bills due on or before {{powerDue}}.",
+            "It looks like the course instalment was added too. It is not due until {{courseDue}}, so keep only the bills due on or before {{powerDue}}.",
         },
       ],
     },
@@ -472,21 +454,21 @@ export const obligationUnit: ConceptUnit = {
         wagesDay: { kind: "day", day: 9 },
       },
       prompt:
-        "In real life, Priya's water bill of {{water}} is due on {{waterDue}}, but her wages of {{wages}} only arrive on {{wagesDay}}. She decides to pay the bill late, once her wages arrive. Which statement is most accurate?",
+        "In real life, Nadia's water bill of {{water}} is due on {{waterDue}}, but her wages of {{wages}} only arrive on {{wagesDay}}. She decides to pay the bill late, once her wages arrive. Which statement is most accurate?",
       choices: [
         {
           choiceId: "still_owed_terms",
           text: "She still owes the full bill; its terms and local rules decide what paying late costs her.",
           correct: true,
           feedback:
-            "Yes. The debt stays, and depending on the bill, lateness can add fees or interest or lead to other consequences.",
+            "Yes. The debt stays, and depending on the bill, paying late can add late fees, harm her credit record or her relationship with the water company, or put the service at risk.",
         },
         {
           choiceId: "gone_after_date",
           text: "Once the due date passes unpaid, the bill usually lapses and cannot be collected.",
           correct: false,
           feedback:
-            "Missing a due date does not cancel a bill. The amount is still owed until it is paid.",
+            "Missing a due date does not cancel a bill. The amount is still owed until it is paid, and a later date only counts if the water company agrees to it.",
           misconceptionId: MIS_DEFER_CANCELS,
         },
         {
@@ -494,7 +476,7 @@ export const obligationUnit: ConceptUnit = {
           text: "Paying late usually costs nothing extra if she pays the full amount in the end.",
           correct: false,
           feedback:
-            "Waymark adds no late fee in this version, but real bills can. A late bill is not the same as one paid on time.",
+            "Paying late costs nothing extra only in Waymark, in this version. Real bills can add late fees or other costs, so a late bill is not the same as one paid on time.",
           misconceptionId: MIS_OVERDUE_SAME,
         },
         {
