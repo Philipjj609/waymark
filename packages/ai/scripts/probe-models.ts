@@ -32,7 +32,7 @@ import {
   snapshot,
   type WorldState,
 } from "@fle/simulation";
-import { explainOutcome, NebiusTutorProvider } from "../src/index.js";
+import { DEFAULT_MAX_TOKENS, explainOutcome, NebiusTutorProvider } from "../src/index.js";
 
 type Body = Parameters<typeof playerCommand>[2];
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -95,7 +95,7 @@ function build(script: Body[]) {
 }
 
 const args = process.argv.slice(2);
-const runs = Number(args[args.indexOf("--runs") + 1]) || 4;
+const runs = args.includes("--runs") ? Number(args[args.indexOf("--runs") + 1]) : 4;
 if (!Number.isInteger(runs) || runs < 1 || runs > 10) throw new Error("--runs must be 1..10");
 /**
  * Spending guard: the probe refuses to start if its WORST-CASE cost (every lesson needing a repair,
@@ -104,8 +104,9 @@ if (!Number.isInteger(runs) || runs < 1 || runs > 10) throw new Error("--runs mu
  */
 const maxUsd = args.includes("--max-usd") ? Number(args[args.indexOf("--max-usd") + 1]) : 0.25;
 if (!(maxUsd > 0 && maxUsd <= 5)) throw new Error("--max-usd must be in (0, 5]");
+// Input is our own bounded context (measured <1.2k); output is hard-capped by max_tokens.
 const WORST_IN_TOKENS = 3000;
-const WORST_OUT_TOKENS = 4000;
+const WORST_OUT_TOKENS = DEFAULT_MAX_TOKENS;
 const outFile = args.includes("--out") ? args[args.indexOf("--out") + 1] : undefined;
 const models = args.filter(
   (a, i) =>
@@ -158,7 +159,8 @@ const worstCase = models.reduce((sum, m) => {
 process.stderr.write(
   `plan: ${models.length} model(s) x ${lessonsPerModel} lessons, worst case $${worstCase.toFixed(4)} (cap $${maxUsd})\n`,
 );
-if (worstCase > maxUsd) {
+// NaN-safe: refuse unless the worst case is a finite number within the cap.
+if (!(Number.isFinite(worstCase) && worstCase <= maxUsd)) {
   throw new Error(
     `worst-case cost $${worstCase.toFixed(4)} exceeds --max-usd ${maxUsd}; nothing was called`,
   );
@@ -171,11 +173,29 @@ const debug: Array<{ model: string; status: number; content: unknown }> = [];
 const results: Record<string, unknown>[] = [];
 for (const model of models) {
   const calls: Array<{ ms: number; inTok: number; outTok: number; status: number }> = [];
+  const p = prices.get(model) as { in: number; out: number };
+  const perCallWorst = WORST_IN_TOKENS * p.in + WORST_OUT_TOKENS * p.out;
   const fetchImpl = (async (url: string, init: RequestInit) => {
+    // Checked before EVERY call, with that call's worst case, so the cap can't be overshot.
+    if (!(spentUsd + perCallWorst <= maxUsd)) {
+      throw new Error(`spend cap: next call could exceed $${maxUsd}; stopping`);
+    }
     const t0 = performance.now();
-    const res = await fetch(url, init);
+    let res: Response;
+    try {
+      res = await fetch(url, init);
+    } catch (e) {
+      spentUsd += perCallWorst; // aborted or failed: assume it was billed in full
+      throw e;
+    }
     const ms = performance.now() - t0;
-    const text = await res.text();
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (e) {
+      spentUsd += perCallWorst; // body aborted (timeout): assume billed in full
+      throw e;
+    }
     let usage = { prompt_tokens: 0, completion_tokens: 0 };
     try {
       usage = (JSON.parse(text) as { usage?: typeof usage }).usage ?? usage;
@@ -186,8 +206,13 @@ for (const model of models) {
       outTok: usage.completion_tokens,
       status: res.status,
     });
-    const price = prices.get(model);
-    if (price) spentUsd += usage.prompt_tokens * price.in + usage.completion_tokens * price.out;
+    // No usage reported: count the worst case rather than nothing.
+    spentUsd +=
+      usage.prompt_tokens || usage.completion_tokens
+        ? usage.prompt_tokens * p.in + usage.completion_tokens * p.out
+        : res.ok
+          ? perCallWorst
+          : 0;
     if (debugFile) {
       // Model content only (never the request, which carries the Authorization header).
       let content: unknown = null;

@@ -12,6 +12,12 @@ export interface NebiusConfig {
    * gets plain `json_object` mode.
    */
   readonly structuredOutputs?: boolean;
+  /**
+   * Hard cap on completion tokens per call (reasoning + answer), so a call's worst-case cost is
+   * bounded. Default 3000: the #6 probe measured ~950 average for gpt-oss-120b. A truncated
+   * reply has no usable content and falls back.
+   */
+  readonly maxTokens?: number;
   /** Injected clock for the rate-limit cool-down (tests). Defaults to Date.now. */
   readonly now?: () => number;
 }
@@ -19,6 +25,7 @@ export interface NebiusConfig {
 /** Cool-down after 429/503 when the provider sends no usable Retry-After, and its upper bound. */
 const DEFAULT_COOL_DOWN_MS = 30_000;
 const MAX_COOL_DOWN_MS = 300_000;
+export const DEFAULT_MAX_TOKENS = 3000;
 
 /** Nebius Token Factory via its OpenAI-compatible chat-completions API. No SDK. */
 export class NebiusTutorProvider implements TutorProvider {
@@ -48,6 +55,7 @@ export class NebiusTutorProvider implements TutorProvider {
       body: JSON.stringify({
         model: this.cfg.model,
         temperature: 0,
+        max_tokens: this.cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
         response_format:
           this.cfg.structuredOutputs !== false && request.responseSchema
             ? {
