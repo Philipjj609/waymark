@@ -96,13 +96,24 @@ function build(script: Body[]) {
 
 const args = process.argv.slice(2);
 const runs = Number(args[args.indexOf("--runs") + 1]) || 4;
+if (!Number.isInteger(runs) || runs < 1 || runs > 10) throw new Error("--runs must be 1..10");
+/**
+ * Spending guard: the probe refuses to start if its WORST-CASE cost (every lesson needing a repair,
+ * at a pessimistic token count, priced from the account's own /models) exceeds --max-usd
+ * (default 0.25), and stops mid-run if the measured spend crosses it.
+ */
+const maxUsd = args.includes("--max-usd") ? Number(args[args.indexOf("--max-usd") + 1]) : 0.25;
+if (!(maxUsd > 0 && maxUsd <= 5)) throw new Error("--max-usd must be in (0, 5]");
+const WORST_IN_TOKENS = 3000;
+const WORST_OUT_TOKENS = 4000;
 const outFile = args.includes("--out") ? args[args.indexOf("--out") + 1] : undefined;
 const models = args.filter(
   (a, i) =>
     !a.startsWith("--") &&
     args[i - 1] !== "--runs" &&
     args[i - 1] !== "--out" &&
-    args[i - 1] !== "--debug",
+    args[i - 1] !== "--debug" &&
+    args[i - 1] !== "--max-usd",
 );
 if (!models.length) throw new Error("pass at least one model id");
 
@@ -137,6 +148,23 @@ const pct = (xs: number[], p: number) => {
   return s.length ? (s[Math.min(s.length - 1, Math.ceil((p / 100) * s.length) - 1)] ?? 0) : 0;
 };
 
+const unknown = models.filter((m) => !prices.has(m));
+if (unknown.length) throw new Error(`not available to this account: ${unknown.join(", ")}`);
+const lessonsPerModel = Object.keys(SCENARIOS).length * runs;
+const worstCase = models.reduce((sum, m) => {
+  const p = prices.get(m) as { in: number; out: number };
+  return sum + lessonsPerModel * 2 * (WORST_IN_TOKENS * p.in + WORST_OUT_TOKENS * p.out);
+}, 0);
+process.stderr.write(
+  `plan: ${models.length} model(s) x ${lessonsPerModel} lessons, worst case $${worstCase.toFixed(4)} (cap $${maxUsd})\n`,
+);
+if (worstCase > maxUsd) {
+  throw new Error(
+    `worst-case cost $${worstCase.toFixed(4)} exceeds --max-usd ${maxUsd}; nothing was called`,
+  );
+}
+let spentUsd = 0;
+
 const debugFile = args.includes("--debug") ? args[args.indexOf("--debug") + 1] : undefined;
 const debug: Array<{ model: string; status: number; content: unknown }> = [];
 
@@ -158,6 +186,8 @@ for (const model of models) {
       outTok: usage.completion_tokens,
       status: res.status,
     });
+    const price = prices.get(model);
+    if (price) spentUsd += usage.prompt_tokens * price.in + usage.completion_tokens * price.out;
     if (debugFile) {
       // Model content only (never the request, which carries the Authorization header).
       let content: unknown = null;
@@ -188,6 +218,8 @@ for (const model of models) {
     for (let r = 0; r < runs; r++) {
       const before = calls.length;
       const t0 = performance.now();
+      if (spentUsd > maxUsd)
+        throw new Error(`spend cap reached ($${spentUsd.toFixed(4)}); stopping`);
       const lesson = await explainOutcome({
         snapshot: s.snap,
         events: s.events,
