@@ -164,7 +164,7 @@ export const liquidityUnit: ConceptUnit = {
     "When a gap opens, every way out has a cost. In Waymark a deferred bill becomes overdue with no late fee in this version. In real life paying late can bring fees, damage your credit record and, for rent or utilities, put your home or the service at risk; the rules differ by country and contract.",
   ],
   inTheSimulation:
-    "In Waymark, time stops at each bill on its due date; if you try to pay with less cash than is due, the payment is refused and nothing moves, so you defer the bill, which makes it overdue, and pay it once more cash has arrived.",
+    "In Waymark, time stops at each bill on its due date; if you try to pay with less cash than is due, the payment is refused and nothing moves, and you can defer the bill instead, which makes it overdue, and pay it once more cash has arrived.",
   objectives: [
     {
       objectiveId: OBJ_GAP,
@@ -257,7 +257,7 @@ export const liquidityUnit: ConceptUnit = {
         },
       },
       {
-        text: "Now a simple count of your net worth on {{rentDue}}: your cash of {{cashAfterPhone}}, plus the laptop at what you paid for it, {{laptopCost}}, minus the rent of {{rentAmount}} now due. That gives {{netWorthAtCost}}: positive, because buying the laptop swapped cash for an item. The salary is left out because it has not arrived yet, and even if you counted it, your cash gap on {{rentDue}} would be the same. You are short of cash on one particular day, and that is what liquidity measures.",
+        text: "Now a simple count of your net worth on {{rentDue}}: your cash of {{cashAfterPhone}}, plus the laptop at what you paid for it, {{laptopCost}}, minus the rent of {{rentAmount}} now due. That gives {{netWorthAtCost}}: positive, because buying the laptop swapped cash for an item. The salary is left out because it is pay for work you have not finished yet, so nobody owes it to you yet; and even if you counted it, your cash gap on {{rentDue}} would be the same. You are short of cash on one particular day, and that is what liquidity measures.",
         derive: {
           name: "netWorthAtCost",
           expr: { minus: [{ sum: [p("cashAfterPhone"), p("laptopCost")] }, p("rentAmount")] },
@@ -287,7 +287,7 @@ export const liquidityUnit: ConceptUnit = {
       },
       derived: [{ name: "cashAfterPhone", expr: cashAfterPhoneExpr }],
       prompt:
-        "You start with {{openingCash}} and buy a laptop for {{laptopCost}} on the first day. The phone bill of {{phoneAmount}} is due on {{phoneDue}}, rent of {{rentAmount}} is due on {{rentDue}}, and your take-home (net) salary of {{salaryAmount}} arrives on {{salaryDay}}. How much cash are you short when the rent is due? Enter zero if you can pay it in full.",
+        "You start with {{openingCash}} and buy a laptop for {{laptopCost}} on the first day. The phone bill of {{phoneAmount}} is due on {{phoneDue}}, rent of {{rentAmount}} is due on {{rentDue}}, and your net salary (take-home pay) of {{salaryAmount}} arrives on {{salaryDay}}. How much cash are you short when the rent is due? Enter zero if you can pay it in full.",
       answer: gapExpr("rentAmount", "cashAfterPhone"),
       feedbackCorrect:
         "Right. After the laptop and the phone bill you hold {{cashAfterPhone}}, which is less than the rent, and the salary comes too late to help.",
@@ -295,8 +295,9 @@ export const liquidityUnit: ConceptUnit = {
         "Follow the cash day by day: subtract the laptop, then the phone bill, then compare what is left with the rent due on {{rentDue}}.",
       diagnostics: [
         {
+          // "Zero short" fits several beliefs (owned items or the salary as cash, or wealth) and
+          // a slip, so it names none (R1); opportunity-cost treats the same answer the same way.
           expr: zeroFrom("rentAmount"),
-          misconceptionId: MIS_WEALTH,
           feedback:
             "Rent needs cash on {{rentDue}}: the laptop is not cash and the salary only arrives on {{salaryDay}}. Subtract the laptop and the phone bill from {{openingCash}}, then compare what is left with the rent.",
         },
@@ -328,25 +329,25 @@ export const liquidityUnit: ConceptUnit = {
           itemId: "laptop",
           text: "The laptop you bought for {{laptopCost}}",
           categoryId: "not_cash",
-          misconceptionId: MIS_SALE,
+          misconceptionId: MIS_OWNED,
         },
         {
           itemId: "salary",
-          text: "Your take-home (net) salary of {{salaryAmount}}, which arrives on {{salaryDay}}",
+          text: "Your net salary (take-home pay) of {{salaryAmount}}, which arrives on {{salaryDay}}",
           categoryId: "not_cash",
-          misconceptionId: MIS_MONTHLY,
+          misconceptionId: MIS_INCOMING,
         },
         {
+          // Counting money already spent is a double count (a slip), not a belief: untagged (R1).
           itemId: "spent",
           text: "The money you spent on the laptop",
           categoryId: "not_cash",
-          misconceptionId: MIS_WEALTH,
         },
       ],
       feedbackCorrect:
         "Right. Only cash you hold on the due date can pay the rent; the laptop and the salary have value but are not cash that day, and the money spent on the laptop is gone.",
       feedbackIncorrect:
-        "Ask of each item: is it cash in the account on {{rentDue}}? Value you own or income that comes later does not pay a bill that is due now.",
+        "Ask of each item: is it cash in the account on {{rentDue}}? Value you own or income that comes later does not pay a bill that is due now, and money already spent on the laptop has left your account.",
     },
     {
       exerciseId: "ex_liquidity_net_worth_two_tier",
@@ -371,7 +372,7 @@ export const liquidityUnit: ConceptUnit = {
         { name: "rentGap", expr: gapExpr("rentAmount", "cashAfterPhone") },
       ],
       prompt:
-        "After buying the laptop for {{laptopCost}} and paying the phone bill, you hold {{cashAfterPhone}}. You also own the laptop, and your take-home (net) salary of {{salaryAmount}} arrives on {{salaryDay}}. Rent of {{rentAmount}} is due on {{rentDue}}. In Waymark, can you pay the rent in full on {{rentDue}} with what you hold that day?",
+        "After buying the laptop for {{laptopCost}} and paying the phone bill, you hold {{cashAfterPhone}}. You also own the laptop, and your net salary (take-home pay) of {{salaryAmount}} arrives on {{salaryDay}}. Rent of {{rentAmount}} is due on {{rentDue}}. In Waymark, can you pay the rent in full on {{rentDue}} with what you hold that day?",
       answers: [
         {
           choiceId: "yes",
@@ -387,7 +388,7 @@ export const liquidityUnit: ConceptUnit = {
           correct: false,
           feedback:
             "An item is not cash. Waymark has no way to sell one yet, and in real life a sale takes time and may bring in less than you paid.",
-          misconceptionId: MIS_SALE,
+          misconceptionId: MIS_OWNED,
         },
         {
           choiceId: "no",
@@ -451,14 +452,14 @@ export const liquidityUnit: ConceptUnit = {
       simulationLink: "FP30_FIXTURE",
       params: { laptopCost, rentAmount, rentDue, salaryAmount, salaryDay },
       prompt:
-        "You bought the laptop for {{laptopCost}}, and time has stopped on {{rentDue}}: rent of {{rentAmount}} is due and your cash is short. Your take-home (net) salary of {{salaryAmount}} arrives on {{salaryDay}}. Which description of a way out, and of what it costs, is accurate?",
+        "You bought the laptop for {{laptopCost}}, and time has stopped on {{rentDue}}: rent of {{rentAmount}} is due and your cash is short. Your net salary (take-home pay) of {{salaryAmount}} arrives on {{salaryDay}}. Which description of a way out, and of what it costs, is accurate?",
       choices: [
         {
           choiceId: "defer_tradeoff",
           text: "Deferring: the rent stays owed and you pay it after the salary arrives, with no fee in this version of Waymark but often fees in real life.",
           correct: true,
           feedback:
-            "Right. Deferring is a real way out with a cost that differs between Waymark and real life, where late rent can also harm your credit record. Not buying the laptop would have avoided the choice.",
+            "Right. Deferring is a real way out with a cost that differs between Waymark and real life, where late rent can also harm your credit record. Seeing the gap before you buy lets you plan for it; whether the laptop was worth it is a trade-off.",
         },
         {
           choiceId: "sell_best",
@@ -481,7 +482,7 @@ export const liquidityUnit: ConceptUnit = {
           text: "Doing nothing: your total wealth is still positive, so the rent counts as covered even though your cash is short.",
           correct: false,
           feedback:
-            "Your wealth is positive, but it cannot pay the rent on the day. In Waymark you can defer the rent and pay it after the salary arrives; next time you could time the purchase around the rent.",
+            "Your wealth is positive, but it cannot pay the rent on the day. In Waymark you can defer the rent and pay it after the salary arrives. Before a purchase, check whether it opens a gap like this one.",
           misconceptionId: MIS_WEALTH,
         },
       ],
@@ -513,18 +514,18 @@ export const liquidityUnit: ConceptUnit = {
         },
       ],
       prompt:
-        "Noor has {{startCash}} and buys a second-hand bike for {{bikeCost}} on the first day. A course fee of {{feeAmount}} is due on {{feeDue}}, a bike insurance payment of {{insuranceAmount}} is due on {{insuranceDue}}, and Noor's wages of {{wagesAmount}} arrive on {{wagesDay}}. How much cash is Noor short when the insurance is due? Enter zero if Noor can pay it in full.",
+        "Ines has {{startCash}} and buys a second-hand bike for {{bikeCost}} on the first day. A course fee of {{feeAmount}} is due on {{feeDue}}, a bike insurance payment of {{insuranceAmount}} is due on {{insuranceDue}}, and Ines's wages of {{wagesAmount}} arrive on {{wagesDay}}. How much cash is Ines short when the insurance is due? Enter zero if Ines can pay it in full.",
       answer: gapExpr("insuranceAmount", "cashBeforeInsurance"),
       feedbackCorrect:
-        "Right. After the bike and the course fee Noor holds {{cashBeforeInsurance}}, less than the insurance payment, and the wages arrive too late to help.",
+        "Right. After the bike and the course fee Ines holds {{cashBeforeInsurance}}, less than the insurance payment, and the wages arrive too late to help.",
       feedbackIncorrect:
-        "Track Noor's cash in date order: subtract the bike, then the course fee, then compare what is left with the insurance due on {{insuranceDue}}.",
+        "Track Ines's cash in date order: subtract the bike, then the course fee, then compare what is left with the insurance due on {{insuranceDue}}.",
       diagnostics: [
         {
           expr: zeroFrom("insuranceAmount"),
           misconceptionId: MIS_WEALTH,
           feedback:
-            "Noor owns a bike and has wages coming, but the insurance needs cash on {{insuranceDue}}. Subtract the bike and the course fee from {{startCash}}, then compare what is left with the insurance.",
+            "Ines owns a bike and has wages coming, but the insurance needs cash on {{insuranceDue}}. Subtract the bike and the course fee from {{startCash}}, then compare what is left with the insurance.",
         },
       ],
     },

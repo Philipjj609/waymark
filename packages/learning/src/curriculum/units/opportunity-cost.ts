@@ -69,7 +69,7 @@ export const opportunityCostFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "SIMULATION_RULE",
     statement:
-      "In Waymark, buying an item moves cash out at once and the item is recorded as something you own; that cash is no longer available for any bill. A purchase or a bill payment with too little cash is rejected and nothing moves. A bill you cannot pay can be deferred: it becomes overdue, is still owed, and in this version carries no late fee.",
+      "In Waymark, buying an item moves cash out at once and the item is recorded as something you own; that cash is no longer available for any bill. A purchase or a bill payment with too little cash is refused and nothing moves. A bill you cannot pay can be deferred: it becomes overdue, is still owed, and in this version carries no late fee.",
     support: [
       {
         sourceId: "src_waymark_engine",
@@ -104,8 +104,10 @@ const F_SIM = "fact_opportunity_cost_sim_purchase";
 const MIS_PRICE = "mis_opportunity_cost_price_only";
 const MIS_OUTCOME = "mis_opportunity_cost_outcome";
 const MIS_CASH_NOW = "mis_opportunity_cost_cash_now";
-const MIS_FUTURE = "mis_opportunity_cost_future_income";
 const MIS_TRADEOFF_WRONG = "mis_opportunity_cost_tradeoff_wrong";
+/** Owned by cash-balance (one belief, one home): referenced here, not redefined. */
+const MIS_SAFE = "mis_cash_balance_safe_to_spend";
+const MIS_INCOMING = "mis_cash_balance_incoming_counts";
 
 const OBJ_NAME = "obj_opportunity_cost_name_alternative";
 const OBJ_UNCOVERED = "obj_opportunity_cost_uncovered";
@@ -130,7 +132,7 @@ export const opportunityCostUnit: ConceptUnit = {
     "Cash can only be spent once. If a purchase uses cash that a bill needs before your next income arrives, the real cost includes that bill being left short.",
     "Seeing an opportunity cost does not make a choice wrong. A tool that helps you earn may be worth what it pushes aside; the point is to see the trade-off before you choose.",
     "Judge a decision by what you knew and could reasonably expect when you made it. A risky choice that happened to work out was still risky, and a careful choice can still end badly through bad luck.",
-    "In Waymark, a trade-off like this shows up when a bill falls due and the cash is not there; deferring it is allowed and adds no fee in this version. In real life, paying late can bring fees and strain trust with whoever you owe.",
+    "In Waymark, a trade-off like this shows up when a bill falls due and the cash is not there: time stops, and you can defer the bill, which leaves it overdue and still owed but adds no fee in this version. In real life, paying late can bring late fees and harm your relationship or credit record, unless the person you owe agrees to a later date.",
   ],
   inTheSimulation:
     "In Waymark, a purchase moves cash out at once; if what is left is less than the bills due before your next income, part of its opportunity cost shows up as a bill you cannot pay on time.",
@@ -178,25 +180,16 @@ export const opportunityCostUnit: ConceptUnit = {
     },
     {
       misconceptionId: MIS_CASH_NOW,
-      statement: "If I have the cash right now, spending it costs me nothing else.",
+      statement: "If cash is sitting unused right now, spending it gives nothing up.",
       whyPlausible:
-        "Having enough cash at the till feels like permission, and the bill that needs that cash may still be days away.",
+        "Cash that is not being used today looks idle, so putting it to work seems to take nothing away from anything.",
       correction:
-        "Look ahead to the next income. Any bill due before it has to come out of the cash you hold now, so spending today can leave that bill short.",
-      factIds: [F_DEF, F_SIM],
-    },
-    {
-      misconceptionId: MIS_FUTURE,
-      statement: "Money arriving later can pay for what I spend today.",
-      whyPlausible:
-        "Over the whole month the salary is bigger than the bills, so it feels like everything is covered.",
-      correction:
-        "Check the dates. A bill due before the income arrives can only be paid from the cash you hold now.",
+        "Unused cash still has a next-best use, such as a bill due before your next income. Spending it gives up that use, even if nothing is happening to the cash today.",
       factIds: [F_DEF, F_SIM],
     },
     {
       misconceptionId: MIS_TRADEOFF_WRONG,
-      statement: "If a purchase leaves a bill short, it was a mistake.",
+      statement: "If a purchase leaves a bill short, it was a mistake, whatever it gained.",
       whyPlausible:
         "A bill paid late feels like a failure, so the purchase behind it looks like the cause.",
       correction:
@@ -211,7 +204,7 @@ export const opportunityCostUnit: ConceptUnit = {
     params: fp30,
     steps: [
       {
-        text: "In this fictional month, you start with {{cash}}. Two bills fall due before your net salary of {{salary}} (already after tax) arrives on {{salaryDay}}: the phone bill of {{phone}} on {{phoneDue}} and rent of {{rent}} on {{rentDue}}.",
+        text: "In this fictional month, you start with {{cash}}. Two bills fall due before your net salary (take-home pay) of {{salary}} arrives on {{salaryDay}}: the phone bill of {{phone}} on {{phoneDue}} and rent of {{rent}} on {{rentDue}}.",
       },
       {
         text: "Without the laptop, both bills are paid on time and you still hold {{leftWithout}}.",
@@ -239,7 +232,10 @@ export const opportunityCostUnit: ConceptUnit = {
         },
       },
       {
-        text: "So buying the laptop now gives up paying rent on time. You still own the laptop, but it cannot pay the landlord. You can defer rent and pay it once your salary arrives on {{salaryDay}}: in Waymark that adds no fee in this version, while in real life late rent can cost money and trust. Or wait: buying the laptop after {{salaryDay}} avoids the gap.",
+        text: "So buying the laptop now gives up paying rent on time. You still own the laptop, but it cannot pay the landlord, and Waymark has no way to sell it yet. When rent falls due, time stops: paying is refused because the cash is short, so you can defer rent and pay it once your salary arrives on {{salaryDay}}. In Waymark that adds no fee in this version; in real life, paying rent late can bring late fees and put your home at risk.",
+      },
+      {
+        text: "Waiting until after {{salaryDay}} avoids the gap, but it also delays whatever the laptop would bring you. Neither choice is wrong in itself: the question is whether the laptop now is worth paying rent late.",
       },
     ],
   },
@@ -262,7 +258,7 @@ export const opportunityCostUnit: ConceptUnit = {
         salaryDay: fp30.salaryDay,
       },
       prompt:
-        "In this fictional month you hold {{cash}} and are thinking about buying a laptop for {{laptop}}. Rent of {{rent}} is due on {{rentDue}}, before your net salary of {{salary}} arrives on {{salaryDay}}. What do you give up by buying the laptop now?",
+        "In this fictional month you hold {{cash}} and are thinking about buying a laptop for {{laptop}}. Rent of {{rent}} is due on {{rentDue}}, before your net salary (take-home pay) of {{salary}} arrives on {{salaryDay}}. What do you give up by buying the laptop now?",
       choices: [
         {
           choiceId: "a",
@@ -281,17 +277,17 @@ export const opportunityCostUnit: ConceptUnit = {
         },
         {
           choiceId: "c",
-          text: "Only spare cash, since some is still left over for rent on {{rentDue}}",
+          text: "Nothing, because that cash is just sitting unused until rent on {{rentDue}}",
           correct: false,
           misconceptionId: MIS_CASH_NOW,
           feedback:
-            "Some cash is left, but check whether it is enough: rent on {{rentDue}} needs more than what remains after the laptop.",
+            "The cash is unused today, but it already has a job: rent on {{rentDue}} needs more than what remains after the laptop.",
         },
         {
           choiceId: "d",
           text: "Nothing for long, because your salary of {{salary}} will refill the cash",
           correct: false,
-          misconceptionId: MIS_FUTURE,
+          misconceptionId: MIS_INCOMING,
           feedback:
             "Your salary does refill the cash, but only on {{salaryDay}}, after rent is due on {{rentDue}}.",
         },
@@ -317,7 +313,7 @@ export const opportunityCostUnit: ConceptUnit = {
         salaryDay: fp30.salaryDay,
       },
       prompt:
-        "You start with {{cash}} and buy the laptop for {{laptop}}. You pay the phone bill of {{phone}} on {{phoneDue}}. Rent of {{rent}} is due on {{rentDue}}, and your net salary of {{salary}} arrives on {{salaryDay}}. On {{rentDue}}, how far short of the rent is your cash?",
+        "You start with {{cash}} and buy the laptop for {{laptop}}. You pay the phone bill of {{phone}} on {{phoneDue}}. Rent of {{rent}} is due on {{rentDue}}, and your net salary (take-home pay) of {{salary}} arrives on {{salaryDay}}. On {{rentDue}}, how far short of the rent is your cash?",
       answer: {
         minus: [
           { param: "rent" },
@@ -325,21 +321,32 @@ export const opportunityCostUnit: ConceptUnit = {
         ],
       },
       feedbackCorrect:
-        "Right. That gap is part of what the laptop costs before payday. In Waymark you can defer rent and pay it once your salary arrives; in real life, late rent can bring fees.",
+        "Right. That gap is part of what the laptop costs before payday. In Waymark you can defer rent and pay it once your salary arrives, with no fee in this version; in real life, paying rent late can bring late fees.",
       feedbackIncorrect:
         "Work in order: start cash, minus the laptop, minus the phone bill, then compare what is left with the rent. The salary arrives after rent is due, so it cannot help on that day.",
+      // Slips, not beliefs (R1): each gets its own feedback and records no misconception.
       diagnostics: [
         {
           expr: { param: "laptop" },
-          misconceptionId: MIS_PRICE,
           feedback:
-            "That is the laptop's price. The question asks for the part of the rent that the cash left after the laptop and the phone bill cannot reach.",
+            "That is the laptop's price. The question asks how much of the rent the cash left after the laptop and the phone bill cannot cover.",
         },
         {
           expr: { minus: [{ param: "rent" }, { param: "rent" }] },
-          misconceptionId: MIS_FUTURE,
           feedback:
-            "Your salary arrives on {{salaryDay}}, after rent is due, so it cannot cover rent on {{rentDue}}.",
+            "Check the cash on {{rentDue}}: after the laptop and the phone bill it is less than the rent, and your salary arrives only on {{salaryDay}}.",
+        },
+        {
+          expr: { minus: [{ param: "rent" }, { minus: [{ param: "cash" }, { param: "laptop" }] }] },
+          feedback:
+            "It looks like the phone bill on {{phoneDue}} was left out. It is paid before rent is due.",
+        },
+        {
+          expr: {
+            minus: [{ minus: [{ param: "cash" }, { param: "laptop" }] }, { param: "phone" }],
+          },
+          feedback:
+            "That is the cash you hold on {{rentDue}}. The question asks how far short of the rent it is.",
         },
       ],
     },
@@ -361,7 +368,7 @@ export const opportunityCostUnit: ConceptUnit = {
         gigFee: { kind: "money", amountMinor: 26_000, currency: "EUR", ref: "design.gigFee" },
       },
       prompt:
-        "Imagine you are offered a design gig (a planned feature, not yet in the game) that would pay {{gigFee}} and needs a laptop costing {{laptop}}. Buying it now uses cash that rent of {{rent}} needs on {{rentDue}}, before your salary on {{salaryDay}}. Sort each thought: is it sound reasoning about this choice, or flawed?",
+        "Imagine a freelance gig paying {{gigFee}} (planned for a later version of Waymark): you deliver the work first, and you are paid only when the client pays, which can be late. The gig does not need a laptop, but owning one may help you win more work later. Buying the laptop for {{laptop}} now uses cash that rent of {{rent}} needs on {{rentDue}}, before your net salary (take-home pay) arrives on {{salaryDay}}. Sort each thought about buying the laptop now: is it sound reasoning, or flawed?",
       categories: [
         { categoryId: "sound", label: "Sound reasoning" },
         { categoryId: "flawed", label: "Flawed reasoning" },
@@ -374,12 +381,12 @@ export const opportunityCostUnit: ConceptUnit = {
         },
         {
           itemId: "worth_both",
-          text: "Buying now will leave rent short on {{rentDue}}, so the gig has to be worth that as well as the price.",
+          text: "Buying now will leave rent short on {{rentDue}}, so the laptop has to be worth that as well as the price.",
           categoryId: "sound",
         },
         {
           itemId: "gig_worth",
-          text: "The {{gigFee}} gig, plus still owning the laptop, might be worth more to me than its {{laptop}} price and paying rent a few days late.",
+          text: "The extra work the laptop may help me win, plus still owning it, might be worth more to me than its {{laptop}} price and paying rent a few days late, which in Waymark adds no fee in this version.",
           categoryId: "sound",
         },
         {
@@ -390,21 +397,27 @@ export const opportunityCostUnit: ConceptUnit = {
         },
         {
           itemId: "cash_now",
-          text: "I have the cash today, so spending it takes nothing away from anything else.",
+          text: "That cash is just sitting unused right now, so spending it gives nothing up.",
           categoryId: "flawed",
           misconceptionId: MIS_CASH_NOW,
         },
         {
           itemId: "proved_later",
-          text: "If the gig goes well, that will prove buying the laptop was the right call.",
+          text: "If I win more work later, that will prove buying the laptop was the right call.",
           categoryId: "flawed",
           misconceptionId: MIS_OUTCOME,
         },
+        {
+          itemId: "short_is_mistake",
+          text: "Buying now leaves rent short, so it is a mistake, whatever the laptop brings me.",
+          categoryId: "flawed",
+          misconceptionId: MIS_TRADEOFF_WRONG,
+        },
       ],
       feedbackCorrect:
-        "Correct. The laptop can be a sound choice for the gig, as long as you see that on-time rent is what it pushes aside.",
+        "Correct. Buying the laptop now can be a sound choice if it may bring more work, as long as you see that on-time rent is what it pushes aside.",
       feedbackIncorrect:
-        "Sound thoughts name what the cash would otherwise pay for, or compare the gain with that loss. Thoughts about the price alone, cash on hand, or a later result are flawed.",
+        "Sound thoughts name what the cash would otherwise pay for, or weigh the gain against that loss. Thoughts about the price alone, idle cash, a later result, or calling any shortfall a mistake are flawed.",
     },
     {
       exerciseId: "ex_opportunity_cost_lucky_outcome",
@@ -425,7 +438,7 @@ export const opportunityCostUnit: ConceptUnit = {
         early: { kind: "money", amountMinor: 15_000, currency: "EUR" },
       },
       prompt:
-        "Lena and Sam both deliver parcels by bike, and each has {{cash}}. Each buys a cargo rack for {{rack}} to take bigger orders, knowing that a rent share of {{bill}} is due on {{billDue}} and their pay comes on {{payDay}}. Both are short on {{billDue}} and defer the rent. Then a client unexpectedly pays Lena {{early}} early, so she pays a few days late; Sam pays on {{payDay}}. How do their decisions to buy the rack compare?",
+        "Lena and Sam both deliver parcels by bike, and each has {{cash}}. Each buys a cargo rack for {{rack}} to take bigger orders, knowing that a rent share of {{bill}} is due on {{billDue}} and their pay comes on {{payDay}}. Both are short on {{billDue}}, so both pay the rent late, which in real life can bring a late fee and strain things with the landlord. Then a client unexpectedly pays Lena {{early}} early, so she pays only a few days late; Sam pays on {{payDay}}. How do their decisions to buy the rack compare?",
       answers: [
         {
           choiceId: "lena_better",
@@ -465,23 +478,23 @@ export const opportunityCostUnit: ConceptUnit = {
           text: "They chose the same way with the same information; only later luck differed",
           correct: true,
           feedback:
-            "Right. Whether the rack was worth paying late depends on the extra orders each could expect at the time.",
+            "Right. Whether the rack was worth paying late depends on the extra orders each could expect at the time, weighed against what paying late could cost them.",
         },
         {
           choiceId: "had_cash",
-          text: "Both had the cash on the day, so the rack cost neither of them anything else",
+          text: "Their cash was sitting unused until rent day, so the rack gave nothing up",
           correct: false,
           misconceptionId: MIS_CASH_NOW,
           feedback:
-            "Having the cash on the day did not make it free: that cash was needed for the rent due on {{billDue}}.",
+            "That cash was not spare: it was needed for the rent share due on {{billDue}}, so the rack gave up paying rent on time.",
         },
         {
           choiceId: "same_mistake",
-          text: "Both had to defer the rent, so both of them made the same mistake",
+          text: "Both ended up paying rent late, so both made the same mistake, whatever the rack brought",
           correct: false,
           misconceptionId: MIS_TRADEOFF_WRONG,
           feedback:
-            "Deferring was the cost they accepted, not proof of a mistake. Whether it was worth it depends on what the extra orders were expected to bring.",
+            "Paying late was a cost they took on, with real risks such as a late fee, not proof of a mistake. Whether it was worth it depends on what the extra orders were expected to bring.",
         },
       ],
     },
@@ -514,14 +527,19 @@ export const opportunityCostUnit: ConceptUnit = {
       diagnostics: [
         {
           expr: { param: "cash" },
-          misconceptionId: MIS_CASH_NOW,
+          misconceptionId: MIS_SAFE,
           feedback:
             "That is all the cash he holds. Two bills are due before his wages arrive, and they need some of it.",
         },
         {
           expr: { minus: [{ param: "cash" }, { param: "internet" }] },
-          misconceptionId: MIS_CASH_NOW,
-          feedback: "That leaves out his rent share, which is also due before {{payDay}}.",
+          feedback:
+            "It looks like his rent share was left out. It is due on {{shareDue}}, before his wages arrive.",
+        },
+        {
+          expr: { minus: [{ param: "cash" }, { param: "share" }] },
+          feedback:
+            "It looks like the internet bill was left out. It is due on {{internetDue}}, before his wages arrive.",
         },
       ],
     },

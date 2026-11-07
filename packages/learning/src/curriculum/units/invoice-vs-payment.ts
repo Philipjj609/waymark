@@ -10,8 +10,9 @@ const FACT_SANDBOX = "fact_invoice_vs_payment_verified_capture";
 const MIS_SENT = "mis_invoice_vs_payment_sent_is_paid";
 const MIS_BILL = "mis_invoice_vs_payment_bill_is_cash_out";
 const MIS_APPROVAL = "mis_invoice_vs_payment_approval_is_payment";
-const MIS_PAPER = "mis_invoice_vs_payment_paper_owes_nothing";
-const MIS_TEST_MONEY = "mis_invoice_vs_payment_test_money_ignored";
+/** Canonical homes of shared beliefs (#17 decision R2): referenced here, owned by other units. */
+const MIS_ONLY_ON_PAYMENT = "mis_obligation_only_on_payment";
+const MIS_INVOICE_IS_CASH = "mis_receivable_invoice_is_cash";
 
 const OBJ_CLASSIFY = "obj_invoice_vs_payment_classify";
 const OBJ_TRACK = "obj_invoice_vs_payment_track";
@@ -58,7 +59,7 @@ export const invoiceVsPaymentFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "SIMULATION_RULE",
     statement:
-      "In Waymark, a document such as a bill is a record, not a cash movement: a bill arriving posts nothing to the player's books, and a bill appears in them only when it is paid. Cash changes only when a payment or a purchase is posted, for example when you choose PAY for a bill or buy something. Choosing DEFER leaves the bill owed as OVERDUE, with no late fee in this version.",
+      "In Waymark, a document such as a bill is a record, not a cash movement: a bill arriving posts nothing to the player's books, and a bill appears in them only when it is paid. Cash changes only when a payment or a purchase is posted, for example when you pay a bill or buy something. Deferring a bill leaves it owed and marks it overdue, with no late fee in this version.",
     support: [
       {
         sourceId: "src_waymark_agents_invariants",
@@ -89,7 +90,7 @@ export const invoiceVsPaymentFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "SIMULATION_RULE",
     statement:
-      "In Waymark, a PayPal sandbox payment settles a bill only after the server has verified a completed capture for the matching amount. A buyer's approval, a redirect back to the game or a successful-looking response settles nothing, and sandbox payments are always labelled as test money.",
+      "PayPal sandbox checkout is planned for a later version of Waymark. Once it is added, a PayPal sandbox (test) payment will settle a bill only after the server has confirmed a completed payment of the matching amount; a buyer's approval, an approval screen, a redirect back to the game or a successful-looking response will settle nothing. Such a confirmed payment will count towards the bill even though it is test money: sandbox payments will always be labelled as test money, which only means that no real money moved.",
     support: [
       {
         sourceId: "src_waymark_agents_invariants",
@@ -117,13 +118,13 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
   explanation: [
     "An invoice or a bill is a document: it records who owes how much, by when, and asks for payment. A payment is the moment money actually moves from one account to another.",
     "When you send an invoice for work you have done, you are owed money, but your cash has not changed yet. When you receive a bill, the bill itself takes nothing from your account: money leaves only when a payment is made, whether you pay it yourself or an automatic payment collects it.",
-    "An invoice marked SENT, or a checkout step marked APPROVED, describes the paperwork or a step on the way, not the cash. To know that money moved, look for a completed, confirmed transfer; to know a bill is settled, also check that it was for the right amount.",
-    "In Waymark, a bill arriving does not change your cash: you can pay it from its due day, and your cash falls when you pay a bill or buy something. Businesses that keep accrual books do record an invoice when it is sent or received, as an amount owed to them or by them, but that record is still not cash; Waymark keeps your personal books simpler and shows a bill in them only once it is paid.",
-    "When PayPal sandbox payments are added to Waymark, they will use test money. After the buyer approves, the money still has to be taken from their account, a step called a capture, and Waymark will settle the bill, and lower your Waymark cash by the bill amount, only after its server confirms a completed capture of the right amount.",
-    "Choosing DEFER is not a sign that you misunderstood the bill: it keeps the bill owed as OVERDUE, and Waymark charges no late fee in this version. In real life, paying late can bring fees or other consequences, depending on the agreement, and can cost you the trust of the person you owe.",
+    "An invoice marked SENT, or a checkout screen that says Approved, describes the paperwork or a step on the way, not the cash. To know that money moved, look for a completed, confirmed payment; to know a bill is settled, also check that it was for the right amount.",
+    "In Waymark, a bill arriving does not change your cash. Your cash falls only when you pay a bill or buy something, and a bill shows up in your books only once it is paid.",
+    "PayPal sandbox (test) payments are planned for a later version of Waymark. Once they are added, approving a payment on the PayPal page will not be enough: Waymark will settle the bill only after a confirmed payment (the step where the money is actually taken) of the right amount.",
+    "Deferring a bill is not a sign that you misunderstood it: the bill stays owed and becomes overdue, and Waymark charges no late fee in this version. In real life, paying late can bring late fees, a worse relationship with the person you owe or a worse credit record.",
   ],
   inTheSimulation:
-    "In Waymark, a bill arriving does not change your cash; it is settled only when you choose PAY or, once PayPal sandbox payments are added, when the server confirms a completed capture of the right amount.",
+    "In Waymark, a bill arriving does not change your cash; it is settled only when you pay it, and once PayPal sandbox (test) payments are added, such a payment will settle it only when the server confirms a completed payment of the right amount.",
   objectives: [
     {
       objectiveId: OBJ_CLASSIFY,
@@ -172,24 +173,7 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
       whyPlausible:
         "The approve button is usually the last thing the customer does, and the page often moves on as if everything is finished.",
       correction:
-        "On a checkout like PayPal's, approval is permission to take the payment, not the payment itself. Look for a completed capture of the right amount, confirmed by the system that receives it.",
-      factIds: [FACT_SANDBOX],
-    },
-    {
-      misconceptionId: MIS_PAPER,
-      statement: "A bill is just paperwork, so I do not owe anything until I pay it.",
-      whyPlausible:
-        "Receiving the bill moves no money, so it can feel as if nothing has happened yet.",
-      correction:
-        "The bill moves no cash, but it still has to be paid. Paying or deferring decides when the cash leaves, not whether the amount is owed.",
-      factIds: [FACT_PRINCIPLE, FACT_DOCUMENTS],
-    },
-    {
-      misconceptionId: MIS_TEST_MONEY,
-      statement: "Sandbox test payments do not count towards bills in Waymark.",
-      whyPlausible: "Test money is not real, so it is easy to assume it cannot settle anything.",
-      correction:
-        "In Waymark a verified sandbox capture for the matching amount does settle an open bill. The test-money label only means no real money moved.",
+        "On a checkout like PayPal's, approval is permission to take the payment, not the payment itself. Look for a confirmed payment (the step where the money is actually taken) of the right amount, reported by the system that receives the money.",
       factIds: [FACT_SANDBOX],
     },
   ],
@@ -210,14 +194,14 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
         text: "Suppose you buy nothing before {{phoneDue}}. When time stops at the bill, your cash is still {{openingCash}}, and the bill is still waiting to be paid.",
       },
       {
-        text: "You choose PAY. This is the cash movement: your cash falls by {{phoneBill}} to {{cashAfterPhone}}, and the bill is settled.",
+        text: "You pay the bill. This is the cash movement: your cash falls by {{phoneBill}} to {{cashAfterPhone}}, and the bill is settled.",
         derive: {
           name: "cashAfterPhone",
           expr: { minus: [{ param: "openingCash" }, { param: "phoneBill" }] },
         },
       },
       {
-        text: "Had you chosen DEFER instead, your cash would have stayed at {{openingCash}} and the bill would be OVERDUE: still owed, with no late fee in this version of Waymark, though in real life late payment can bring fees or other consequences.",
+        text: "Had you deferred it instead, your cash would have stayed at {{openingCash}} and the bill would be overdue: still owed, with no late fee in this version of Waymark. In real life, paying late can bring late fees or other costs.",
       },
     ],
   },
@@ -261,12 +245,12 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
         },
         {
           itemId: "item_pay_phone",
-          text: "On {{phoneDue}} you choose PAY for the phone bill.",
+          text: "On {{phoneDue}} you pay the phone bill.",
           categoryId: "cat_cash",
         },
         {
           itemId: "item_salary",
-          text: "Your salary of {{salary}} lands in your account on {{salaryDay}}.",
+          text: "Your net salary (take-home pay) of {{salary}} lands in your account on {{salaryDay}}.",
           categoryId: "cat_cash",
         },
         {
@@ -303,7 +287,7 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
         { name: "cashIfPaid", expr: { minus: [{ param: "openingCash" }, { param: "phoneBill" }] } },
       ],
       prompt:
-        "It is {{phoneDue}} and time has stopped at your phone bill for {{phoneBill}}. You have bought nothing so far, and you started the month with {{openingCash}}. Before you choose PAY or DEFER, which describes your position?",
+        "It is {{phoneDue}} and time has stopped at your phone bill for {{phoneBill}}. You have bought nothing so far, and you started the month with {{openingCash}}. Before you pay or defer it, which describes your position?",
       choices: [
         {
           choiceId: "a",
@@ -318,23 +302,22 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
           text: "Your cash is {{openingCash}}, and you still owe {{phoneBill}} on the bill.",
           correct: true,
           feedback:
-            "Yes. The bill records what you owe, and your cash falls by the bill amount only when you choose PAY.",
+            "Yes. The bill records what you owe, and your cash falls by the bill amount only when you pay it.",
         },
         {
           choiceId: "c",
           text: "Your cash is {{cashIfPaid}}, and you still owe {{phoneBill}} on the bill.",
           correct: false,
-          misconceptionId: MIS_BILL,
           feedback:
-            "This counts the bill twice, once as cash gone and once as still owed. Until you pay, the money is still in your account.",
+            "It looks like the bill was counted twice, once as cash gone and once as still owed. Until you pay, the money is still in your account.",
         },
         {
           choiceId: "d",
-          text: "Your cash is {{openingCash}}, and you owe nothing until you choose PAY.",
+          text: "Your cash is {{openingCash}}, and you owe nothing until you pay it.",
           correct: false,
-          misconceptionId: MIS_PAPER,
+          misconceptionId: MIS_ONLY_ON_PAYMENT,
           feedback:
-            "Your cash is right, but the bill is already owed. Choosing PAY moves the cash; it does not create the debt.",
+            "Your cash is right, but the bill is already owed. Paying moves the cash; it does not create the debt.",
         },
       ],
     },
@@ -345,43 +328,45 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
       objectiveId: OBJ_TRACK,
       competence: "APPLICATION",
       difficulty: 2,
-      context: "FP30",
-      simulationLink: "PLANNED_MECHANIC",
-      plannedIn: "#13",
+      context: "TRANSFER",
+      transferOf: "ex_invoice_vs_payment_phone_position",
+      simulationLink: "NONE",
       params: {
-        openingCash: {
-          kind: "money",
-          amountMinor: 80000,
-          currency: "EUR",
-          ref: "fp30.openingCash",
-        },
-        gigFee: { kind: "money", amountMinor: 26000, currency: "EUR", ref: "design.gigFee" },
+        cash: { kind: "money", amountMinor: 64000, currency: "EUR" },
+        invoice: { kind: "money", amountMinor: 21000, currency: "EUR" },
+        powerBill: { kind: "money", amountMinor: 6500, currency: "EUR" },
       },
-      derived: [
-        {
-          name: "cashAfterPayment",
-          expr: { sum: [{ param: "openingCash" }, { param: "gigFee" }] },
-        },
-      ],
       prompt:
-        "This is a planned feature, not yet in the game. You start the month with {{openingCash}}. You finish a small design gig and send the client an invoice for {{gigFee}}, and your invoicing screen marks it SENT. The client has not paid yet. If nothing else has changed, what is your cash right now?",
-      answer: { param: "openingCash" },
+        "Marco repairs bikes for a delivery company, and his account holds {{cash}}. Today he finishes a batch of repairs and sends the company an invoice for {{invoice}}. The same day the bill for his workshop internet, {{powerBill}}, arrives, due in two weeks. Nobody has paid anything yet. How much cash does Marco have now?",
+      answer: { param: "cash" },
       feedbackCorrect:
-        "Yes. You are owed {{gigFee}}, but your cash stays at {{openingCash}} until the client's payment arrives. If the full fee then arrives with no fees taken off, your cash rises to {{cashAfterPayment}}.",
+        "Yes. Marco is owed {{invoice}} and owes {{powerBill}}, but neither document moved any money, so his cash is still {{cash}}.",
       feedbackIncorrect:
-        "Go step by step: finishing the work means you are owed the fee, and the invoice asks for it. Your cash changes only when the payment arrives.",
+        "Ask of each event: did money leave or arrive today? An invoice and a bill record what is owed, but no payment has been made either way.",
       diagnostics: [
         {
-          expr: { sum: [{ param: "openingCash" }, { param: "gigFee" }] },
-          misconceptionId: MIS_SENT,
+          expr: { sum: [{ param: "cash" }, { param: "invoice" }] },
+          misconceptionId: MIS_INVOICE_IS_CASH,
           feedback:
-            "This counts the fee as cash already. SENT means the client has been asked to pay; your cash rises only when the payment arrives.",
+            "This counts the invoice as cash already. Marco is owed the money, but his cash rises only when the client's payment arrives.",
         },
         {
-          expr: { minus: [{ param: "openingCash" }, { param: "gigFee" }] },
+          expr: { minus: [{ param: "cash" }, { param: "powerBill" }] },
           misconceptionId: MIS_BILL,
           feedback:
-            "This treats the invoice as money you paid out. You sent the invoice, so you are the one who is owed, and no money has moved yet.",
+            "This treats the bill as already paid. It tells Marco what he owes and by when, and the money stays in his account until he pays.",
+        },
+        {
+          expr: {
+            minus: [{ sum: [{ param: "cash" }, { param: "invoice" }] }, { param: "powerBill" }],
+          },
+          feedback:
+            "This counts both documents as if money had moved. Neither the invoice nor the bill has been paid yet, so Marco's cash has not changed.",
+        },
+        {
+          expr: { minus: [{ param: "cash" }, { param: "invoice" }] },
+          feedback:
+            "It looks like the invoice was taken off as money going out. Marco sent the invoice, so he is the one who is owed, and no money has moved yet.",
         },
       ],
     },
@@ -399,22 +384,22 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
         phoneBill: { kind: "money", amountMinor: 3000, currency: "EUR", ref: "fp30.phone.amount" },
       },
       prompt:
-        "This is a planned feature. You choose to pay your phone bill of {{phoneBill}} through a PayPal sandbox checkout, which uses test money, not real money. You log in as the sandbox test buyer and click Approve. You are sent back to Waymark, and the screen shows the message: Payment approved. Is the phone bill settled at this moment?",
+        "PayPal sandbox checkout is planned for a later version of Waymark. Imagine it has been added, and you pay your phone bill of {{phoneBill}} with a PayPal sandbox (test) payment. You click Approve on the PayPal page and are sent back to Waymark, where the screen says: Approved — confirming… Would the phone bill be settled at that moment?",
       answers: [
         {
           choiceId: "a",
-          text: "Yes, the bill is settled.",
+          text: "Yes, the bill would be settled.",
           correct: false,
           misconceptionId: MIS_APPROVAL,
           feedback:
-            "Approval and the redirect happen before any money is captured. Waymark settles the bill only after the server confirms the capture.",
+            "Approval and the return to Waymark happen before any money is taken. Waymark will settle the bill only after its server confirms a completed payment.",
         },
         {
           choiceId: "b",
-          text: "No, the bill is not settled.",
+          text: "No, the bill would not be settled yet.",
           correct: true,
           feedback:
-            "Yes. Approval is a step on the way, and the bill stays owed until the payment is confirmed.",
+            "Yes. Approval is a step on the way, and the bill will stay owed until the payment is confirmed.",
         },
       ],
       reasonPrompt: "Which reason best supports your answer?",
@@ -425,7 +410,7 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
           correct: false,
           misconceptionId: MIS_APPROVAL,
           feedback:
-            "Approve gives permission to take the payment. The money is taken by a later capture, which the server must check.",
+            "Approve gives permission to take the payment. The money is taken in a later step, which Waymark's server will have to confirm.",
         },
         {
           choiceId: "r2",
@@ -433,14 +418,14 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
           correct: false,
           misconceptionId: MIS_APPROVAL,
           feedback:
-            "A smooth redirect only shows the page loaded. It says nothing about whether a capture completed for the right amount.",
+            "A smooth return to Waymark only shows the page loaded. It says nothing about whether the payment was completed for the right amount.",
         },
         {
           choiceId: "r3",
-          text: "The bill is settled only when Waymark's server confirms the money was actually taken, for the right amount.",
+          text: "The bill will be settled only when Waymark's server confirms the money was actually taken, for the right amount.",
           correct: true,
           feedback:
-            "Yes. That confirmed capture is the evidence that money moved; approval is permission, not payment.",
+            "Yes. That confirmed payment is the evidence that money moved; approval is permission, not payment.",
         },
         {
           choiceId: "r4",
@@ -448,23 +433,14 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
           correct: false,
           misconceptionId: MIS_APPROVAL,
           feedback:
-            "Approvals usually complete, but that does not show this one has. Some captures never go through, so wait for the server to confirm it.",
-        },
-        {
-          choiceId: "r5",
-          text: "Sandbox payments are only practice, so they do not count towards bills in Waymark.",
-          correct: false,
-          misconceptionId: MIS_TEST_MONEY,
-          feedback:
-            "In Waymark a verified sandbox capture for the matching amount does settle an open bill. The test-money label tells you no real money moved, not that the payment never counts.",
+            "Approvals usually complete, but that does not show this one has. Some approved payments are never completed, so the bill will stay owed until the server confirms it.",
         },
         {
           choiceId: "r6",
           text: "Sandbox payments take a few days to reach the phone company, so it cannot be settled today.",
           correct: false,
-          misconceptionId: MIS_APPROVAL,
           feedback:
-            "Waiting time is not what decides it. The bill is settled as soon as the server confirms a completed capture of the right amount.",
+            "Waiting time is not what decides it. The bill will be settled as soon as the server confirms a completed payment of the right amount.",
         },
       ],
     },
@@ -476,14 +452,14 @@ export const invoiceVsPaymentUnit: ConceptUnit = {
       competence: "APPLICATION",
       difficulty: 2,
       context: "TRANSFER",
-      transferOf: "ex_invoice_vs_payment_gig_invoice",
+      transferOf: "ex_invoice_vs_payment_phone_position",
       simulationLink: "NONE",
       params: {
         cash: { kind: "money", amountMinor: 21000, currency: "EUR" },
         fee: { kind: "money", amountMinor: 4500, currency: "EUR" },
       },
       prompt:
-        "Lena keeps the accounts for a community choir. The choir's account holds {{cash}}. She sends four members an invoice for {{fee}} each. Two members have paid in full, and the whole amount is in the account. The other two invoices are still marked SENT. How much cash does the choir have now?",
+        "Elena keeps the accounts for a community choir. The choir's account holds {{cash}}. She sends four members an invoice for {{fee}} each. Two members have paid in full, and their money is in the account. The other two invoices are still marked SENT. How much cash does the choir have now?",
       answer: { sum: [{ param: "cash" }, { param: "fee" }, { param: "fee" }] },
       feedbackCorrect:
         "Yes. Two payments arrived, so cash rose by two fees, and the choir is still owed the other two.",

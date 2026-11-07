@@ -91,7 +91,7 @@ export const cashBalanceFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "SIMULATION_RULE",
     statement:
-      "In Waymark, your cash balance changes only when a payment, a purchase or an income is recorded. Receiving a bill or deferring it leaves cash where it was, and a payment or purchase that needs more cash than you hold is refused, so nothing moves. Your salary is not recorded anywhere until the day it arrives.",
+      "In Waymark, your cash balance changes only when a payment, a purchase or an income is recorded. Receiving a bill or deferring it leaves cash where it was, and a payment or purchase that needs more cash than you hold is refused, so nothing moves. Your net salary (take-home pay) adds nothing to your cash or your books until the day it arrives.",
     support: [
       {
         sourceId: "src_waymark_agents_invariants",

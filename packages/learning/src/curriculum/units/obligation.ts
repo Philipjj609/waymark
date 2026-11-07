@@ -52,7 +52,6 @@ const MIS_DEFER_CANCELS = "mis_obligation_defer_cancels";
 const MIS_OVERDUE_SAME = "mis_obligation_overdue_same";
 const MIS_PAYDAY_IS_DUE = "mis_obligation_payday_sets_due_date";
 // Canonical outcome-bias belief, owned by the opportunity-cost unit (#17 decision R2).
-const MIS_OUTCOME = "mis_opportunity_cost_outcome";
 
 const FACT_OWED = "fact_obligation_owed_before_paid";
 const FACT_LATE = "fact_obligation_late_consequences_vary";
@@ -114,7 +113,7 @@ export const obligationFacts: readonly ReviewedFact[] = [
     conceptIds: [id],
     scope: "SIMULATION_RULE",
     statement:
-      "In Waymark, time stops when a blocking bill falls due and you choose to pay it or defer it. Paying needs enough cash, or the payment is refused and nothing moves. Deferring marks the bill overdue: it stays owed, can be paid later, and this version adds no late fee.",
+      "In Waymark, time stops when a blocking bill falls due, until you pay it or defer it. Paying needs enough cash, or the payment is refused and nothing moves. Deferring marks the bill overdue: it stays owed, can be paid later, and this version adds no late fee.",
     support: [
       {
         sourceId: "src_waymark_engine",
@@ -380,7 +379,9 @@ export const obligationUnit: ConceptUnit = {
           correct: false,
           feedback:
             "A calm outcome does not show the rent is paid off. Check the bill's state: it stays overdue until you pay it.",
-          misconceptionId: MIS_OUTCOME,
+          // Inferring "paid off" from a quiet deferral is the defer-cancels belief, not a
+          // judgement of decision quality (outcome bias), so it carries this unit's own id.
+          misconceptionId: MIS_DEFER_CANCELS,
         },
         {
           choiceId: "fee_keeps_it_owed",
