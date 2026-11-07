@@ -16,6 +16,7 @@ import type {
   Obligation,
   ObligationId,
   ProviderOperationId,
+  ReconciliationRecord,
   ReservationStatus,
   ScheduleId,
   WorldDay,
@@ -71,6 +72,11 @@ export interface Reservation {
   readonly attentionReason: AttentionReason | null;
   /** The player asked to cancel. Survives later status changes (review L1); never resets. */
   readonly cancelRequested: boolean;
+  /**
+   * Capture ids of PENDING/DENIED facts applied to this checkout. A reconciliation whose read-back
+   * order lacks one of them contradicts a verified fact and changes nothing (owner decision 2).
+   */
+  readonly captureIdsSeen: readonly string[];
 }
 
 /**
@@ -85,6 +91,12 @@ export interface ProviderOperation {
   readonly amount: Money;
   readonly startedDay: WorldDay;
   readonly status: "ACTIVE" | "CAPTURED" | "VOIDED";
+  /** PayPal order id, once a verified void or an applied reconciliation named it. */
+  readonly orderId: string | null;
+  /** The capture id that settled the obligation through this operation. */
+  readonly captureId: string | null;
+  /** Verified refunds of that capture so far (owner decision 1: external status only). */
+  readonly refunded: Money;
 }
 
 export type ScheduledWork =
@@ -137,6 +149,8 @@ export interface WorldState {
    * record posts no journal and moves no cash.
    */
   readonly attention: readonly AttentionRecord[];
+  /** Every server reconciliation attempt and its outcome, append-only (owner decision 2). */
+  readonly reconciliations: readonly ReconciliationRecord[];
   /**
    * Provider fact keys already applied (one verified provider event → at most one effect). A
    * key starts with its event type: `<eventType>:fact:<id>` for an applied fact and

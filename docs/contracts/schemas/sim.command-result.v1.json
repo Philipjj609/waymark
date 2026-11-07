@@ -58,7 +58,8 @@
                 "IDEMPOTENCY_CONFLICT",
                 "PAYMENT_IN_FLIGHT",
                 "PROVIDER_OPERATION_MISMATCH",
-                "CHECKOUT_NOT_CANCELLABLE"
+                "CHECKOUT_NOT_CANCELLABLE",
+                "PROVIDER_ATTENTION_OPEN"
               ]
             },
             "message": {

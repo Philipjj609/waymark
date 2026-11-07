@@ -34,6 +34,10 @@ export const DomainEventTypeSchema = z.enum([
   "PROVIDER_CHECKOUT_STATUS_CHANGED",
   /** 0.3.0: a verified fact was recorded for a human instead of applied. No journal, no cash. */
   "PROVIDER_ATTENTION_RECORDED",
+  /** 0.3.0: a verified refund tied to the settling capture (external status only, no journal). */
+  "PROVIDER_REFUND_RECORDED",
+  /** 0.3.0: a server reconciliation attempt and its outcome (settlement/release events follow). */
+  "PROVIDER_RECONCILED",
 ]);
 export type DomainEventType = z.infer<typeof DomainEventTypeSchema>;
 

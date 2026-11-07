@@ -11,7 +11,7 @@ import {
   WorldVersionSchema,
 } from "./ids.js";
 import { PositiveMoneySchema } from "./money.js";
-import { VerifiedProviderEventSchema } from "./provider.js";
+import { ProviderReconciliationSchema, VerifiedProviderEventSchema } from "./provider.js";
 import type { Origin } from "./world.js";
 
 export const COMMAND_SCHEMA_VERSION = "sim.command.v1" as const;
@@ -68,17 +68,31 @@ export const CommandEnvelopeSchema = z.discriminatedUnion("kind", [
     "APPLY_VERIFIED_PROVIDER_EVENT",
     z.object({ event: VerifiedProviderEventSchema }).strict(),
   ),
+  /**
+   * 0.3.0 (owner decision 2): SERVER-ONLY (VERIFIED_EXTERNAL) reconciliation of one sandbox
+   * operation against the order read back from PayPal. Never accepted from a browser.
+   */
+  command(
+    "RECONCILE_PROVIDER_STATE",
+    z.object({ reconciliation: ProviderReconciliationSchema }).strict(),
+  ),
 ]);
+
+/** Kinds only trusted server code may construct (origin VERIFIED_EXTERNAL). */
+export const SERVER_ONLY_COMMAND_KINDS = [
+  "APPLY_VERIFIED_PROVIDER_EVENT",
+  "RECONCILE_PROVIDER_STATE",
+] as const;
 export type CommandEnvelope = z.infer<typeof CommandEnvelopeSchema>;
 
 /**
- * What the public HTTP API accepts from browsers: every kind EXCEPT
- * APPLY_VERIFIED_PROVIDER_EVENT, which only trusted server code constructs.
+ * What the public HTTP API accepts from browsers: every kind EXCEPT the server-only ones
+ * (APPLY_VERIFIED_PROVIDER_EVENT, RECONCILE_PROVIDER_STATE).
  */
 export const PlayerCommandEnvelopeSchema = z.discriminatedUnion(
   "kind",
   CommandEnvelopeSchema.options.filter(
-    (o) => o.shape.kind.value !== "APPLY_VERIFIED_PROVIDER_EVENT",
+    (o) => !(SERVER_ONLY_COMMAND_KINDS as readonly string[]).includes(o.shape.kind.value),
   ) as unknown as [
     (typeof CommandEnvelopeSchema.options)[number],
     ...(typeof CommandEnvelopeSchema.options)[number][],

@@ -29,6 +29,8 @@ export const CommandErrorCodeSchema = z.enum([
   "PROVIDER_OPERATION_MISMATCH",
   /** 0.3.0: no checkout to cancel, or it is already CANCEL_REQUESTED / CAPTURE_PENDING / NEEDS_ATTENTION. */
   "CHECKOUT_NOT_CANCELLABLE",
+  /** 0.3.0: an open capture-type attention record blocks paying this obligation (owner decision 3). */
+  "PROVIDER_ATTENTION_OPEN",
 ]);
 export type CommandErrorCode = z.infer<typeof CommandErrorCodeSchema>;
 

@@ -13,6 +13,7 @@ import {
 } from "./ids.js";
 import { AccountCodeSchema } from "./ledger.js";
 import { MoneySchema, PositiveMoneySchema } from "./money.js";
+import { ObservedOrderStatusSchema } from "./provider.js";
 
 /** How fully an actor is simulated (ECO-020 §1). */
 export const SimulationFidelitySchema = z.enum([
@@ -130,10 +131,14 @@ export const AttentionReasonSchema = z.enum([
   "VOID_WHILE_CAPTURE_PENDING",
   /** A CAPTURE_PENDING / CAPTURE_DENIED whose amount differs from the reservation (review L2). */
   "CAPTURE_STATUS_AMOUNT_MISMATCH",
-  /** A refund for an already SETTLED obligation: it stays SETTLED, nothing is reversed. */
-  "REFUNDED_AFTER_SETTLEMENT",
-  /** A refund seen before any capture settled the obligation. */
-  "REFUND_BEFORE_SETTLEMENT",
+  /** A refund for an operation whose capture never settled anything (before capture). */
+  "REFUND_BEFORE_CAPTURE",
+  /** A refund that names no capture, or not the capture that settled the operation. */
+  "REFUND_UNKNOWN_CAPTURE",
+  /** A refund that would take the refunded total above the captured amount, or another currency. */
+  "REFUND_EXCEEDS_CAPTURE",
+  /** A PENDING/DENIED fact of an operation that is no longer the active checkout (audit only). */
+  "STALE_OPERATION_STATUS",
   /** Any further fact for a reservation that already NEEDS_ATTENTION: a human resolves it. */
   "RESERVATION_NEEDS_ATTENTION",
 ]);
@@ -161,9 +166,87 @@ export const AttentionRecordSchema = z
      */
     reservationOperationId: ProviderOperationIdSchema.nullable(),
     day: WorldDaySchema,
+    /**
+     * Owner decision 3 (7 Nov): a capture-type record (a capture that could have taken money, a
+     * void while a capture was pending, any capture/void/status amount mismatch) blocks
+     * PAY_OBLIGATION and START_PROVIDER_CHECKOUT for the SAME obligation until it is resolved.
+     */
+    blocking: z.boolean(),
+    /** The reconciliationId that resolved this record, or null while it is open. */
+    resolvedBy: z.string().min(1).max(128).nullable(),
   })
   .strict();
 export type AttentionRecord = z.infer<typeof AttentionRecordSchema>;
+
+/**
+ * Owner decision 1 (7 Nov): the EXTERNAL (PayPal sandbox) payment state of one operation, kept
+ * apart from the FICTIONAL obligation state. A refund changes this, never the obligation.
+ */
+export const ExternalPaymentStatusSchema = z.enum([
+  "NONE",
+  "CAPTURED",
+  "PARTIALLY_REFUNDED",
+  "REFUNDED",
+]);
+export type ExternalPaymentStatus = z.infer<typeof ExternalPaymentStatusSchema>;
+
+/** 0.3.0: one sandbox operation as the snapshot shows it (registry entry, never removed). */
+export const ProviderOperationViewSchema = z
+  .object({
+    operationId: ProviderOperationIdSchema,
+    obligationId: ObligationIdSchema,
+    realm: z.literal("PAYPAL_SANDBOX"),
+    amount: PositiveMoneySchema,
+    startedDay: WorldDaySchema,
+    status: z.enum(["ACTIVE", "CAPTURED", "VOIDED"]),
+    /** Known once a verified void or an applied reconciliation named it. */
+    orderId: z.string().min(1).max(128).nullable(),
+    /** The capture that settled the obligation through this operation, if any. */
+    captureId: z.string().min(1).max(128).nullable(),
+    externalPayment: ExternalPaymentStatusSchema,
+    refundedAmount: MoneySchema,
+  })
+  .strict();
+
+/** Owner decision 2: what one reconciliation did. Only the first three change anything. */
+export const ReconciliationOutcomeSchema = z.enum([
+  /** One live exact COMPLETED capture, bill not settled: settled once, reservation consumed. */
+  "SETTLED",
+  /** Order VOIDED/EXPIRED with no live capture: reservation released. */
+  "RELEASED",
+  /** The provider state matches what the engine already applied (nothing to change). */
+  "CONFIRMED",
+  "KEPT_NOT_TERMINAL",
+  "KEPT_CAPTURE_PENDING",
+  "KEPT_REFUNDED_CAPTURE",
+  "KEPT_MULTIPLE_CAPTURES",
+  "KEPT_AMOUNT_MISMATCH",
+  "KEPT_ORDER_MISMATCH",
+  "KEPT_INCONSISTENT_ORDER",
+  "KEPT_RECORDED_CAPTURE_MISSING",
+  /** The bill was settled by another payment and this operation also captured: refund outside. */
+  "KEPT_DOUBLE_PAYMENT",
+  "KEPT_OTHER_CHECKOUT_ACTIVE",
+  "KEPT_INSUFFICIENT_FUNDS",
+]);
+export type ReconciliationOutcome = z.infer<typeof ReconciliationOutcomeSchema>;
+
+/** 0.3.0: one recorded reconciliation attempt (snapshot `reconciliations[]`, append-only). */
+export const ReconciliationRecordSchema = z
+  .object({
+    realm: z.literal("PAYPAL_SANDBOX"),
+    reconciliationId: z.string().min(1).max(128),
+    operationId: ProviderOperationIdSchema,
+    obligationId: ObligationIdSchema,
+    orderId: z.string().min(1).max(128),
+    orderStatus: ObservedOrderStatusSchema,
+    outcome: ReconciliationOutcomeSchema,
+    /** How many open attention records of this operation it resolved. */
+    resolvedAttention: z.number().int().min(0),
+    day: WorldDaySchema,
+  })
+  .strict();
+export type ReconciliationRecord = z.infer<typeof ReconciliationRecordSchema>;
 
 /**
  * Day phases, processed in this order inside one world day (ECO-020 §5).
@@ -298,8 +381,15 @@ export const WorldSnapshotSchema = z
         })
         .strict(),
     ),
-    /** 0.3.0: verified provider facts recorded for a human, oldest first. Never auto-resolved. */
+    /**
+     * 0.3.0: verified provider facts recorded for a human, oldest first. Only a server
+     * reconciliation (RECONCILE_PROVIDER_STATE) resolves them.
+     */
     attention: z.array(AttentionRecordSchema),
+    /** 0.3.0: every sandbox operation, with its external payment status (owner decision 1). */
+    providerOperations: z.array(ProviderOperationViewSchema),
+    /** 0.3.0: every reconciliation attempt, oldest first. */
+    reconciliations: z.array(ReconciliationRecordSchema),
     /** 0.2.0: per entity, cash minus reservations. The UI shows this; it never computes it. */
     availableCash: z.array(z.object({ entityId: EntityIdSchema, amount: MoneySchema }).strict()),
     playerActorId: ActorIdSchema,

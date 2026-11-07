@@ -15,7 +15,17 @@ Additive (minor) relative to 0.2.0:
   NEEDS_ATTENTION`) and `AttentionReasonSchema`; new `AttentionRecordSchema`.
 - Folded in before release (independent review of #81; 0.3.0 was never published, so the version is kept):
   attention reasons `VOID_WHILE_CAPTURE_PENDING` and `CAPTURE_STATUS_AMOUNT_MISMATCH`; reservation field `cancelRequested`;
-  `providerEventId` of `CAPTURE_REFUNDED` is the PayPal **refund id** (capture id in `verification.evidenceRef`).
+  `providerEventId` of `CAPTURE_REFUNDED` is the PayPal **refund id**.
+- Folded in before release (owner decisions on #81, 7 Nov; still 0.3.0, unreleased):
+  - command `RECONCILE_PROVIDER_STATE { reconciliation }` (server-only, VERIFIED_EXTERNAL; NOT in
+    `sim.player-command.v1`); new `ProviderReconciliationSchema`, `ObservedOrderStatusSchema`,
+    `ObservedCaptureStatusSchema`; `SERVER_ONLY_COMMAND_KINDS`;
+  - `provider.event.v1` adds optional `refundedCaptureId` (the capture a refund belongs to);
+  - attention records add `blocking` and `resolvedBy`; reasons `REFUND_BEFORE_CAPTURE`, `REFUND_UNKNOWN_CAPTURE`,
+    `REFUND_EXCEEDS_CAPTURE`, `STALE_OPERATION_STATUS` replace `REFUNDED_AFTER_SETTLEMENT` / `REFUND_BEFORE_SETTLEMENT`
+    (both unreleased);
+  - snapshot adds `providerOperations[]` (with `externalPayment`: `NONE | CAPTURED | PARTIALLY_REFUNDED | REFUNDED`) and
+    `reconciliations[]`; events `PROVIDER_REFUND_RECORDED`, `PROVIDER_RECONCILED`; error `PROVIDER_ATTENTION_OPEN`.
 - `sim.snapshot.v1`: each `reservations[]` item adds `realm` (`PAYPAL_SANDBOX`), `status`, `attentionReason`; the snapshot
   adds `attention[]`. Required fields, same rule as 0.2.0: the engine is the only producer; strict consumers update together.
 
@@ -27,6 +37,9 @@ Behaviour changes in the engine that ship with this version (no wire shape remov
   `PROVIDER_ATTENTION_RECORDED` event (was a rejection, or for a late capture after a void with the bill still payable,
   a settlement). No journal, no cash, no obligation change. Mapping failures (another world, unknown obligation,
   operation not started for that obligation) are still rejected.
+- Owner decisions: a refund tied to the settling capture is an auditable external fact (no journal, bill stays SETTLED);
+  an open capture-type record blocks paying / checking out the same obligation; stale-operation PENDING/DENIED facts are
+  recorded instead of rejected; NEEDS_ATTENTION is resolved only by a server reconciliation (ADR-0008 Amendment 1).
 - Review fixes: a fact about a stale operation never puts a newer checkout into NEEDS_ATTENTION; a void while a capture
   is pending is recorded and keeps the earmark; pending/denied amount mismatches are recorded; dedup keys are typed
   (`<eventType>:fact:<id>` / `<eventType>:attention:<id>`), so ids cannot collide across event types.

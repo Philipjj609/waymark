@@ -58,6 +58,11 @@
       ],
       "additionalProperties": false
     },
+    "refundedCaptureId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
     "mapping": {
       "type": "object",
       "properties": {

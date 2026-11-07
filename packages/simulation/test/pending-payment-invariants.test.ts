@@ -132,9 +132,15 @@ describe("a pending payment can never trap the player (I-014, ADR-0008 N1)", () 
     w = execute(w, provider(w, capture(w, PHONE, 3000, "CAP-X"))).state;
     expect(w.obligations[PHONE]?.state).toBe("SETTLED"); // the refund below follows a real capture
     const journals = w.ledger.size;
-    const refund = execute(w, provider(w, capture(w, PHONE, 3000, "CAP-X", "CAPTURE_REFUNDED")));
-    expect(refund.events.map((e) => e.eventType)).toEqual(["PROVIDER_ATTENTION_RECORDED"]);
-    expect(refund.state.attention.at(-1)?.reason).toBe("REFUNDED_AFTER_SETTLEMENT");
+    const refund = execute(
+      w,
+      provider(w, {
+        ...capture(w, PHONE, 3000, "REFUND-X", "CAPTURE_REFUNDED"),
+        refundedCaptureId: "CAP-X",
+      }),
+    );
+    // Owner decision 1: an auditable external fact; the fictional bill is not reopened.
+    expect(refund.events.map((e) => e.eventType)).toEqual(["PROVIDER_REFUND_RECORDED"]);
     expect(refund.state.obligations[PHONE]?.state).toBe("SETTLED");
     expect(refund.state.ledger.size).toBe(journals);
   });

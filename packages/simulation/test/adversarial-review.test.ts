@@ -93,15 +93,17 @@ describe("M1 idempotency is bound to intent, not only the id", () => {
 });
 
 describe("M2 non-settling provider events are never silently accepted", () => {
-  it("refund after an applied capture is recorded for a human, not deduplicated away (0.3.0)", () => {
+  it("refund after an applied capture is recorded as an auditable fact, not deduplicated away", () => {
     let w = phoneInFlight();
     w = execute(w, asProvider(w, 10, capture(w, "CAPTURE_COMPLETED"))).state;
     expect(w.obligations[PHONE]?.state).toBe("SETTLED"); // the capture really applied
     const journals = w.ledger.size;
-    const out = execute(w, asProvider(w, 11, capture(w, "CAPTURE_REFUNDED")));
-    expect(out.events.map((e) => e.eventType)).toEqual(["PROVIDER_ATTENTION_RECORDED"]);
-    expect(out.state.attention.map((a) => a.reason)).toEqual(["REFUNDED_AFTER_SETTLEMENT"]);
-    expect(out.state.obligations[PHONE]?.state).toBe("SETTLED"); // no reversal (owner decision)
+    const refund = { ...capture(w, "CAPTURE_REFUNDED", "REFUND-9"), refundedCaptureId: "CAP-9" };
+    const out = execute(w, asProvider(w, 11, refund));
+    expect(out.events.map((e) => e.eventType)).toEqual(["PROVIDER_REFUND_RECORDED"]);
+    expect(out.state.operations[lastOp(w, PHONE)]?.refunded.amountMinor).toBe(3000);
+    // Owner decision 1 (7 Nov): the fictional bill stays SETTLED; no compensating journal.
+    expect(out.state.obligations[PHONE]?.state).toBe("SETTLED");
     expect(out.state.ledger.size).toBe(journals);
   });
 });

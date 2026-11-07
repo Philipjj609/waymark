@@ -44,7 +44,13 @@ function fact(
   w: WorldState,
   type: VerifiedProviderEvent["eventType"],
   id: string,
-  opts: { op?: string; amountMinor?: number; obligationId?: ObligationId } = {},
+  opts: {
+    op?: string;
+    amountMinor?: number;
+    obligationId?: ObligationId;
+    /** CAPTURE_REFUNDED only: the refunded capture id. */
+    refundOf?: string;
+  } = {},
 ): VerifiedProviderEvent {
   const obligationId = opts.obligationId ?? PHONE;
   const op =
@@ -60,6 +66,7 @@ function fact(
     operationId: (op ?? "pop_none") as ProviderOperationId,
     eventType: type,
     amount: { amountMinor: opts.amountMinor ?? 3000, currency: "EUR" },
+    ...(opts.refundOf ? { refundedCaptureId: opts.refundOf } : {}),
     mapping: { worldId: w.worldId, obligationId },
     verification: { method: "ORDER_LOOKUP", verifiedAt: "2026-11-06T10:00:00Z", evidenceRef: "t" },
   };
@@ -281,6 +288,8 @@ describe("NEEDS_ATTENTION: verified facts that cannot be applied are recorded (p
       amount: eur(30),
       reservationOperationId: null,
       day: 8,
+      blocking: true,
+      resolvedBy: null,
     });
   });
 
@@ -348,19 +357,32 @@ describe("NEEDS_ATTENTION: verified facts that cannot be applied are recorded (p
     expectRecorded(s, deliver(s, fact(s, "ORDER_VOIDED", "ORDER-S", { op })), "VOID_AFTER_CAPTURE");
   });
 
-  it("REFUNDED_AFTER_SETTLEMENT: conservative, the obligation stays SETTLED, nothing is reversed", () => {
+  it("REFUND_UNKNOWN_CAPTURE / REFUND_EXCEEDS_CAPTURE: refunds not tied to the settled capture", () => {
     let s = inFlight();
     s = deliver(s, fact(s, "CAPTURE_COMPLETED", "CAP-R")).state;
-    const out = deliver(s, fact(s, "CAPTURE_REFUNDED", "CAP-R"));
-    expectRecorded(s, out, "REFUNDED_AFTER_SETTLEMENT");
-    expect(out.state.obligations[PHONE]?.state).toBe("SETTLED");
-    expect(out.state.ledger.all.every((j) => j.reversesJournalId === null)).toBe(true);
+    const outs = [
+      [deliver(s, fact(s, "CAPTURE_REFUNDED", "RF-NONE")), "REFUND_UNKNOWN_CAPTURE"],
+      [
+        deliver(s, fact(s, "CAPTURE_REFUNDED", "RF-OTHER", { refundOf: "CAP-OTHER" })),
+        "REFUND_UNKNOWN_CAPTURE",
+      ],
+      [
+        deliver(s, fact(s, "CAPTURE_REFUNDED", "RF-BIG", { refundOf: "CAP-R", amountMinor: 3001 })),
+        "REFUND_EXCEEDS_CAPTURE",
+      ],
+    ] as const;
+    for (const [out, reason] of outs) {
+      expectRecorded(s, out, reason);
+      // A refund cannot have taken money: it never blocks paying the bill (decision 3).
+      expect(out.state.attention.at(-1)?.blocking).toBe(false);
+      expect(snapshot(out.state).providerOperations[0]?.externalPayment).toBe("CAPTURED");
+    }
   });
 
-  it("REFUND_BEFORE_SETTLEMENT: a later completion of that refunded capture cannot settle", () => {
+  it("REFUND_BEFORE_CAPTURE: a later completion of that refunded capture cannot settle", () => {
     const s = inFlight();
     const out = deliver(s, fact(s, "CAPTURE_REFUNDED", "CAP-RB"));
-    expectRecorded(s, out, "REFUND_BEFORE_SETTLEMENT");
+    expectRecorded(s, out, "REFUND_BEFORE_CAPTURE");
     expect(statusOf(out.state)).toBe("NEEDS_ATTENTION");
     const late = deliver(out.state, fact(s, "CAPTURE_COMPLETED", "CAP-RB"));
     expectRecorded(out.state, late, "RESERVATION_NEEDS_ATTENTION");
@@ -464,7 +486,7 @@ describe("regressions from the independent review of #81 (H1, H2, L1-L4)", () =>
     t.player(START);
     const op2 = opOf(t.w, PHONE) as string;
     t.deliver(fact(t.w, "CAPTURE_REFUNDED", "REFUND-OP1", { op: op1 }));
-    expect(reasons(t.w)).toEqual(["REFUND_BEFORE_SETTLEMENT"]);
+    expect(reasons(t.w)).toEqual(["REFUND_BEFORE_CAPTURE"]);
     expect(t.w.attention[0]?.reservationOperationId).toBeNull();
     expect(t.w.reservations[PHONE]?.status).toBe("AWAITING_PAYER");
     t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-OP2", { op: op2 }));
@@ -530,26 +552,21 @@ describe("regressions from the independent review of #81 (H1, H2, L1-L4)", () =>
     }
   });
 
-  it("L3: two partial refunds of one capture (distinct refund ids) are two records", () => {
+  it("L3: two partial refunds of one capture (distinct refund ids) are two facts", () => {
     const t = session();
     t.player(ADV8);
     t.player(START);
     t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-R"));
-    const refund = (id: string, amountMinor: number) => ({
-      ...fact(t.w, "CAPTURE_REFUNDED", id, { amountMinor }),
-      verification: {
-        method: "ORDER_LOOKUP" as const,
-        verifiedAt: "2026-11-06T10:00:00Z",
-        evidenceRef: "capture:CAP-R",
-      },
-    });
+    const refund = (id: string, amountMinor: number) =>
+      fact(t.w, "CAPTURE_REFUNDED", id, { amountMinor, refundOf: "CAP-R" });
     t.deliver(refund("REFUND-1", 1000));
+    const ext = () => snapshot(t.w).providerOperations[0];
+    expect(ext()).toMatchObject({ externalPayment: "PARTIALLY_REFUNDED", refundedAmount: eur(10) });
     t.deliver(refund("REFUND-2", 2000));
-    t.deliver(refund("REFUND-2", 2000)); // redelivery: still one record
-    expect(t.w.attention.map((a) => [a.providerEventId, a.amount.amountMinor, a.reason])).toEqual([
-      ["REFUND-1", 1000, "REFUNDED_AFTER_SETTLEMENT"],
-      ["REFUND-2", 2000, "REFUNDED_AFTER_SETTLEMENT"],
-    ]);
+    t.deliver(refund("REFUND-2", 2000)); // redelivery: still one effect
+    expect(t.w.events.filter((e) => e.eventType === "PROVIDER_REFUND_RECORDED")).toHaveLength(2);
+    expect(ext()).toMatchObject({ externalPayment: "REFUNDED", refundedAmount: eur(30) });
+    expect(t.w.attention).toEqual([]);
     expect(t.w.obligations[PHONE]?.state).toBe("SETTLED");
     expectSound(t.w, t.recorded);
   });

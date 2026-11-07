@@ -506,6 +506,9 @@ describe("operation ids and the operation registry (#12 review)", () => {
       amount: eur(30),
       startedDay: 8,
       status: "ACTIVE",
+      orderId: null,
+      captureId: null,
+      refunded: eur(0),
     });
     s = execute(s, deliver(s, event(s, PHONE, op, "VOID-REG", "ORDER_VOIDED"))).state;
     expect(s.reservations).toEqual({});
@@ -584,6 +587,19 @@ describe("property: reservations never overdraw, and each bill settles at most o
       fc.record({ k: fc.constant("defer" as const), o: bill }),
       fc.record({ k: fc.constant("checkout" as const), o: bill }),
       fc.record({ k: fc.constant("cancel" as const), o: bill }),
+      // Owner decision 2: random server reconciliations against the bill's latest operation.
+      fc.record({
+        k: fc.constant("reconcile" as const),
+        o: bill,
+        shape: fc.constantFrom(
+          "voided" as const,
+          "completed" as const,
+          "pending" as const,
+          "two" as const,
+          "approved" as const,
+        ),
+        id: fc.constantFrom("A", "B", "C"),
+      }),
       fc.record({ k: fc.constant("buy" as const), euros: fc.integer({ min: 1, max: 600 }) }),
       fc.record({
         k: fc.constantFrom(
@@ -610,7 +626,43 @@ describe("property: reservations never overdraw, and each bill settles at most o
           w = execute(w, c).state;
         };
         for (const s of steps) {
-          if (
+          if (s.k === "reconcile") {
+            const op = lastOp(w, s.o) ?? "pop_stale";
+            const amount = { amountMinor: AMOUNT[s.o] ?? 1, currency: "EUR" as const };
+            const c = (id: string, status: "COMPLETED" | "PENDING") => ({
+              captureId: id,
+              status,
+              amount,
+            });
+            const [orderStatus, captures] = {
+              voided: ["VOIDED", []] as const,
+              completed: ["COMPLETED", [c(`capture-A-${s.o}-${op}`, "COMPLETED")]] as const,
+              pending: ["APPROVED", [c(`capture-B-${s.o}-${op}`, "PENDING")]] as const,
+              two: ["COMPLETED", [c("X1", "COMPLETED"), c("X2", "COMPLETED")]] as const,
+              approved: ["APPROVED", []] as const,
+            }[s.shape];
+            apply({
+              ...playerCommand(w, cmd(seq++), {
+                kind: "RECONCILE_PROVIDER_STATE",
+                payload: {
+                  reconciliation: {
+                    provider: "PAYPAL_SANDBOX",
+                    reconciliationId: `rc-${s.id}-${s.shape}-${op}`,
+                    operationId: op as ProviderOperationId,
+                    mapping: { worldId: w.worldId, obligationId: s.o },
+                    observed: { orderId: `order-${op}`, orderStatus, captures: [...captures] },
+                    verification: {
+                      method: "ORDER_LOOKUP",
+                      verifiedAt: "2026-11-07T10:00:00Z",
+                      evidenceRef: "t",
+                    },
+                  },
+                },
+              }),
+              actorId: "act_system_paypal",
+              origin: "VERIFIED_EXTERNAL",
+            } as AuthorizedCommand);
+          } else if (
             s.k === "capture" ||
             s.k === "void" ||
             s.k === "denied" ||
@@ -665,6 +717,24 @@ describe("property: reservations never overdraw, and each bill settles at most o
             });
             // 0.3.0: a reason is shown exactly when a human is needed.
             expect(r.status === "NEEDS_ATTENTION").toBe(r.attentionReason !== null);
+          }
+          // Decision 3: no obligation with an open capture-type record was paid fictionally after it.
+          for (const a of w.attention.filter((x) => x.blocking && x.resolvedBy === null)) {
+            const later = w.events.filter(
+              (e) =>
+                e.eventType === "OBLIGATION_SETTLED" &&
+                e.payload.obligationId === a.obligationId &&
+                e.payload.realm === "FICTIONAL" &&
+                e.worldDay >= a.day &&
+                e.sequence >
+                  (w.events.find(
+                    (x) =>
+                      x.eventType === "PROVIDER_ATTENTION_RECORDED" &&
+                      x.payload.providerEventId === a.providerEventId &&
+                      x.payload.eventType === a.eventType,
+                  )?.sequence ?? Number.POSITIVE_INFINITY),
+            );
+            expect(later).toEqual([]);
           }
           // Attention is recorded at most once per fact.
           const keys = w.attention.map((a) => `${a.eventType}:${a.providerEventId}`);
