@@ -10,7 +10,7 @@ E2E_PORT=3200 pnpm e2e                                    # override the port
 
 ## What runs, and against what
 
-The tests run against a production build (`next build` + `next start`). Their environment is pinned in `playwright.config.ts`, so a local `.env` cannot leak in:
+The tests run against a production build (`next build` + `next start`). The **server's runtime** environment is pinned in `playwright.config.ts`, so a local `.env` cannot leak into the running app:
 - `WORLD_STORE=memory`;
 - `AI_PROVIDER=fake`;
 - empty Nebius keys;
@@ -19,10 +19,12 @@ The tests run against a production build (`next build` + `next start`). Their en
 
 As a result, no test touches a shared or production database, calls Nebius, or calls PayPal.
 
+The `next build` step that comes before it is **not** pinned: like any build, it reads the local `.env`. That is harmless today because nothing is prerendered against the store or the tutor. `/api/health` is dynamic, the page is a client shell, and there are no `NEXT_PUBLIC_*` variables. If a future change prerenders server code that touches the store or the tutor, pin the build environment as well.
+
 **A foreign server is never used.**
 - **Never reused:** `reuseExistingServer: false`. If something already answers the health URL with a status below 404 when the run starts, Playwright stops with "is already used" before running a single test. Verified 7 Nov with a decoy server.
 - **Built first:** `pnpm e2e` runs `next build` **before** Playwright starts. Playwright's readiness window then covers only `next start`, about a second, so it does not span a multi-minute build during which another server could appear.
-- **A port per checkout:** the default port is derived from the checkout path (3100–3899), so two worktrees don't collide. `E2E_PORT` overrides it.
+- **A port per checkout:** the default port is derived from the checkout path (3100–3899), so two worktrees usually get different ports. If they clash, or the port is taken by another service, `next start` fails loudly and the run stops; set `E2E_PORT`. It is never a silent reuse.
 - **Always run through `pnpm e2e`.** A bare `playwright test` with no build fails at `next start`, or would serve a stale build.
 
 | Spec                     | Proves                                                                                                                                                                                                                                                                                                                                                                                        |

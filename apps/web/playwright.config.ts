@@ -19,7 +19,10 @@ import { defineConfig, devices } from "@playwright/test";
  * at `next start` (no production build), or would serve a stale one.
  *
  * Each checkout gets its own default port (3100–3899, derived from its path), so two worktrees
- * running the suite at the same time never meet. E2E_PORT overrides it.
+ * usually get different ports. A clash makes `next start` fail loudly (never a silent reuse);
+ * E2E_PORT overrides it. Only the server's RUNTIME env below is pinned. The preceding `next
+ * build` reads the local .env, which is harmless while nothing is prerendered against the store
+ * or the tutor (see e2e/README.md).
  */
 const PORT = Number(
   process.env.E2E_PORT ??
