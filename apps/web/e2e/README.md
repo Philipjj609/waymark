@@ -27,11 +27,12 @@ The `next build` step that comes before it is **not** pinned: like any build, it
 - **A port per checkout:** the default port is derived from the checkout path (3100–3899), so two worktrees usually get different ports. If they clash, or the port is taken by another service, `next start` fails loudly and the run stops; set `E2E_PORT`. It is never a silent reuse.
 - **Always run through `pnpm e2e`.** A bare `playwright test` with no build fails at `next start`, or would serve a stale build.
 
-| Spec                     | Proves                                                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fp30-journey.spec.ts`   | The **fictional** FP-30 month, in this order: pay a bill; the lesson about that payment; defer a bill; salary; pay the overdue bill; reload and persist. Every amount in the UI and the lesson carries "(fictional)", and no PayPal text appears. An independent engine replay of the commands the browser sent equals the server's `stateHash` and version.                                  |
-| `safety.spec.ts`         | **Session isolation:** read, write and UI, with a real second session. **CSRF:** a foreign or missing Origin, a form body, or cross-site world creation is refused, and nothing changes. **Command ids:** an exact retry is a duplicate with no effect; reusing an id is `IDEMPOTENCY_CONFLICT` and is not recorded: afterwards the original command still replays as its accepted duplicate. |
-| `paypal-sandbox.spec.ts` | **Extension point only** (`test.fixme`). See below.                                                                                                                                                                                                                                                                                                                                           |
+| Spec                       | Proves                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fp30-journey.spec.ts`     | The **fictional** FP-30 month, in this order: pay a bill; the lesson about that payment; defer a bill; salary; pay the overdue bill; reload and persist. Every amount in the UI and the lesson carries "(fictional)", and no PayPal text appears. An independent engine replay of the commands the browser sent equals the server's `stateHash` and version.                                  |
+| `safety.spec.ts`           | **Session isolation:** read, write and UI, with a real second session. **CSRF:** a foreign or missing Origin, a form body, or cross-site world creation is refused, and nothing changes. **Command ids:** an exact retry is a duplicate with no effect; reusing an id is `IDEMPOTENCY_CONFLICT` and is not recorded: afterwards the original command still replays as its accepted duplicate. |
+| `today-responsive.spec.ts` | The Today screen at 1280px and 390px: two columns vs one column in loop order (time before bills), no horizontal scroll, 44px decision buttons, focus moves to the time control after a decision, and screenshots attached to the report.                                                                                                                                                     |
+| `paypal-sandbox.spec.ts`   | **Extension point only** (`test.fixme`). See below.                                                                                                                                                                                                                                                                                                                                           |
 
 The CI job `e2e` (ubuntu) runs the suite on every PR and uploads the HTML report as an artifact. It uses no secrets and is not a required check.
 
@@ -63,6 +64,11 @@ Never Live credentials.
 - The diagnostic (#20), the redesigned world screens and the lesson renderer (#23–#26), and accessibility (#31).
 - Postgres in the browser. The persistence suites and the CI `postgres` job cover it.
 - The https `__Host-session` cookie branch. `apps/web/test/routes.test.ts` covers it.
-- Firefox, WebKit and mobile viewports.
+- Firefox and WebKit. Mobile is covered at one viewport (390px, Chromium emulation), not on real devices.
 
-**Selectors** are roles and visible text, plus the existing `data-facts` attribute. The UI redesign (#23–#26) will need to update them.
+**Selectors and hooks.** Tests find things the way a person does: roles, visible names and labels. They read the engine's state from stable hooks, never from presentation wording:
+- `data-testid="cash"`, `"bill"` and `"decision"` (the Today screen, #104);
+- `data-state`, the engine's obligation state (`DUE`, `OVERDUE`, `SETTLED`, …), asserted together with the visible label;
+- `data-facts="deterministic"`, the lesson's facts block.
+
+A redesign keeps these hooks, or updates the helpers in `world.ts` in the same PR.

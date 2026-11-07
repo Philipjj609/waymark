@@ -1,10 +1,11 @@
 "use client";
 
-import type { Obligation, WorldSnapshot } from "@fle/contracts";
+import type { WorldSnapshot } from "@fle/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, createApiClient, type Intent } from "../lib/command-client";
-import { formatFictional } from "../lib/money";
+import { todayView } from "../lib/today-view";
 import { type ExplanationView, LessonPanel } from "./lesson-panel";
+import { type Act, AdvancePanel, BillsPanel, DecisionCard, StatusPanel } from "./today-screen";
 
 /** Remembering the world id is a convenience; the cookie (not this) is what grants access. */
 const WORLD_KEY = "waymark.worldId";
@@ -54,6 +55,13 @@ export function WorldShell() {
   const [explanation, setExplanation] = useState<ExplanationView>({ status: "idle" });
   /** Only the newest explanation request may update the panel. */
   const explainSeq = useRef(0);
+  const focusAdvanceNext = useRef(false);
+
+  useEffect(() => {
+    if (!focusAdvanceNext.current || busy) return;
+    focusAdvanceNext.current = false;
+    document.getElementById("advance-button")?.focus();
+  }, [busy]);
 
   /** Fire-and-forget: the game never waits for (or fails because of) the tutor. */
   const explainLatest = useCallback(
@@ -124,7 +132,12 @@ export function WorldShell() {
           : `rejected: ${r.error?.code ?? "?"}`;
       note(`${describeIntent(intent)}: ${status}${out.duplicate ? " (duplicate)" : ""}`);
       if (r.status === "REJECTED") setMessage(r.error?.message ?? "Rejected");
-      else explainLatest(out.snapshot.worldId);
+      else {
+        explainLatest(out.snapshot.worldId);
+        // A decision unmounts the focused button: keep keyboard users in place by moving focus
+        // to the time control, the next step of the loop.
+        if (intent.kind !== "ADVANCE_TIME") focusAdvanceNext.current = true;
+      }
     } catch (err) {
       setMessage(err instanceof ApiError ? `${err.code}: ${err.message}` : "Network error");
       if (err instanceof ApiError && err.status === 409) {
@@ -137,116 +150,86 @@ export function WorldShell() {
 
   if (!snapshot) {
     return (
-      <section>
-        {message && <p role="alert">{message}</p>}
-        <button type="button" onClick={newWorld} disabled={busy}>
+      <section className="card" aria-label="Start">
+        {message && (
+          <p role="alert" className="alert">
+            {message}
+          </p>
+        )}
+        <h2 className="card-title">Your first fictional month</h2>
+        <p className="muted">
+          Bills fall due, time stops until you decide whether to pay or defer, and a short
+          explanation follows each choice. Everything is recorded, so you can come back to it.
+        </p>
+        <button type="button" className="btn btn-primary" onClick={newWorld} disabled={busy}>
           Start a new FP-30 world
         </button>
       </section>
     );
   }
 
-  const cash = snapshot.balances.find((b) => b.account === "ASSET:Cash");
-  const blockedIds = new Set(snapshot.blockingDecisions.map((d) => d.obligationId));
-  const nextDay = targetDay !== null && targetDay > snapshot.day ? targetDay : snapshot.day + 1;
-  const isActionable = (o: Obligation) =>
-    blockedIds.has(o.obligationId) || o.state === "DUE" || o.state === "OVERDUE";
+  const view = todayView(snapshot);
+  const nextDay = targetDay !== null && targetDay > view.day ? targetDay : view.day + 1;
+  const onAct: Act = (kind, obligationId) =>
+    act(
+      kind === "PAY"
+        ? { kind: "PAY_OBLIGATION", payload: { obligationId } }
+        : { kind: "DEFER_OBLIGATION", payload: { obligationId } },
+    );
 
   return (
-    <section>
-      <p>
-        World <code>{snapshot.worldId}</code> · version {snapshot.version}
-      </p>
-      <h2>Day {snapshot.day}</h2>
-      <p>
-        Cash: <strong>{cash ? formatFictional(cash.balance) : "none"}</strong>
-      </p>
-      {message && <p role="alert">{message}</p>}
-
-      <LessonPanel view={explanation} />
-
-      <h3>Obligations</h3>
-      <table>
-        <thead>
-          <tr>
-            <th align="left">Creditor</th>
-            <th align="left">State</th>
-            <th align="right">Amount</th>
-            <th align="right">Due day</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {snapshot.obligations.map((o) => (
-            <tr key={o.obligationId}>
-              <td>{o.creditorLabel}</td>
-              <td>{o.state}</td>
-              <td align="right">{formatFictional(o.amount)}</td>
-              <td align="right">{o.dueDay}</td>
-              <td>
-                {isActionable(o) && (
-                  <>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        act({ kind: "PAY_OBLIGATION", payload: { obligationId: o.obligationId } })
-                      }
-                    >
-                      Pay
-                    </button>{" "}
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        act({ kind: "DEFER_OBLIGATION", payload: { obligationId: o.obligationId } })
-                      }
-                    >
-                      Defer
-                    </button>
-                  </>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <p>
-        <label>
-          Target day{" "}
-          <input
-            type="number"
-            min={snapshot.day + 1}
-            value={nextDay}
-            onChange={(e) => setTargetDay(Number.parseInt(e.target.value, 10) || null)}
-            style={{ width: 64 }}
-          />
-        </label>{" "}
-        <button
-          type="button"
-          disabled={busy || snapshot.blockingDecisions.length > 0}
-          onClick={() => act({ kind: "ADVANCE_TIME", payload: { targetDay: nextDay } })}
-        >
-          Advance to day {nextDay}
-        </button>{" "}
-        {snapshot.blockingDecisions.length > 0 && <em>Decide on the due bill first.</em>}
-      </p>
-
-      <h3>Recent activity (this browser)</h3>
-      <ol reversed>
-        {log.map((e) => (
-          <li key={e.n}>{e.text}</li>
-        ))}
-      </ol>
-      <p>
-        <small>
-          {snapshot.eventCount} event(s) recorded in this world. <code>{snapshot.ruleVersion}</code>
-        </small>
-      </p>
-      <button type="button" disabled={busy} onClick={newWorld}>
-        Start over with a new world
-      </button>
-    </section>
+    <>
+      {message && (
+        <p role="alert" className="alert">
+          {message}
+        </p>
+      )}
+      {/* Desktop: two columns. Phone: one column in loop order (status, decision, time,
+          bills, explanation, world): see .today-grid in globals.css. */}
+      <div className="today-grid">
+        <div className="today-col">
+          <div className="slot-status">
+            <StatusPanel view={view} />
+          </div>
+          <div className="slot-decision">
+            <DecisionCard view={view} busy={busy} onAct={onAct} />
+          </div>
+          <div className="slot-time">
+            <AdvancePanel
+              view={view}
+              busy={busy}
+              nextDay={nextDay}
+              onTargetDay={setTargetDay}
+              onAdvance={() => act({ kind: "ADVANCE_TIME", payload: { targetDay: nextDay } })}
+            />
+          </div>
+          <div className="slot-lesson">
+            <LessonPanel view={explanation} />
+          </div>
+        </div>
+        <div className="today-col">
+          <div className="slot-bills">
+            <BillsPanel view={view} busy={busy} onAct={onAct} />
+          </div>
+          <section className="card slot-world" aria-label="World">
+            <details>
+              <summary>Recent activity (this browser)</summary>
+              <ol className="log" reversed>
+                {log.map((e) => (
+                  <li key={e.n}>{e.text}</li>
+                ))}
+              </ol>
+            </details>
+            <p className="small muted mb-0">
+              World <code>{view.worldId}</code> · version {view.version} · {view.eventCount}{" "}
+              event(s) recorded · <code>{view.ruleVersion}</code>
+            </p>
+            <button type="button" className="btn mt-3" disabled={busy} onClick={newWorld}>
+              Start over with a new world
+            </button>
+          </section>
+        </div>
+      </div>
+    </>
   );
 }

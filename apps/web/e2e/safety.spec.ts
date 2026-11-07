@@ -133,10 +133,7 @@ test.describe("safety rules in the running app", () => {
       page.waitForResponse(
         (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/commands",
       ),
-      page
-        .getByRole("row", { name: /Phone provider/ })
-        .getByRole("button", { name: "Pay" })
-        .click(),
+      page.getByTestId("decision").getByRole("button", { name: "Pay" }).click(),
     ]);
     expect(res.status()).toBe(200);
     await expect(cash(page)).toHaveText("€770.00 (fictional)");

@@ -37,13 +37,26 @@ export async function startWorld(page: Page): Promise<string> {
   return worldId;
 }
 
-export const cash = (page: Page): Locator =>
-  page.locator("p", { hasText: /^Cash:/ }).locator("strong");
+/**
+ * Stable hooks (#104 Today screen). Tests find things the way a person does (visible names,
+ * roles), and read the ENGINE's state from `data-state`, not from presentation wording, so a
+ * redesign keeps these tests meaningful.
+ */
+export const cash = (page: Page): Locator => page.getByTestId("cash");
 
-export const obligationRow = (page: Page, creditor: RegExp): Locator =>
-  page.getByRole("row", { name: creditor });
+/** A bill card, found by its creditor's visible name. */
+export const billCard = (page: Page, creditor: RegExp): Locator =>
+  page.getByTestId("bill").filter({ hasText: creditor });
 
-export const stateCell = (row: Locator): Locator => row.getByRole("cell").nth(1);
+/** The card asking the player to decide on the blocking bill (time is stopped). */
+export const decisionCard = (page: Page): Locator => page.getByTestId("decision");
+
+/** Assert the engine state of a bill AND the label a person sees for it. */
+export async function expectBillState(card: Locator, state: string, label: string) {
+  const chip = card.locator("[data-state]");
+  await expect(chip).toHaveAttribute("data-state", state);
+  await expect(chip).toHaveText(label);
+}
 
 /** Click a control that sends one command, and return the server's JSON answer. */
 export async function sendVia(

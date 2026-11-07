@@ -1,16 +1,17 @@
 import { expect, test } from "@playwright/test";
 import {
   advanceTo,
+  billCard,
   captureCommands,
   cash,
+  decisionCard,
   expectAllMoneyFictional,
+  expectBillState,
   expectLessonAbout,
-  obligationRow,
   replayHeadHash,
   sendVia,
   serverSnapshot,
   startWorld,
-  stateCell,
 } from "./world";
 
 /**
@@ -26,22 +27,25 @@ test("fictional FP-30 month: pay, defer, salary, pay overdue, explanation, reloa
 }) => {
   const sent = captureCommands(page);
   const worldId = await startWorld(page);
-  const phone = obligationRow(page, /Phone provider/);
-  const rent = obligationRow(page, /Landlord/);
+  const phone = billCard(page, /Phone provider/);
+  const rent = billCard(page, /Landlord/);
 
   await expect(cash(page)).toHaveText("€800.00 (fictional)");
 
   // Day 8: the phone bill falls due and time stops until the player decides.
   await advanceTo(page, 8);
-  await expect(stateCell(phone)).toHaveText("DUE");
+  await expectBillState(phone, "DUE", "Due");
+  await expect(decisionCard(page)).toContainText("Decision needed: Phone provider");
+  await expect(phone).toContainText('Decide in the "Decision needed" card.');
   await expect(page.getByText("Decide on the due bill first.")).toBeVisible();
   await expect(page.getByRole("button", { name: /^Advance to day/ })).toBeDisabled();
 
   // Pay it: cash moves, the bill is settled, and an explanation follows (deterministic fake tutor).
-  const paid = await sendVia(page, phone.getByRole("button", { name: "Pay" }));
+  const paid = await sendVia(page, decisionCard(page).getByRole("button", { name: "Pay" }));
   expect(paid.result.status).toBe("ACCEPTED");
   await expect(cash(page)).toHaveText("€770.00 (fictional)");
-  await expect(stateCell(phone)).toHaveText("SETTLED");
+  await expectBillState(phone, "SETTLED", "Paid");
+  await expect(decisionCard(page)).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "What just happened" })).toBeVisible();
   await expect(page.getByText("TEST STAND-IN (not an AI model)")).toBeVisible();
   await expect(page.getByText("All amounts are fictional simulation money.")).toBeVisible();
@@ -57,10 +61,10 @@ test("fictional FP-30 month: pay, defer, salary, pay overdue, explanation, reloa
 
   // Day 10: rent falls due. Defer it: it becomes OVERDUE and no money moves.
   await advanceTo(page, 10);
-  await expect(stateCell(rent)).toHaveText("DUE");
-  const deferred = await sendVia(page, rent.getByRole("button", { name: "Defer" }));
+  await expectBillState(rent, "DUE", "Due");
+  const deferred = await sendVia(page, decisionCard(page).getByRole("button", { name: "Defer" }));
   expect(deferred.result.status).toBe("ACCEPTED");
-  await expect(stateCell(rent)).toHaveText("OVERDUE");
+  await expectBillState(rent, "OVERDUE", "Overdue");
   await expect(cash(page)).toHaveText("€770.00 (fictional)");
   await expect(page.getByRole("button", { name: /^Advance to day/ })).toBeEnabled();
   await expectLessonAbout(page, /you deferred the bill from Landlord/);
@@ -69,11 +73,12 @@ test("fictional FP-30 month: pay, defer, salary, pay overdue, explanation, reloa
   // Day 15: the net salary arrives; the overdue rent is still owed and can now be paid.
   await advanceTo(page, 15);
   await expect(cash(page)).toHaveText("€1670.00 (fictional)");
-  await expect(stateCell(rent)).toHaveText("OVERDUE");
+  await expectBillState(rent, "OVERDUE", "Overdue");
+  await expect(rent.getByRole("button", { name: "Defer" })).toHaveCount(0); // overdue: pay only
   const late = await sendVia(page, rent.getByRole("button", { name: "Pay" }));
   expect(late.result.status).toBe("ACCEPTED");
   await expect(cash(page)).toHaveText("€1120.00 (fictional)");
-  await expect(stateCell(rent)).toHaveText("SETTLED");
+  await expectBillState(rent, "SETTLED", "Paid");
 
   // The fictional path is labelled as such and never presented as a PayPal payment. Wait for the
   // final lesson first, so these checks also cover the tutor's text (not a loading panel).
