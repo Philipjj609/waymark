@@ -1,7 +1,7 @@
 {
   "$id": "https://schemas.finance-learning-economy.invalid/sim.event.v1.json",
   "title": "sim.event.v1",
-  "x-contracts-version": "0.2.0",
+  "x-contracts-version": "0.3.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -48,7 +48,10 @@
         "TIME_PAUSED",
         "PROVIDER_SETTLEMENT_APPLIED",
         "PROVIDER_CHECKOUT_STARTED",
-        "RESERVATION_RELEASED"
+        "RESERVATION_RELEASED",
+        "PROVIDER_CHECKOUT_CANCEL_REQUESTED",
+        "PROVIDER_CHECKOUT_STATUS_CHANGED",
+        "PROVIDER_ATTENTION_RECORDED"
       ]
     },
     "causationCommandId": {

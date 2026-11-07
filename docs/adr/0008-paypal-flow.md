@@ -90,3 +90,52 @@ capture, so a retried network call never creates a second order or capture.
 **Alternatives considered.** The player's business invoices a customer via the Invoicing API (teaches invoice ≠
 payment, but the player has to act as their own customer): kept as a stretch scenario. Authorize-then-capture
 (intent AUTHORIZE): unnecessary for a bill.
+
+## Amendment 1 (2026-11-07, contracts 0.3.0, PR #81 review): the checkout state machine
+
+**Status:** implemented on `feat/12-reserves`; awaiting owner review on #81. It implements the agreed payment principles:
+(1) a decision before time advances, (2) a checkout never traps the world, (3) DEFER while pending, the reservation
+unspendable, (4) a verified capture settles exactly once, (5) no fictional payment while an external one is unresolved,
+(6) explicit cancel/timeout/refund transitions, (7) reconcile before releasing.
+
+Reservation status (snapshot `reservations[].status`, realm always `PAYPAL_SANDBOX`). Every status keeps the earmark.
+
+| From                            | Trigger (origin)                                      | To / effect                                                         |
+| ------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------- |
+| (none)                          | `START_PROVIDER_CHECKOUT` (PLAYER)                    | AWAITING_PAYER; cash reserved, no journal                           |
+| AWAITING_PAYER, CAPTURE_DENIED  | `REQUEST_CHECKOUT_CANCEL` (PLAYER)                    | CANCEL_REQUESTED; **nothing released**                              |
+| any but NEEDS_ATTENTION         | `CAPTURE_PENDING` (VERIFIED_EXTERNAL)                 | CAPTURE_PENDING                                                     |
+| AWAITING_PAYER, CAPTURE_PENDING | `CAPTURE_DENIED` (VERIFIED_EXTERNAL)                  | CAPTURE_DENIED (buyer may retry); CANCEL_REQUESTED stays as it is   |
+| any but NEEDS_ATTENTION         | `CAPTURE_COMPLETED`, exact amount (VERIFIED_EXTERNAL) | reservation consumed + SETTLED in one command ("the capture wins")  |
+| any but NEEDS_ATTENTION         | `ORDER_VOIDED`, exact amount (VERIFIED_EXTERNAL)      | reservation released, obligation keeps DUE/OVERDUE                  |
+| any                             | a verified fact that cannot be applied (below)        | NEEDS_ATTENTION + `attention[]` record; no journal, no cash         |
+| NEEDS_ATTENTION                 | any further verified fact                             | another record (`RESERVATION_NEEDS_ATTENTION`); never auto-resolved |
+
+`DEFER_OBLIGATION` (PLAYER) is allowed in every status (principles 2 and 3); `PAY_OBLIGATION` and a second checkout are
+`PAYMENT_IN_FLIGHT` in every status (principle 5). `ADVANCE_TIME` stays blocked while the decision is open (principle 1).
+
+**Attention reasons** (`PROVIDER_ATTENTION_RECORDED`, idempotent per (eventType, providerEventId)): `CAPTURE_AFTER_VOID`,
+`CAPTURE_FOR_SETTLED_OBLIGATION`, `CAPTURE_AMOUNT_MISMATCH`, `VOID_AMOUNT_MISMATCH`, `VOID_AFTER_CAPTURE`,
+`REFUNDED_AFTER_SETTLEMENT`, `REFUND_BEFORE_SETTLEMENT`, `RESERVATION_NEEDS_ATTENTION`. If the obligation has an active
+reservation it becomes NEEDS_ATTENTION and stays reserved. Facts that do not belong to the obligation (another world, an
+unknown obligation, an operation never started for it) are still rejected, because there is nothing to record them against.
+
+**Cancel and timeout.** Cancel is a request. Release needs a verified `ORDER_VOIDED`, whose `providerEventId` is the
+PayPal **order id**: the server read the order back as VOIDED, or as expired / not found after its expiry, with no
+capture. The engine has no clock (invariant 10): a timeout is the server's reconciliation (GET order) producing
+`ORDER_VOIDED` or `CAPTURE_COMPLETED`. Nothing time-based was added to the engine.
+
+**Refund (conservative, implemented).** `CAPTURE_REFUNDED` never reverses anything. After settlement the obligation
+stays SETTLED and the fact is recorded as `REFUNDED_AFTER_SETTLEMENT`.
+
+**Supersedes** the line "A known operation of the same bill without a reservation (late capture after a void) still
+settles": a capture after a verified void is now `CAPTURE_AFTER_VOID` and never settles automatically.
+
+**Awaiting the owner (`needs-decision`):**
+1. Refund semantics. Alternative to the conservative rule: reopen the obligation with a reversal journal (DR cash /
+   CR expense, `reversesJournalId` set) back to DUE/OVERDUE, so the player owes the bill again. Money/ledger semantics.
+2. Human resolution of NEEDS_ATTENTION. There is no resolve command yet, so such a reservation stays reserved (time
+   and DEFER still work). Who may resolve it, and with which outcomes (settle, release, refund)?
+3. Whether an open attention record without a reservation (e.g. a capture after a void) should block
+   `PAY_OBLIGATION` / a new checkout for that bill (principle 5), at the risk of a bill nobody can pay until resolved.
+4. Whether a cancel should also be allowed from CAPTURE_PENDING (today: refused, because a capture is already underway).

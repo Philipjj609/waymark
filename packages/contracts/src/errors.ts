@@ -27,6 +27,8 @@ export const CommandErrorCodeSchema = z.enum([
   "PAYMENT_IN_FLIGHT",
   /** 0.2.0: a provider event's operationId does not match the obligation's active checkout. */
   "PROVIDER_OPERATION_MISMATCH",
+  /** 0.3.0: no checkout to cancel, or it is already CANCEL_REQUESTED / CAPTURE_PENDING / NEEDS_ATTENTION. */
+  "CHECKOUT_NOT_CANCELLABLE",
 ]);
 export type CommandErrorCode = z.infer<typeof CommandErrorCodeSchema>;
 

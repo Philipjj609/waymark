@@ -93,13 +93,16 @@ describe("M1 idempotency is bound to intent, not only the id", () => {
 });
 
 describe("M2 non-settling provider events are never silently accepted", () => {
-  it("refund after an applied capture is rejected visibly, not deduplicated away", () => {
+  it("refund after an applied capture is recorded for a human, not deduplicated away (0.3.0)", () => {
     let w = phoneInFlight();
     w = execute(w, asProvider(w, 10, capture(w, "CAPTURE_COMPLETED"))).state;
     expect(w.obligations[PHONE]?.state).toBe("SETTLED"); // the capture really applied
+    const journals = w.ledger.size;
     const out = execute(w, asProvider(w, 11, capture(w, "CAPTURE_REFUNDED")));
-    expect(out.result.status).toBe("REJECTED");
-    expect(out.result.error?.code).toBe("PROVIDER_EVENT_NOT_SETTLING");
+    expect(out.events.map((e) => e.eventType)).toEqual(["PROVIDER_ATTENTION_RECORDED"]);
+    expect(out.state.attention.map((a) => a.reason)).toEqual(["REFUNDED_AFTER_SETTLEMENT"]);
+    expect(out.state.obligations[PHONE]?.state).toBe("SETTLED"); // no reversal (owner decision)
+    expect(out.state.ledger.size).toBe(journals);
   });
 });
 
@@ -166,13 +169,16 @@ describe("M5 posted entries and events are deeply immutable", () => {
 });
 
 describe("M6 provider capture on a settled obligation reports the real reason", () => {
-  it("fictional pay first, then capture → OBLIGATION_NOT_PAYABLE (not AMOUNT_MISMATCH)", () => {
+  it("fictional pay first, then capture → recorded as attention with the real reason", () => {
     // The checkout was voided, then the bill was paid fictionally; its operation's capture is late.
     let w = phoneInFlight();
     w = execute(w, asProvider(w, 9, capture(w, "ORDER_VOIDED", "VOID-9"))).state;
     w = run(w, [[cmd(3), { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } }]]);
     const out = execute(w, asProvider(w, 10, capture(w, "CAPTURE_COMPLETED")));
-    expect(out.result.error?.code).toBe("OBLIGATION_NOT_PAYABLE");
+    expect(out.result.status).toBe("ACCEPTED");
+    // 0.3.0: recorded for a human with the real reason, never a second debit.
+    expect(out.state.attention.map((a) => a.reason)).toEqual(["CAPTURE_FOR_SETTLED_OBLIGATION"]);
+    expect(out.state.ledger.size).toBe(w.ledger.size);
   });
 });
 

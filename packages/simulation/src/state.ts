@@ -2,6 +2,8 @@ import type {
   AccountCode,
   ActorId,
   AssetId,
+  AttentionReason,
+  AttentionRecord,
   BlockingDecision,
   CommandResult,
   CurrencyCode,
@@ -14,6 +16,7 @@ import type {
   Obligation,
   ObligationId,
   ProviderOperationId,
+  ReservationStatus,
   ScheduleId,
   WorldDay,
   WorldId,
@@ -58,6 +61,14 @@ export interface Reservation {
   readonly entityId: EntityId;
   readonly amount: Money;
   readonly sinceDay: WorldDay;
+  /**
+   * Truthful checkout status (0.3.0). Every status keeps the earmark: only a verified capture
+   * (settles) or a verified void (releases) ends a reservation, and neither applies
+   * automatically once it is NEEDS_ATTENTION (ADR-0008: a human resolves it).
+   */
+  readonly status: ReservationStatus;
+  /** Non-null exactly when status is NEEDS_ATTENTION. */
+  readonly attentionReason: AttentionReason | null;
 }
 
 /**
@@ -119,7 +130,16 @@ export interface WorldState {
   readonly results: Readonly<Record<string, CommandResult>>;
   /** commandId → sha256 of the command's intent (kind, payload, origin, actor). Detects key reuse. */
   readonly fingerprints: Readonly<Record<string, string>>;
-  /** Provider event ids already applied (one verified provider event → at most one effect). */
+  /**
+   * Verified provider facts recorded for a human (ADR-0008 NEEDS_ATTENTION), append-only. A
+   * record posts no journal and moves no cash.
+   */
+  readonly attention: readonly AttentionRecord[];
+  /**
+   * Provider fact keys already applied (one verified provider event → at most one effect). A
+   * settled capture is its bare capture id (pre-0.2.0 form, kept for stable hashes); other facts
+   * are `<eventType>:<providerEventId>`; recorded attention is `ATTENTION:<eventType>:<id>`.
+   */
   readonly appliedProviderEvents: readonly string[];
   readonly counters: {
     readonly journal: number;

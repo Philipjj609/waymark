@@ -28,6 +28,12 @@ export const DomainEventTypeSchema = z.enum([
   "PROVIDER_CHECKOUT_STARTED",
   /** 0.2.0: a reservation ended without settlement (verified ORDER_VOIDED). No journal. */
   "RESERVATION_RELEASED",
+  /** 0.3.0: the player asked to cancel a checkout; nothing is released. No journal. */
+  "PROVIDER_CHECKOUT_CANCEL_REQUESTED",
+  /** 0.3.0: a verified CAPTURE_PENDING / CAPTURE_DENIED changed a checkout's status. No journal. */
+  "PROVIDER_CHECKOUT_STATUS_CHANGED",
+  /** 0.3.0: a verified fact was recorded for a human instead of applied. No journal, no cash. */
+  "PROVIDER_ATTENTION_RECORDED",
 ]);
 export type DomainEventType = z.infer<typeof DomainEventTypeSchema>;
 

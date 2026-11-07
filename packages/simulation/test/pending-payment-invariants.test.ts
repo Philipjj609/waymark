@@ -99,7 +99,7 @@ describe("a pending payment can never trap the player (I-014, ADR-0008 N1)", () 
     expect(settled?.payload.realm).toBe("PAYPAL_SANDBOX");
   });
 
-  it("a capture after a fictional payment is a visible rejection (reconciliation), never a second debit", () => {
+  it("a capture after a fictional payment is recorded for a human, never a second debit", () => {
     // Checkout started, then voided, then paid fictionally: the voided operation's late capture.
     let w = run(fp30(), [
       [cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }],
@@ -109,8 +109,9 @@ describe("a pending payment can never trap the player (I-014, ADR-0008 N1)", () 
     w = run(w, [[cmd(3), { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } }]]);
     const before = cash(w);
     const out = execute(w, provider(w, capture(w, PHONE, 3000, "CAP-AFTER")));
-    expect(out.result.error?.code).toBe("OBLIGATION_NOT_PAYABLE");
+    expect(out.events.map((e) => e.eventType)).toEqual(["PROVIDER_ATTENTION_RECORDED"]);
     w = out.state;
+    expect(w.attention.map((a) => a.reason)).toEqual(["CAPTURE_FOR_SETTLED_OBLIGATION"]);
     expect(cash(w)).toBe(before);
   });
 
@@ -119,15 +120,23 @@ describe("a pending payment can never trap the player (I-014, ADR-0008 N1)", () 
       [cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }],
       [cmd(2), startCheckout(PHONE)],
     ]);
+    // 0.3.0: a denial is a status change, a refund before settlement is recorded for a human.
+    // Neither settles, posts a journal or releases the earmark.
     for (const t of ["CAPTURE_DENIED", "CAPTURE_REFUNDED"] as const) {
-      expect(execute(w, provider(w, capture(w, PHONE, 3000, "CAP-X", t))).result.error?.code).toBe(
-        "PROVIDER_EVENT_NOT_SETTLING",
-      );
+      const out = execute(w, provider(w, capture(w, PHONE, 3000, "CAP-X", t)));
+      expect(out.result.status).toBe("ACCEPTED");
+      expect(out.state.obligations[PHONE]?.state).toBe("DUE");
+      expect(out.state.ledger.size).toBe(w.ledger.size);
+      expect(Object.keys(out.state.reservations)).toEqual([PHONE]);
     }
     w = execute(w, provider(w, capture(w, PHONE, 3000, "CAP-X"))).state;
     expect(w.obligations[PHONE]?.state).toBe("SETTLED"); // the refund below follows a real capture
+    const journals = w.ledger.size;
     const refund = execute(w, provider(w, capture(w, PHONE, 3000, "CAP-X", "CAPTURE_REFUNDED")));
-    expect(refund.result.status).toBe("REJECTED");
+    expect(refund.events.map((e) => e.eventType)).toEqual(["PROVIDER_ATTENTION_RECORDED"]);
+    expect(refund.state.attention.at(-1)?.reason).toBe("REFUNDED_AFTER_SETTLEMENT");
+    expect(refund.state.obligations[PHONE]?.state).toBe("SETTLED");
+    expect(refund.state.ledger.size).toBe(journals);
   });
 });
 

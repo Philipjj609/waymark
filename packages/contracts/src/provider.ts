@@ -15,19 +15,37 @@ export const VerifiedProviderEventSchema = z
     schemaVersion: z.literal("provider.event.v1"),
     provider: z.literal("PAYPAL_SANDBOX"),
     /**
-     * Dedup key. MUST be the PayPal **capture id** for every verification path
-     * (order lookup, webhook postback, local webhook check), never a webhook
-     * event id: the same capture can arrive via several paths and must collapse
-     * to one effect. Webhook event ids belong in `verification.evidenceRef`.
+     * Dedup key: always the PayPal id of the fact itself, never a webhook event id (the same fact
+     * can arrive via several paths and must collapse to one effect; webhook event ids belong in
+     * `verification.evidenceRef`).
+     * - CAPTURE_COMPLETED / CAPTURE_PENDING / CAPTURE_DENIED / CAPTURE_REFUNDED: the PayPal
+     *   **capture id**, on every verification path (order lookup, webhook postback, local check).
+     * - ORDER_VOIDED: the PayPal **order id** (a voided or expired order has no capture id).
+     * The engine deduplicates per (eventType, providerEventId), so a later refund or denial of an
+     * applied capture is never swallowed by the capture's own dedup entry.
      */
     providerEventId: z.string().min(1).max(128),
     operationId: ProviderOperationIdSchema,
     /**
-     * ORDER_VOIDED (0.2.0): the server verified the order can no longer be captured (VOIDED or
-     * expired with no capture, ADR-0008 step 5b). It releases the reservation; it never settles.
-     * A single CAPTURE_DENIED does NOT release it: the buyer may retry.
+     * - CAPTURE_COMPLETED: the only type that settles anything.
+     * - CAPTURE_PENDING (0.3.0) / CAPTURE_DENIED: status only, the reservation is kept (after a
+     *   denial the buyer may retry, ADR-0008 M2).
+     * - CAPTURE_REFUNDED: never reverses anything in the engine; it is recorded as attention.
+     * - ORDER_VOIDED (0.2.0): the server verified that the order can no longer be captured: its
+     *   status read back is VOIDED, or it is expired / not found after its expiry with no capture
+     *   (ADR-0008 step 5b). A cancel or a timeout ends this way: the server's reconciliation
+     *   (GET order) produces this fact, because the engine has no clock. It releases the
+     *   reservation and never settles.
+     * A verified fact that cannot be applied normally is recorded (PROVIDER_ATTENTION_RECORDED),
+     * not just rejected.
      */
-    eventType: z.enum(["CAPTURE_COMPLETED", "CAPTURE_DENIED", "CAPTURE_REFUNDED", "ORDER_VOIDED"]),
+    eventType: z.enum([
+      "CAPTURE_COMPLETED",
+      "CAPTURE_DENIED",
+      "CAPTURE_REFUNDED",
+      "ORDER_VOIDED",
+      "CAPTURE_PENDING",
+    ]),
     amount: PositiveMoneySchema,
     mapping: z
       .object({

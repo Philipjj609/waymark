@@ -47,6 +47,13 @@ export const CommandEnvelopeSchema = z.discriminatedUnion("kind", [
    * The provider operation id is derived by the engine, never chosen by the client.
    */
   command("START_PROVIDER_CHECKOUT", z.object({ obligationId: ObligationIdSchema }).strict()),
+  /**
+   * 0.3.0 (ADR-0008 amendment): ask to cancel the obligation's in-flight sandbox checkout. It only
+   * marks the reservation CANCEL_REQUESTED; it releases NOTHING. The server then re-reads the
+   * order: a verified ORDER_VOIDED releases the earmark, a completed capture still settles
+   * ("the capture wins"). Allowed while AWAITING_PAYER or CAPTURE_DENIED. DEFER stays allowed.
+   */
+  command("REQUEST_CHECKOUT_CANCEL", z.object({ obligationId: ObligationIdSchema }).strict()),
   command(
     "PURCHASE_ASSET",
     z

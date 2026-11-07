@@ -86,6 +86,78 @@ export type PaymentAttemptState = z.infer<typeof PaymentAttemptStateSchema>;
 export const MoneyRealmSchema = z.enum(["FICTIONAL", "PAYPAL_SANDBOX"]);
 
 /**
+ * 0.3.0 (ADR-0008 amendment): truthful status of an in-flight PayPal SANDBOX checkout. Every
+ * status keeps the reservation (the cash stays unspendable). Only a verified CAPTURE_COMPLETED
+ * (settles) or a verified ORDER_VOIDED (releases) ends it, and neither applies automatically to
+ * a NEEDS_ATTENTION reservation.
+ * - AWAITING_PAYER: checkout started, no provider fact yet (PLAYER `START_PROVIDER_CHECKOUT`).
+ * - CANCEL_REQUESTED: the player asked to cancel (PLAYER `REQUEST_CHECKOUT_CANCEL`). Nothing is
+ *   released yet: the server must first verify that the order can no longer be captured.
+ * - CAPTURE_PENDING: a verified capture is PENDING at PayPal (VERIFIED_EXTERNAL).
+ * - CAPTURE_DENIED: a verified capture was declined; the buyer may retry (VERIFIED_EXTERNAL).
+ * - NEEDS_ATTENTION: a verified fact could not be applied normally (see `attentionReason`).
+ *
+ * Timeouts are NOT an engine concept (the engine has no clock, invariant 10). The server's
+ * reconciliation re-reads the order (GET /v2/checkout/orders/{id}) and turns an expired or
+ * voided order into a verified ORDER_VOIDED, or a completed capture into CAPTURE_COMPLETED.
+ */
+export const ReservationStatusSchema = z.enum([
+  "AWAITING_PAYER",
+  "CANCEL_REQUESTED",
+  "CAPTURE_PENDING",
+  "CAPTURE_DENIED",
+  "NEEDS_ATTENTION",
+]);
+export type ReservationStatus = z.infer<typeof ReservationStatusSchema>;
+
+/**
+ * 0.3.0: why a VERIFIED_EXTERNAL provider fact was recorded for a human instead of applied
+ * (ADR-0008: "never a silent rejection"). Recording posts no journal and moves no cash.
+ */
+export const AttentionReasonSchema = z.enum([
+  /** A capture for an operation whose order was already verified voided (earmark released). */
+  "CAPTURE_AFTER_VOID",
+  /** A capture for an obligation that is already SETTLED (fictionally or by another capture). */
+  "CAPTURE_FOR_SETTLED_OBLIGATION",
+  /** A capture whose amount differs from the reservation and the remaining amount. */
+  "CAPTURE_AMOUNT_MISMATCH",
+  /** A void whose amount differs from the reservation; the reservation is kept. */
+  "VOID_AMOUNT_MISMATCH",
+  /** A void for an operation whose capture already settled the obligation. */
+  "VOID_AFTER_CAPTURE",
+  /** A refund for an already SETTLED obligation: it stays SETTLED, nothing is reversed. */
+  "REFUNDED_AFTER_SETTLEMENT",
+  /** A refund seen before any capture settled the obligation. */
+  "REFUND_BEFORE_SETTLEMENT",
+  /** Any further fact for a reservation that already NEEDS_ATTENTION: a human resolves it. */
+  "RESERVATION_NEEDS_ATTENTION",
+]);
+export type AttentionReason = z.infer<typeof AttentionReasonSchema>;
+
+/** 0.3.0: one recorded provider fact awaiting a human (snapshot `attention[]`, append-only). */
+export const AttentionRecordSchema = z
+  .object({
+    realm: z.literal("PAYPAL_SANDBOX"),
+    providerEventId: z.string().min(1).max(128),
+    eventType: z.enum([
+      "CAPTURE_COMPLETED",
+      "CAPTURE_DENIED",
+      "CAPTURE_REFUNDED",
+      "ORDER_VOIDED",
+      "CAPTURE_PENDING",
+    ]),
+    operationId: ProviderOperationIdSchema,
+    obligationId: ObligationIdSchema,
+    reason: AttentionReasonSchema,
+    amount: PositiveMoneySchema,
+    /** The obligation's active reservation that was put into NEEDS_ATTENTION, if any. */
+    reservationOperationId: ProviderOperationIdSchema.nullable(),
+    day: WorldDaySchema,
+  })
+  .strict();
+export type AttentionRecord = z.infer<typeof AttentionRecordSchema>;
+
+/**
  * Day phases, processed in this order inside one world day (ECO-020 §5).
  * Ordering key for scheduled work: (day, phase, priority, sequence).
  */
@@ -151,7 +223,15 @@ export const BlockingDecisionSchema = z
     obligationId: ObligationIdSchema,
     sinceDay: WorldDaySchema,
     options: z
-      .array(z.enum(["PAY_OBLIGATION", "DEFER_OBLIGATION", "START_PROVIDER_CHECKOUT"]))
+      .array(
+        z.enum([
+          "PAY_OBLIGATION",
+          "DEFER_OBLIGATION",
+          "START_PROVIDER_CHECKOUT",
+          /** 0.3.0: offered while a checkout is AWAITING_PAYER or CAPTURE_DENIED. */
+          "REQUEST_CHECKOUT_CANCEL",
+        ]),
+      )
       .min(1),
   })
   .strict();
@@ -199,9 +279,17 @@ export const WorldSnapshotSchema = z
           entityId: EntityIdSchema,
           amount: PositiveMoneySchema,
           sinceDay: WorldDaySchema,
+          /** 0.3.0: always PAYPAL_SANDBOX (the earmarked cash itself is fictional). */
+          realm: z.literal("PAYPAL_SANDBOX"),
+          /** 0.3.0: see ReservationStatusSchema. */
+          status: ReservationStatusSchema,
+          /** 0.3.0: non-null exactly when status is NEEDS_ATTENTION (the latest reason). */
+          attentionReason: AttentionReasonSchema.nullable(),
         })
         .strict(),
     ),
+    /** 0.3.0: verified provider facts recorded for a human, oldest first. Never auto-resolved. */
+    attention: z.array(AttentionRecordSchema),
     /** 0.2.0: per entity, cash minus reservations. The UI shows this; it never computes it. */
     availableCash: z.array(z.object({ entityId: EntityIdSchema, amount: MoneySchema }).strict()),
     playerActorId: ActorIdSchema,

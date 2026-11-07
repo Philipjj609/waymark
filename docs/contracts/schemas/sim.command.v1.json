@@ -1,7 +1,7 @@
 {
   "$id": "https://schemas.finance-learning-economy.invalid/sim.command.v1.json",
   "title": "sim.command.v1",
-  "x-contracts-version": "0.2.0",
+  "x-contracts-version": "0.3.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
     {
@@ -305,6 +305,72 @@
         },
         "kind": {
           "type": "string",
+          "const": "REQUEST_CHECKOUT_CANCEL"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "obligationId": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 128,
+              "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+            }
+          },
+          "required": [
+            "obligationId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "commandId",
+        "worldId",
+        "expectedWorldVersion",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "sim.command.v1"
+        },
+        "commandId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "worldId": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 128,
+          "pattern": "^wld_[A-Za-z0-9_.:-]+$"
+        },
+        "expectedWorldVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
           "const": "PURCHASE_ASSET"
         },
         "payload": {
@@ -435,7 +501,8 @@
                     "CAPTURE_COMPLETED",
                     "CAPTURE_DENIED",
                     "CAPTURE_REFUNDED",
-                    "ORDER_VOIDED"
+                    "ORDER_VOIDED",
+                    "CAPTURE_PENDING"
                   ]
                 },
                 "amount": {

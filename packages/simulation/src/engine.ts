@@ -2,6 +2,8 @@ import {
   type AccountCode,
   ActorIdSchema,
   type AssetId,
+  type AttentionReason,
+  type AttentionRecord,
   type AuthorizedCommand,
   type BlockingDecision,
   CommandEnvelopeSchema,
@@ -21,6 +23,7 @@ import {
   type ObligationId,
   OriginSchema,
   type ProviderOperationId,
+  type ReservationStatus,
   type VerifiedProviderEvent,
   type WorldDay,
 } from "@fle/contracts";
@@ -34,7 +37,7 @@ import type {
   ScheduledItem,
   WorldState,
 } from "./state.js";
-import { availableCash } from "./world.js";
+import { availableCash, isCancellable } from "./world.js";
 
 /** Internal rejection signal. Never escapes `execute`; converted to a CommandResult. */
 class Reject extends Error {
@@ -138,6 +141,11 @@ export class Tx {
 
   reservation(id: ObligationId): Reservation | undefined {
     return this.s.reservations[id];
+  }
+
+  /** Replace an existing reservation (status changes only; amount and operation never change). */
+  setReservation(r: Reservation): void {
+    this.s.reservations = { ...this.s.reservations, [r.obligationId]: r };
   }
 
   /** End a reservation (consumed by settlement or released by a verified void). */
@@ -342,34 +350,169 @@ function requireRegisteredOperation(tx: Tx, ev: VerifiedProviderEvent): Provider
 }
 
 /**
- * Verified ORDER_VOIDED (ADR-0008 5b): the order can no longer be captured, so the earmark is
- * released. It never settles and never posts a journal; the obligation keeps its state (and its
- * blocking decision, if any). Deduplicated per fact, keyed by event type + provider event id so
- * it can never collide with a capture id in the shared store.
+ * Dedup keys in `appliedProviderEvents`. Facts are deduplicated per (eventType, providerEventId)
+ * (ADR-0008 H3): a settled capture keeps its bare capture id (pre-0.2.0 form, so existing hashes
+ * and stores are unchanged); every other fact is `<eventType>:<id>`; a fact recorded for a human
+ * is `ATTENTION:<eventType>:<id>`, so the same fact is never recorded twice.
  */
-function releaseOnVoid(tx: Tx, ev: VerifiedProviderEvent): void {
-  const factKey = `ORDER_VOIDED:${ev.providerEventId}`;
-  if (tx.s.appliedProviderEvents.includes(factKey)) return; // redelivered void: one effect only
+const factKey = (ev: VerifiedProviderEvent) => `${ev.eventType}:${ev.providerEventId}`;
+const attentionKey = (ev: VerifiedProviderEvent) =>
+  `ATTENTION:${ev.eventType}:${ev.providerEventId}`;
+const seen = (tx: Tx, key: string) => tx.s.appliedProviderEvents.includes(key);
+
+/**
+ * Mapping checks shared by every verified fact. A fact for another world, an unknown bill, or an
+ * operation not started for that very bill does not belong to this obligation at all, so it is
+ * rejected (the server alerts), not recorded against an obligation it might not concern.
+ */
+function resolveProviderTarget(
+  tx: Tx,
+  ev: VerifiedProviderEvent,
+): { o: Obligation; op: ProviderOperation; r: Reservation | undefined } {
   if (ev.mapping.worldId !== tx.s.worldId)
     throw new Reject("PROVIDER_EVENT_UNMAPPED", "event maps to another world");
   const o = tx.s.obligations[ev.mapping.obligationId];
   if (!o) throw new Reject("PROVIDER_EVENT_UNMAPPED", `no obligation ${ev.mapping.obligationId}`);
-  requireRegisteredOperation(tx, ev);
-  const r = tx.reservation(o.obligationId);
-  if (!r || r.operationId !== ev.operationId) {
+  const op = requireRegisteredOperation(tx, ev);
+  return { o, op, r: tx.reservation(o.obligationId) };
+}
+
+const sameAmount = (a: Money, b: Money) =>
+  a.currency === b.currency && a.amountMinor === b.amountMinor;
+
+/**
+ * NEEDS_ATTENTION (ADR-0008, principle 7): a verified fact that cannot be applied normally is
+ * RECORDED, never silently rejected. It posts no journal, moves no cash and changes no
+ * obligation. If the obligation has an active reservation, the reservation is kept (still not
+ * spendable) and marked NEEDS_ATTENTION: from then on no automatic fact settles or releases it;
+ * a human resolves it. Idempotent per (eventType, providerEventId).
+ */
+function recordAttention(
+  tx: Tx,
+  ev: VerifiedProviderEvent,
+  o: Obligation,
+  r: Reservation | undefined,
+  reason: AttentionReason,
+): void {
+  const record: AttentionRecord = {
+    realm: "PAYPAL_SANDBOX",
+    providerEventId: ev.providerEventId,
+    eventType: ev.eventType,
+    operationId: ev.operationId,
+    obligationId: o.obligationId,
+    reason,
+    amount: ev.amount,
+    reservationOperationId: r?.operationId ?? null,
+    day: tx.s.day,
+  };
+  tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, attentionKey(ev)];
+  tx.s.attention = [...tx.s.attention, record];
+  if (r) tx.setReservation({ ...r, status: "NEEDS_ATTENTION", attentionReason: reason });
+  tx.emit("PROVIDER_ATTENTION_RECORDED", {
+    ...record,
+    provider: ev.provider,
+    previousReservationStatus: r?.status ?? null,
+    obligationState: o.state,
+    verification: ev.verification,
+  });
+}
+
+/**
+ * Verified CAPTURE_COMPLETED (ADR-0008 5a): the only fact that settles. It settles exactly once,
+ * and only by consuming the active reservation of its own operation with the exact amount.
+ * Everything else that is verified but inconsistent goes to NEEDS_ATTENTION.
+ */
+function applyCapture(tx: Tx, ev: VerifiedProviderEvent): void {
+  if (seen(tx, ev.providerEventId)) return; // duplicate capture: one effect only (T02)
+  const { o, op, r } = resolveProviderTarget(tx, ev);
+  if (seen(tx, attentionKey(ev))) return; // already recorded for a human
+  const own = r?.operationId === op.operationId ? r : undefined;
+  if (own?.status === "NEEDS_ATTENTION") {
+    recordAttention(tx, ev, o, r, "RESERVATION_NEEDS_ATTENTION");
+    return;
+  }
+  // Already settled (fictionally after a void, or by another capture of this bill): the real
+  // reason first, since a human may have to refund the sandbox payment. Never a second debit.
+  if (o.state === "SETTLED") {
+    recordAttention(tx, ev, o, r, "CAPTURE_FOR_SETTLED_OBLIGATION");
+    return;
+  }
+  // The order was verified voided and the earmark released: a capture now contradicts a
+  // verified fact. Never settle it automatically (the bill may since have been re-checked-out);
+  // a human decides. A newer checkout of the same bill is flagged NEEDS_ATTENTION too.
+  if (op.status === "VOIDED") {
+    recordAttention(tx, ev, o, r, "CAPTURE_AFTER_VOID");
+    return;
+  }
+  if (o.state !== "DUE" && o.state !== "OVERDUE") {
+    // Unreachable today (a registered operation's bill is DUE, OVERDUE or SETTLED).
+    throw new Reject("OBLIGATION_NOT_PAYABLE", `obligation ${o.obligationId} is ${o.state}`);
+  }
+  if (!own) {
+    // Unreachable: an ACTIVE operation always has its reservation. Refuse, never guess.
+    throw new Reject(
+      "PROVIDER_OPERATION_MISMATCH",
+      `capture is for ${ev.operationId}, active checkout is ${r?.operationId ?? "none"}`,
+      { activeOperationId: r?.operationId ?? null, eventOperationId: ev.operationId },
+    );
+  }
+  // Without partial settlement a reservation always equals the remaining amount; check both.
+  if (!sameAmount(ev.amount, remaining(o)) || !sameAmount(ev.amount, own.amount)) {
+    recordAttention(tx, ev, o, r, "CAPTURE_AMOUNT_MISMATCH");
+    return;
+  }
+  tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, ev.providerEventId];
+  // Consume the earmark and settle in this same command (ADR-0008 5a). The reserved cash is
+  // then exactly what settle() finds available, so a reserved capture can't be INSUFFICIENT_FUNDS.
+  // Any status but NEEDS_ATTENTION settles: after CANCEL_REQUESTED "the capture wins".
+  tx.dropReservation(o.obligationId);
+  tx.markOperation(ev.operationId, "CAPTURED");
+  const applied = tx.emit("PROVIDER_SETTLEMENT_APPLIED", {
+    provider: ev.provider,
+    providerEventId: ev.providerEventId,
+    operationId: ev.operationId,
+    verification: ev.verification,
+    reservationConsumed: { amount: own.amount },
+  });
+  settle(tx, o, "PAYPAL_SANDBOX", {
+    providerEventId: ev.providerEventId,
+    providerAppliedEventId: applied,
+  });
+}
+
+/**
+ * Verified ORDER_VOIDED (ADR-0008 5b): the server verified the order can no longer be captured
+ * (VOIDED, or expired / not found after expiry). This is the ONLY way a cancel request or a
+ * timeout releases an earmark. It never settles and never posts a journal; the obligation keeps
+ * its state (and its blocking decision, if any). `providerEventId` is the PayPal order id.
+ */
+function applyVoid(tx: Tx, ev: VerifiedProviderEvent): void {
+  if (seen(tx, factKey(ev))) return; // redelivered void: one effect only
+  const { o, op, r } = resolveProviderTarget(tx, ev);
+  if (seen(tx, attentionKey(ev))) return;
+  if (op.status === "CAPTURED") {
+    recordAttention(tx, ev, o, r, "VOID_AFTER_CAPTURE");
+    return;
+  }
+  if (op.status === "VOIDED" || !r || r.operationId !== ev.operationId) {
+    // Already voided under another order id, or not this bill's active checkout.
     throw new Reject(
       "PROVIDER_OPERATION_MISMATCH",
       `void is for ${ev.operationId}, active checkout is ${r?.operationId ?? "none"}`,
       { activeOperationId: r?.operationId ?? null, eventOperationId: ev.operationId },
     );
   }
-  if (ev.amount.currency !== r.amount.currency || ev.amount.amountMinor !== r.amount.amountMinor) {
-    throw new Reject("PROVIDER_AMOUNT_MISMATCH", "voided amount differs from the reservation", {
-      voidedMinor: ev.amount.amountMinor,
-      reservedMinor: r.amount.amountMinor,
-    });
+  if (r.status === "NEEDS_ATTENTION") {
+    recordAttention(tx, ev, o, r, "RESERVATION_NEEDS_ATTENTION");
+    return;
   }
-  tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, factKey];
+  // A mismatched void must not leave the earmark silently locked: it stays reserved (not
+  // spendable) and becomes visibly NEEDS_ATTENTION.
+  if (!sameAmount(ev.amount, r.amount)) {
+    recordAttention(tx, ev, o, r, "VOID_AMOUNT_MISMATCH");
+    return;
+  }
+  tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, factKey(ev)];
   tx.dropReservation(o.obligationId);
   tx.markOperation(r.operationId, "VOIDED");
   tx.emit("RESERVATION_RELEASED", {
@@ -382,6 +525,74 @@ function releaseOnVoid(tx: Tx, ev: VerifiedProviderEvent): void {
     providerEventId: ev.providerEventId,
     verification: ev.verification,
   });
+}
+
+/**
+ * Verified CAPTURE_PENDING / CAPTURE_DENIED: status only. The earmark is kept either way (a
+ * pending capture may still complete; after a denial the buyer may retry, ADR-0008 M2). A denial
+ * does not undo a cancel request; a pending capture does show over it (the capture may win).
+ */
+function applyCaptureStatus(tx: Tx, ev: VerifiedProviderEvent): void {
+  if (seen(tx, factKey(ev))) return;
+  const { o, op, r } = resolveProviderTarget(tx, ev);
+  if (!r || r.operationId !== op.operationId) {
+    throw new Reject(
+      "PROVIDER_OPERATION_MISMATCH",
+      `${ev.eventType} is for ${ev.operationId}, active checkout is ${r?.operationId ?? "none"}`,
+      { activeOperationId: r?.operationId ?? null, eventOperationId: ev.operationId },
+    );
+  }
+  if (seen(tx, attentionKey(ev))) return;
+  if (r.status === "NEEDS_ATTENTION") {
+    recordAttention(tx, ev, o, r, "RESERVATION_NEEDS_ATTENTION");
+    return;
+  }
+  if (!sameAmount(ev.amount, r.amount)) {
+    throw new Reject(
+      "PROVIDER_AMOUNT_MISMATCH",
+      `${ev.eventType} amount differs from the reservation`,
+      {
+        eventMinor: ev.amount.amountMinor,
+        reservedMinor: r.amount.amountMinor,
+      },
+    );
+  }
+  const to: ReservationStatus =
+    ev.eventType === "CAPTURE_PENDING"
+      ? "CAPTURE_PENDING"
+      : r.status === "CANCEL_REQUESTED"
+        ? "CANCEL_REQUESTED"
+        : "CAPTURE_DENIED";
+  if (to === r.status) return; // nothing changes, nothing is recorded
+  tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, factKey(ev)];
+  tx.setReservation({ ...r, status: to });
+  tx.emit("PROVIDER_CHECKOUT_STATUS_CHANGED", {
+    obligationId: o.obligationId,
+    operationId: r.operationId,
+    from: r.status,
+    to,
+    provider: ev.provider,
+    providerEventId: ev.providerEventId,
+    eventType: ev.eventType,
+    verification: ev.verification,
+  });
+}
+
+/**
+ * Verified CAPTURE_REFUNDED. Conservative by design: it never reverses a settlement and never
+ * reopens the obligation. After settlement it stays SETTLED and is recorded as
+ * REFUNDED_AFTER_SETTLEMENT; reopening it via a reversal journal is an owner decision (#81).
+ */
+function applyRefund(tx: Tx, ev: VerifiedProviderEvent): void {
+  const { o, r } = resolveProviderTarget(tx, ev);
+  if (seen(tx, attentionKey(ev))) return;
+  recordAttention(
+    tx,
+    ev,
+    o,
+    r,
+    o.state === "SETTLED" ? "REFUNDED_AFTER_SETTLEMENT" : "REFUND_BEFORE_SETTLEMENT",
+  );
 }
 
 type Handler = (tx: Tx, cmd: AuthorizedCommand) => void;
@@ -469,6 +680,8 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
       entityId: o.debtorEntityId,
       amount: due,
       sinceDay: tx.s.day,
+      status: "AWAITING_PAYER",
+      attentionReason: null,
     };
     tx.s.reservations = { ...tx.s.reservations, [o.obligationId]: reservation };
     const operation: ProviderOperation = {
@@ -506,6 +719,33 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
       obligationId: o.obligationId,
       newState: "OVERDUE",
       lateFee: null,
+    });
+  },
+
+  REQUEST_CHECKOUT_CANCEL(tx, cmd) {
+    if (cmd.kind !== "REQUEST_CHECKOUT_CANCEL") return;
+    const o = tx.obligation(cmd.payload.obligationId);
+    requireOwnedEntity(tx, o.debtorEntityId, cmd);
+    const r = tx.reservation(o.obligationId);
+    if (!r) {
+      throw new Reject("CHECKOUT_NOT_CANCELLABLE", `obligation ${o.obligationId} has no checkout`);
+    }
+    if (!isCancellable(r)) {
+      throw new Reject(
+        "CHECKOUT_NOT_CANCELLABLE",
+        `checkout ${r.operationId} is ${r.status}; it can no longer be cancelled by the player`,
+        { status: r.status, operationId: r.operationId },
+      );
+    }
+    // A request, not a release (principles 6 + 7): the earmark stays until the server verifies
+    // the order can no longer be captured (ORDER_VOIDED). A capture that completes anyway still
+    // settles. The blocking decision is untouched, so DEFER keeps working (principle 2).
+    tx.setReservation({ ...r, status: "CANCEL_REQUESTED" });
+    tx.emit("PROVIDER_CHECKOUT_CANCEL_REQUESTED", {
+      obligationId: o.obligationId,
+      operationId: r.operationId,
+      previousStatus: r.status,
+      realm: "PAYPAL_SANDBOX",
     });
   },
 
@@ -547,76 +787,23 @@ const handlers: { [K in AuthorizedCommand["kind"]]: Handler } = {
   APPLY_VERIFIED_PROVIDER_EVENT(tx, cmd) {
     if (cmd.kind !== "APPLY_VERIFIED_PROVIDER_EVENT") return;
     const ev = cmd.payload.event;
-    if (ev.eventType === "ORDER_VOIDED") {
-      releaseOnVoid(tx, ev);
-      return;
+    // Dispatch on the type first: a refund/denial of an already-applied capture must NOT be
+    // swallowed by the capture's dedup entry (keys are per type, see factKey).
+    switch (ev.eventType) {
+      case "CAPTURE_COMPLETED":
+        applyCapture(tx, ev);
+        return;
+      case "ORDER_VOIDED":
+        applyVoid(tx, ev);
+        return;
+      case "CAPTURE_PENDING":
+      case "CAPTURE_DENIED":
+        applyCaptureStatus(tx, ev);
+        return;
+      case "CAPTURE_REFUNDED":
+        applyRefund(tx, ev);
+        return;
     }
-    // Type first: a refund/denial for an already-applied capture must NOT be swallowed by the
-    // dedup below. Non-settling events are rejected visibly (reconciliation handles them, #22).
-    // A single CAPTURE_DENIED keeps the reservation: the buyer may retry (ADR-0008 M2).
-    if (ev.eventType !== "CAPTURE_COMPLETED") {
-      throw new Reject("PROVIDER_EVENT_NOT_SETTLING", `${ev.eventType} does not settle anything`);
-    }
-    if (tx.s.appliedProviderEvents.includes(ev.providerEventId)) return; // duplicate capture: one effect only (T02)
-    if (ev.mapping.worldId !== tx.s.worldId)
-      throw new Reject("PROVIDER_EVENT_UNMAPPED", "event maps to another world");
-    const o = tx.s.obligations[ev.mapping.obligationId];
-    if (!o) throw new Reject("PROVIDER_EVENT_UNMAPPED", `no obligation ${ev.mapping.obligationId}`);
-    // The capture must belong to a checkout started for this very bill. A known operation of
-    // the same bill without a reservation (late capture after a void) still settles below.
-    requireRegisteredOperation(tx, ev);
-    // State before amount, so an already-settled obligation reports the real reason.
-    if (o.state !== "DUE" && o.state !== "OVERDUE") {
-      throw new Reject(
-        "OBLIGATION_NOT_PAYABLE",
-        `obligation ${o.obligationId} is ${o.state}; needs reconciliation`,
-      );
-    }
-    // With an active checkout, only that operation's capture may consume its reservation.
-    // Without one (a late capture of this bill's voided operation) the pre-0.2.0 path applies.
-    const reservation = tx.reservation(o.obligationId);
-    if (reservation && reservation.operationId !== ev.operationId) {
-      throw new Reject(
-        "PROVIDER_OPERATION_MISMATCH",
-        `capture is for ${ev.operationId}, active checkout is ${reservation.operationId}`,
-        { activeOperationId: reservation.operationId, eventOperationId: ev.operationId },
-      );
-    }
-    const due = remaining(o);
-    // Without partial settlement a reservation always equals the remaining amount; check both.
-    const expected = reservation?.amount ?? due;
-    if (
-      ev.amount.currency !== due.currency ||
-      ev.amount.amountMinor !== due.amountMinor ||
-      ev.amount.amountMinor !== expected.amountMinor
-    ) {
-      throw new Reject(
-        "PROVIDER_AMOUNT_MISMATCH",
-        "captured amount differs from the mapped obligation",
-        {
-          capturedMinor: ev.amount.amountMinor,
-          dueMinor: due.amountMinor,
-          ...(reservation ? { reservedMinor: reservation.amount.amountMinor } : {}),
-        },
-      );
-    }
-    tx.s.appliedProviderEvents = [...tx.s.appliedProviderEvents, ev.providerEventId];
-    // Consume the earmark and settle in this same command (ADR-0008 5a). The reserved cash is
-    // then exactly what settle() finds available, so a reserved capture can't be INSUFFICIENT_FUNDS.
-    if (reservation) tx.dropReservation(o.obligationId);
-    tx.markOperation(ev.operationId, "CAPTURED");
-    const applied = tx.emit("PROVIDER_SETTLEMENT_APPLIED", {
-      provider: ev.provider,
-      providerEventId: ev.providerEventId,
-      operationId: ev.operationId,
-      verification: ev.verification,
-      // Only present when a reservation was consumed, so pre-0.2.0 payloads (and hashes) are unchanged.
-      ...(reservation ? { reservationConsumed: { amount: reservation.amount } } : {}),
-    });
-    settle(tx, o, "PAYPAL_SANDBOX", {
-      providerEventId: ev.providerEventId,
-      providerAppliedEventId: applied,
-    });
   },
 };
 

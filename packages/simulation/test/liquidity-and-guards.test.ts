@@ -172,18 +172,21 @@ describe("verified PayPal sandbox settlement (interface E)", () => {
     expect(w.ledger.size).toBe(second.state.ledger.size);
   });
 
-  it("rejects a captured amount that differs from the obligation", () => {
+  it("never settles a captured amount that differs from the obligation (recorded, 0.3.0)", () => {
     const w = phoneInFlight();
     const out = execute(w, providerCommand(w, 10, providerEvent(w, PHONE, 2999)));
-    expect(out.result.error?.code).toBe("PROVIDER_AMOUNT_MISMATCH");
+    expect(out.state.attention.map((a) => a.reason)).toEqual(["CAPTURE_AMOUNT_MISMATCH"]);
+    expect(out.state.obligations[PHONE]?.state).toBe("DUE");
+    expect(out.state.ledger.size).toBe(w.ledger.size);
   });
 
   it("a denied capture never settles (T22)", () => {
     const w = phoneInFlight();
     const denied = { ...providerEvent(w, PHONE, 3000), eventType: "CAPTURE_DENIED" as const };
     const out = execute(w, providerCommand(w, 10, denied));
-    expect(out.result.error?.code).toBe("PROVIDER_EVENT_NOT_SETTLING");
+    expect(out.events.map((e) => e.eventType)).toEqual(["PROVIDER_CHECKOUT_STATUS_CHANGED"]);
     expect(out.state.obligations[PHONE]?.state).toBe("DUE");
+    expect(out.state.ledger.size).toBe(w.ledger.size);
   });
 });
 

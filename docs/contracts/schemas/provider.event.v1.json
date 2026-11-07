@@ -1,7 +1,7 @@
 {
   "$id": "https://schemas.finance-learning-economy.invalid/provider.event.v1.json",
   "title": "provider.event.v1",
-  "x-contracts-version": "0.2.0",
+  "x-contracts-version": "0.3.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -30,7 +30,8 @@
         "CAPTURE_COMPLETED",
         "CAPTURE_DENIED",
         "CAPTURE_REFUNDED",
-        "ORDER_VOIDED"
+        "ORDER_VOIDED",
+        "CAPTURE_PENDING"
       ]
     },
     "amount": {

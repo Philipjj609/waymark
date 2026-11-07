@@ -26,7 +26,7 @@ import {
 } from "@fle/contracts";
 import { accountClass, deepFreeze, Ledger } from "@fle/domain";
 import { chainHash, compareCodeUnits, GENESIS_HASH } from "./canonical.js";
-import type { EntityState, IncomeRule, ScheduledItem, WorldState } from "./state.js";
+import type { EntityState, IncomeRule, Reservation, ScheduledItem, WorldState } from "./state.js";
 
 export interface WorldConfig {
   readonly worldId: WorldId;
@@ -339,6 +339,7 @@ export function createWorld(config: WorldConfig): WorldState {
     headHash,
     results: {},
     fingerprints: {},
+    attention: [],
     appliedProviderEvents: [],
     counters: { journal: journalCounter, asset: 0, schedule: seq },
     limits: {
@@ -360,6 +361,14 @@ export function availableCash(state: WorldState, entityId: EntityId): Money {
     if (r.entityId === entityId) reserved += r.amount.amountMinor;
   }
   return { amountMinor: cash.amountMinor - reserved, currency: cash.currency };
+}
+
+/**
+ * A checkout may be cancelled only before a capture is pending and before anything needs a
+ * human; a second request is refused rather than silently repeated (ADR-0008 amendment).
+ */
+export function isCancellable(r: Reservation): boolean {
+  return r.status === "AWAITING_PAYER" || r.status === "CAPTURE_DENIED";
 }
 
 /** Read model for the UI (`sim.snapshot.v1`). Derived only from authoritative state. */
@@ -387,14 +396,31 @@ export function snapshot(state: WorldState): WorldSnapshot {
       compareCodeUnits(a.documentId, b.documentId),
     ),
     assets: [...state.assets],
-    // While a sandbox checkout is in flight only DEFER is offered: paying again or starting a
-    // second checkout would be refused with PAYMENT_IN_FLIGHT (ADR-0008 "one payment path").
-    blockingDecisions: state.blocking.map((b) =>
-      state.reservations[b.obligationId]
-        ? { ...b, options: b.options.filter((o) => o === "DEFER_OBLIGATION") }
-        : { ...b, options: [...b.options] },
-    ),
-    reservations: reservations.map((r) => ({ ...r })),
+    // While a sandbox checkout is in flight only DEFER (and, while the checkout can still be
+    // cancelled, REQUEST_CHECKOUT_CANCEL) is offered: paying again or starting a second checkout
+    // would be refused with PAYMENT_IN_FLIGHT (ADR-0008 "one payment path").
+    blockingDecisions: state.blocking.map((b) => {
+      const r = state.reservations[b.obligationId];
+      if (!r) return { ...b, options: [...b.options] };
+      return {
+        ...b,
+        options: [
+          ...b.options.filter((o) => o === "DEFER_OBLIGATION"),
+          ...(isCancellable(r) ? (["REQUEST_CHECKOUT_CANCEL"] as const) : []),
+        ],
+      };
+    }),
+    reservations: reservations.map((r) => ({
+      obligationId: r.obligationId,
+      operationId: r.operationId,
+      entityId: r.entityId,
+      amount: r.amount,
+      sinceDay: r.sinceDay,
+      realm: "PAYPAL_SANDBOX" as const,
+      status: r.status,
+      attentionReason: r.attentionReason,
+    })),
+    attention: state.attention.map((a) => ({ ...a })),
     availableCash: entityIds.map((entityId) => ({
       entityId,
       amount: availableCash(state, entityId),
