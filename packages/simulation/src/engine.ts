@@ -410,7 +410,30 @@ function isBlockingAttention(
     eventType === "RECONCILIATION" ||
     reason === "VOID_WHILE_CAPTURE_PENDING" ||
     reason === "VOID_AMOUNT_MISMATCH" ||
-    reason === "CAPTURE_STATUS_AMOUNT_MISMATCH"
+    reason === "CAPTURE_STATUS_AMOUNT_MISMATCH" ||
+    // Re-review N2: a refund of a capture the engine has not applied proves money was taken.
+    reason === "REFUND_BEFORE_CAPTURE" ||
+    reason === "VOID_WITH_UNAPPLIED_REFUND"
+  );
+}
+
+/**
+ * Blocking records that must NOT move the reservation to NEEDS_ATTENTION: the capture they wait
+ * for must still settle normally, so refund→capture ends like capture→refund (H2 order
+ * independence). They block PAY/START and any release of the earmark instead (re-review N2).
+ */
+const RESERVATION_NEUTRAL: readonly AttentionReason[] = [
+  "REFUND_BEFORE_CAPTURE",
+  "VOID_WITH_UNAPPLIED_REFUND",
+];
+
+/** Open early-refund records of an operation: a capture was taken that the engine has not applied. */
+function unappliedRefunds(tx: Tx, operationId: string): AttentionRecord[] {
+  return tx.s.attention.filter(
+    (a) =>
+      a.operationId === operationId &&
+      a.reason === "REFUND_BEFORE_CAPTURE" &&
+      a.resolvedBy === null,
   );
 }
 
@@ -442,7 +465,10 @@ function recordAttention(
   reason: AttentionReason,
 ): void {
   const blocking = isBlockingAttention(ev.eventType, reason);
-  const own = blocking && r?.operationId === ev.operationId ? r : undefined;
+  const own =
+    blocking && !RESERVATION_NEUTRAL.includes(reason) && r?.operationId === ev.operationId
+      ? r
+      : undefined;
   const record: AttentionRecord = {
     realm: "PAYPAL_SANDBOX",
     providerEventId: ev.providerEventId,
@@ -640,6 +666,13 @@ function applyVoid(tx: Tx, ev: VerifiedProviderEvent): void {
     recordAttention(tx, ev, o, r, "VOID_WHILE_CAPTURE_PENDING");
     return;
   }
+  // Re-review N2: a refund of a capture of this order was verified, so a capture exists; a void
+  // contradicts it and must not release the earmark. Held (reservation unchanged) until the
+  // capture settles or a reconciliation resolves it.
+  if (unappliedRefunds(tx, op.operationId).length > 0) {
+    recordAttention(tx, ev, o, r, "VOID_WITH_UNAPPLIED_REFUND");
+    return;
+  }
   // A mismatched void must not leave the earmark silently locked: it stays reserved (not
   // spendable) and becomes visibly NEEDS_ATTENTION.
   if (!sameAmount(ev.amount, r.amount)) {
@@ -783,6 +816,11 @@ function applyRefund(tx: Tx, ev: VerifiedProviderEvent): void {
 type ObservedCapture = ProviderReconciliation["observed"]["captures"][number];
 const isLive = (c: ObservedCapture) =>
   c.status === "COMPLETED" || c.status === "PARTIALLY_REFUNDED";
+/** REFUNDED counts as "no money held" only with the full amount reported back (re-review low a). */
+const isFullyRefunded = (c: ObservedCapture) =>
+  c.status === "REFUNDED" &&
+  c.refundedAmount !== undefined &&
+  sameAmount(c.refundedAmount, c.amount);
 
 interface Decision {
   readonly outcome: ReconciliationOutcome;
@@ -830,8 +868,17 @@ function decideReconciliation(
           a.eventType === "CAPTURE_DENIED",
       )
       .map((a) => a.providerEventId),
+    // A capture named by a verified refund exists, even if its capture fact never arrived (N2).
+    ...open.flatMap((a) => (a.refundedCaptureId ? [a.refundedCaptureId] : [])),
   ];
   if (recorded.some((id) => !byId.has(id))) return { outcome: "KEPT_RECORDED_CAPTURE_MISSING" };
+  // An early refund that names no capture still proves one was taken: a read-back showing no
+  // capture that holds or held money contradicts it (re-review N2).
+  if (
+    open.some((a) => a.reason === "REFUND_BEFORE_CAPTURE" && a.refundedCaptureId === null) &&
+    !captures.some((x) => isLive(x) || x.status === "REFUNDED" || x.status === "PENDING")
+  )
+    return { outcome: "KEPT_RECORDED_CAPTURE_MISSING" };
   // A capture verified COMPLETED can later be refunded, never un-completed (final review M4).
   const verifiedCompleted = [
     ...(op.captureId ? [op.captureId] : []),
@@ -854,7 +901,10 @@ function decideReconciliation(
   const c = live[0];
   if (!c) {
     if (!terminal) return { outcome: "KEPT_NOT_TERMINAL" };
-    // Here every capture is REFUNDED, DECLINED or FAILED: no money is held at PayPal.
+    // A REFUNDED capture without the full refunded amount reported is not proof of "no money".
+    if (captures.some((x) => x.status === "REFUNDED" && !isFullyRefunded(x)))
+      return { outcome: "KEPT_REFUNDED_CAPTURE" };
+    // Here every capture is fully REFUNDED, DECLINED or FAILED: no money is held at PayPal.
     if (op.status === "CAPTURED") {
       // Settled through this operation; its capture is now fully refunded at PayPal. The bill
       // stays SETTLED (decision 1); the engine must already know the full refund.
@@ -875,7 +925,18 @@ function decideReconciliation(
     c.status === "COMPLETED" ? 0 : (c.refundedAmount?.amountMinor ?? Number.NaN);
   if (!(observedRefund >= 0 && observedRefund < c.amount.amountMinor))
     return { outcome: "KEPT_REFUNDED_CAPTURE" };
-  const openRefunds = open.filter((a) => a.eventType === "CAPTURE_REFUNDED");
+  // Refund records of a capture read back as fully REFUNDED (a refunded duplicate) are settled
+  // business at PayPal and do not count against this capture (re-review N3). A refund that names
+  // no capture cannot be matched; on a bill this very capture settled it is resolved by the
+  // CONFIRMED outcome (re-review low c), otherwise it keeps the attention open.
+  const fullyRefundedIds = new Set(captures.filter(isFullyRefunded).map((x) => x.captureId));
+  const settledByThis = o.state === "SETTLED" && op.captureId === c.captureId;
+  const openRefunds = open.filter(
+    (a) =>
+      a.eventType === "CAPTURE_REFUNDED" &&
+      !(a.refundedCaptureId !== null && fullyRefundedIds.has(a.refundedCaptureId)) &&
+      !(settledByThis && a.refundedCaptureId === null),
+  );
   const waiting = openRefunds.filter(
     (a) => a.reason === "REFUND_BEFORE_CAPTURE" && a.refundedCaptureId === c.captureId,
   );
@@ -904,7 +965,18 @@ const APPLIED_OUTCOMES: readonly ReconciliationOutcome[] = [
   "RESOLVED_REFUNDED",
 ];
 
-function applyReconciliation(tx: Tx, rc: ProviderReconciliation): void {
+function applyReconciliation(tx: Tx, raw: ProviderReconciliation): void {
+  // Captures in a canonical order (by capture id), so the same observation listed in another
+  // order has the same fingerprint and the same outcome (re-review low b).
+  const rc: ProviderReconciliation = {
+    ...raw,
+    observed: {
+      ...raw.observed,
+      captures: [...raw.observed.captures].sort((a, b) =>
+        compareCodeUnits(a.captureId, b.captureId),
+      ),
+    },
+  };
   // Idempotent per reconciliationId, bound to its content (final review M3): the same id with a
   // different observation is a visible conflict, never silently ignored.
   const fingerprint = sha256Hex(canonicalJson({ ...rc, verification: null }));
@@ -994,11 +1066,14 @@ function applyReconciliation(tx: Tx, rc: ProviderReconciliation): void {
 }
 
 /**
- * Final review M1/M2: a KEPT outcome whose read-back shows a live or pending capture means money
- * may have been taken. Record (once per operation while open) a BLOCKING record, so the same
- * obligation cannot be paid fictionally or checked out again until a reconciliation resolves it.
- * Skipped only for a pending capture of the active checkout, which its in-flight lock already
- * covers and which a later capture or void fact resolves normally. Never changes a reservation.
+ * Final review M1/M2 and re-review N1: a KEPT outcome whose read-back shows a live or pending
+ * capture (other than the one that already settled the bill through this operation, low d)
+ * means money may have been taken. For the ACTIVE checkout the read-back counts exactly as if the
+ * facts had arrived: its capture ids are remembered (a later void or VOIDED read-back without
+ * them is refused) and the reservation moves to CAPTURE_PENDING (pending) or NEEDS_ATTENTION
+ * (live, unapplied), so a cancel is refused. Unless only a pending capture of the active checkout
+ * was seen (its lock covers it), a BLOCKING record is added once per operation while open, so the
+ * same obligation cannot be paid or checked out again until a reconciliation resolves it.
  */
 function keepBlockedIfMoneyMayBeTaken(
   tx: Tx,
@@ -1008,10 +1083,41 @@ function keepBlockedIfMoneyMayBeTaken(
   own: Reservation | undefined,
   outcome: ReconciliationOutcome,
 ): void {
-  const risky = rc.observed.captures.filter((c) => isLive(c) || c.status === "PENDING");
+  const risky = rc.observed.captures.filter(
+    (c) => (isLive(c) || c.status === "PENDING") && c.captureId !== op.captureId,
+  );
   const first = risky[0];
   if (!first) return;
-  if (own && outcome === "KEPT_CAPTURE_PENDING") return;
+  const liveUnapplied = risky.some((c) => isLive(c) && !seen(tx, captureFactKey(c.captureId)));
+  let reservationOperationId: ProviderOperationId | null = null;
+  if (own) {
+    const captureIdsSeen = [
+      ...own.captureIdsSeen,
+      ...risky.map((c) => c.captureId).filter((id) => !own.captureIdsSeen.includes(id)),
+    ];
+    const to: ReservationStatus =
+      liveUnapplied || own.status === "NEEDS_ATTENTION" ? "NEEDS_ATTENTION" : "CAPTURE_PENDING";
+    tx.setReservation({
+      ...own,
+      status: to,
+      captureIdsSeen,
+      attentionReason:
+        to === "NEEDS_ATTENTION" ? (own.attentionReason ?? "RECONCILIATION_LIVE_CAPTURE") : null,
+    });
+    if (to !== own.status) {
+      tx.emit("PROVIDER_CHECKOUT_STATUS_CHANGED", {
+        obligationId: o.obligationId,
+        operationId: own.operationId,
+        from: own.status,
+        to,
+        provider: "PAYPAL_SANDBOX",
+        reconciliationId: rc.reconciliationId,
+        verification: rc.verification,
+      });
+    }
+    if (!liveUnapplied) return; // only pending on the active checkout: its lock covers it
+    reservationOperationId = own.operationId;
+  }
   const alreadyOpen = tx.s.attention.some(
     (a) =>
       a.operationId === op.operationId && a.eventType === "RECONCILIATION" && a.resolvedBy === null,
@@ -1025,7 +1131,7 @@ function keepBlockedIfMoneyMayBeTaken(
     obligationId: o.obligationId,
     reason: "RECONCILIATION_LIVE_CAPTURE",
     amount: first.amount,
-    reservationOperationId: null,
+    reservationOperationId,
     day: tx.s.day,
     blocking: true,
     resolvedBy: null,

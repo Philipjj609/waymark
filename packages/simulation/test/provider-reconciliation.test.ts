@@ -765,6 +765,189 @@ describe("final review of #98: regressions (H1, H2, M1-M4, L2)", () => {
   });
 });
 
+describe("re-review of cf29923: regressions (N1, N2, N3, lows)", () => {
+  it("N1 (pending): a PENDING capture seen only by reconciliation protects the active checkout", () => {
+    const t = session();
+    const op = t.inFlight();
+    const out = t.reconcile(rec(t.w, "RC-N1", op, "APPROVED", [cap("CAP-P", "PENDING")]));
+    expect(t.w.reconciliations.at(-1)?.outcome).toBe("KEPT_CAPTURE_PENDING");
+    expect(types(out)).toEqual(["PROVIDER_RECONCILED", "PROVIDER_CHECKOUT_STATUS_CHANGED"]);
+    expect(t.w.reservations[PHONE]).toMatchObject({
+      status: "CAPTURE_PENDING",
+      captureIdsSeen: ["CAP-P"],
+    });
+    expect(t.player(CANCEL).result.error?.code).toBe("CHECKOUT_NOT_CANCELLABLE"); // decision 4
+    t.deliver(fact(t.w, "ORDER_VOIDED", "ORDER-N1"));
+    expect(t.w.attention.at(-1)?.reason).toBe("VOID_WHILE_CAPTURE_PENDING");
+    t.reconcile(rec(t.w, "RC-N1b", op, "VOIDED", []));
+    expect(t.w.reconciliations.at(-1)?.outcome).toBe("KEPT_RECORDED_CAPTURE_MISSING");
+    expect(avail(t.w)).toBe(77000); // never released while the capture may complete
+    expect(t.player(PAY).result.status).toBe("REJECTED");
+    t.reconcile(rec(t.w, "RC-N1c", op, "COMPLETED", [cap("CAP-P")]));
+    expect(t.w.reconciliations.at(-1)?.outcome).toBe("SETTLED");
+    expect(settlements(t.w)).toBe(1);
+    t.sound();
+  });
+
+  it("B10 (N1 live): an unapplied live capture seen by reconciliation holds the active checkout", () => {
+    const t = session();
+    const op = t.inFlight();
+    t.reconcile(rec(t.w, "RC-B10", op, "COMPLETED", [cap("CAP-L", "COMPLETED", 2999)]));
+    expect(t.w.reconciliations.at(-1)?.outcome).toBe("KEPT_AMOUNT_MISMATCH");
+    expect(t.w.reservations[PHONE]).toMatchObject({
+      status: "NEEDS_ATTENTION",
+      attentionReason: "RECONCILIATION_LIVE_CAPTURE",
+      captureIdsSeen: ["CAP-L"],
+    });
+    expect(t.w.attention.at(-1)).toMatchObject({ blocking: true, reservationOperationId: op });
+    expect(t.player(CANCEL).result.error?.code).toBe("CHECKOUT_NOT_CANCELLABLE");
+    t.deliver(fact(t.w, "ORDER_VOIDED", "ORDER-B10"));
+    t.reconcile(rec(t.w, "RC-B10b", op, "VOIDED", []));
+    expect(t.w.reconciliations.at(-1)?.outcome).toBe("KEPT_RECORDED_CAPTURE_MISSING");
+    expect(avail(t.w)).toBe(77000);
+    expect(t.player(PAY).result.status).toBe("REJECTED");
+    t.sound();
+  });
+
+  it("B6 (N2): a refund of a not-yet-seen capture after a void blocks PAY/START until reconciled", () => {
+    const t = session();
+    const op1 = t.inFlight();
+    t.deliver(fact(t.w, "ORDER_VOIDED", "ORDER-1"));
+    t.deliver(
+      fact(t.w, "CAPTURE_REFUNDED", "RF-1", { op: op1, refundOf: "CAP-1", amountMinor: 1000 }),
+    );
+    expect(t.w.attention.at(-1)).toMatchObject({ reason: "REFUND_BEFORE_CAPTURE", blocking: true });
+    expect(t.player(PAY).result.error?.code).toBe("PROVIDER_ATTENTION_OPEN");
+    expect(t.player(START).result.error?.code).toBe("PROVIDER_ATTENTION_OPEN");
+    t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-1", { op: op1 })); // late: attention
+    expect(settlements(t.w)).toBe(0);
+    t.reconcile(
+      rec(t.w, "RC-B6", op1, "COMPLETED", [cap("CAP-1", "PARTIALLY_REFUNDED", 3000, 1000)], {
+        orderId: "ORDER-1",
+      }),
+    );
+    expect(t.w.reconciliations.at(-1)?.outcome).toBe("SETTLED");
+    expect(snapshot(t.w).providerOperations[0]).toMatchObject({
+      externalPayment: "PARTIALLY_REFUNDED",
+      refundedAmount: eur(10),
+    });
+    expect(t.w.attention.every((a) => a.resolvedBy !== null)).toBe(true);
+    expect(settlements(t.w)).toBe(1);
+    t.sound();
+  });
+
+  it("B7 (N2): refund first on the active checkout: a void is held; the capture then settles", () => {
+    const t = session();
+    const op = t.inFlight();
+    t.deliver(fact(t.w, "CAPTURE_REFUNDED", "RF-1", { refundOf: "CAP-1", amountMinor: 1000 }));
+    expect(t.w.reservations[PHONE]?.status).toBe("AWAITING_PAYER");
+    const v = t.deliver(fact(t.w, "ORDER_VOIDED", "ORDER-B7"));
+    expect(t.w.attention.at(-1)).toMatchObject({
+      reason: "VOID_WITH_UNAPPLIED_REFUND",
+      blocking: true,
+    });
+    expect(types(v)).toEqual(["PROVIDER_ATTENTION_RECORDED"]);
+    expect([cash(t.w), avail(t.w)]).toEqual([80000, 77000]); // earmark held
+    expect(t.w.reservations[PHONE]?.status).toBe("AWAITING_PAYER"); // reservation unchanged
+    t.reconcile(rec(t.w, "RC-B7", op, "VOIDED", []));
+    expect(t.w.reconciliations.at(-1)?.outcome).toBe("KEPT_RECORDED_CAPTURE_MISSING");
+    expect(t.player(PAY).result.status).toBe("REJECTED");
+    t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-1", { op }));
+    expect(settlements(t.w)).toBe(1);
+    expect(snapshot(t.w).providerOperations[0]?.externalPayment).toBe("PARTIALLY_REFUNDED");
+    t.sound();
+  });
+
+  it("B5a (N3): two late captures, the duplicate refunded: the live one settles, all records close", () => {
+    const t = session();
+    const op1 = t.inFlight();
+    t.deliver(fact(t.w, "ORDER_VOIDED", "ORDER-1"));
+    t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-A", { op: op1 }));
+    t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-B", { op: op1 }));
+    t.deliver(fact(t.w, "CAPTURE_REFUNDED", "RF-B", { op: op1, refundOf: "CAP-B" }));
+    t.reconcile(
+      rec(t.w, "RC-B5a", op1, "COMPLETED", [cap("CAP-A"), cap("CAP-B", "REFUNDED", 3000, 3000)], {
+        orderId: "ORDER-1",
+      }),
+    );
+    expect(t.w.reconciliations.at(-1)?.outcome).toBe("SETTLED");
+    expect(t.w.attention.every((a) => a.resolvedBy === "RC-B5a")).toBe(true);
+    expect(settlements(t.w)).toBe(1);
+    expect(cash(t.w)).toBe(77000);
+    t.sound();
+  });
+
+  it("B5b (N3): settled bill, refunded duplicate capture: CONFIRMED closes the records", () => {
+    const t = session();
+    const op = t.inFlight();
+    t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-A"));
+    t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-B", { op }));
+    t.deliver(fact(t.w, "CAPTURE_REFUNDED", "RF-B", { op, refundOf: "CAP-B" }));
+    expect(t.w.attention.map((a) => a.reason)).toEqual([
+      "CAPTURE_FOR_SETTLED_OBLIGATION",
+      "REFUND_UNKNOWN_CAPTURE",
+    ]);
+    t.reconcile(
+      rec(t.w, "RC-B5b", op, "COMPLETED", [cap("CAP-A"), cap("CAP-B", "REFUNDED", 3000, 3000)]),
+    );
+    expect(t.w.reconciliations.at(-1)?.outcome).toBe("CONFIRMED");
+    expect(t.w.attention.every((a) => a.resolvedBy === "RC-B5b")).toBe(true);
+    expect(settlements(t.w)).toBe(1);
+    t.sound();
+  });
+
+  it("B1 (low a): REFUNDED without the full refunded amount never resolves", () => {
+    for (const refunded of [1000, undefined]) {
+      const { t, op1 } = lateCaptureAfterVoid();
+      t.reconcile(
+        rec(
+          t.w,
+          `RC-B1-${refunded}`,
+          op1,
+          "COMPLETED",
+          [cap("CAP-L", "REFUNDED", 3000, refunded)],
+          {
+            orderId: "ORDER-1",
+          },
+        ),
+      );
+      expect(t.w.reconciliations.at(-1)?.outcome).toBe("KEPT_REFUNDED_CAPTURE");
+      expect(t.player(PAY).result.error?.code).toBe("PROVIDER_ATTENTION_OPEN");
+      t.sound();
+    }
+  });
+
+  it("B4 (low b): the same observation with captures in another order is the same reconciliation", () => {
+    const { t, op1 } = lateCaptureAfterVoid();
+    const captures = [cap("CAP-L"), cap("CAP-Z")];
+    t.reconcile(rec(t.w, "RC-B4", op1, "COMPLETED", captures, { orderId: "ORDER-1" }));
+    const events = t.w.events.length;
+    const again = t.reconcile(
+      rec(t.w, "RC-B4", op1, "COMPLETED", [...captures].reverse(), { orderId: "ORDER-1" }),
+    );
+    expect(again.result.status).toBe("ACCEPTED");
+    expect(t.w.events.length).toBe(events);
+    t.sound();
+  });
+
+  it("B9 (lows c, d): an unnamed refund on a settled operation closes on CONFIRMED; no extra block", () => {
+    const t = session();
+    const op = t.inFlight();
+    t.deliver(fact(t.w, "CAPTURE_COMPLETED", "CAP-1"));
+    t.deliver(fact(t.w, "CAPTURE_REFUNDED", "RF-X", { op })); // names no capture
+    expect(t.w.attention[0]?.reason).toBe("REFUND_UNKNOWN_CAPTURE");
+    // Low d: PARTIALLY_REFUNDED without the refunded amount keeps, but adds no blocking record.
+    t.reconcile(rec(t.w, "RC-B9a", op, "COMPLETED", [cap("CAP-1", "PARTIALLY_REFUNDED")]));
+    expect(t.w.reconciliations.at(-1)?.outcome).toBe("KEPT_REFUNDED_CAPTURE");
+    expect(t.w.attention.filter((a) => a.eventType === "RECONCILIATION")).toEqual([]);
+    // Low c: the next CONFIRMED read-back resolves the unnamed refund record.
+    t.reconcile(rec(t.w, "RC-B9b", op, "COMPLETED", [cap("CAP-1")]));
+    expect(t.w.reconciliations.at(-1)?.outcome).toBe("CONFIRMED");
+    expect(t.w.attention[0]?.resolvedBy).toBe("RC-B9b");
+    t.sound();
+  });
+});
+
 describe("golden values", () => {
   it("the FP-30 opening hash is unchanged", () => {
     expect(fp30().headHash).toBe(

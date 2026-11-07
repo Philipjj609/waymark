@@ -131,7 +131,10 @@ export const AttentionReasonSchema = z.enum([
   "VOID_WHILE_CAPTURE_PENDING",
   /** A CAPTURE_PENDING / CAPTURE_DENIED whose amount differs from the reservation (review L2). */
   "CAPTURE_STATUS_AMOUNT_MISMATCH",
-  /** A refund for an operation whose capture never settled anything (before capture). */
+  /**
+   * A refund for an operation whose capture never settled anything (before capture). Blocking
+   * (money was taken) but it never changes the reservation, so the capture can still settle.
+   */
   "REFUND_BEFORE_CAPTURE",
   /** A refund that names no capture, or not the capture that settled the operation. */
   "REFUND_UNKNOWN_CAPTURE",
@@ -139,6 +142,11 @@ export const AttentionReasonSchema = z.enum([
   "REFUND_EXCEEDS_CAPTURE",
   /** A PENDING/DENIED fact of an operation that is no longer the active checkout (audit only). */
   "STALE_OPERATION_STATUS",
+  /**
+   * A void while a refund of a not-yet-applied capture of this order is open: a capture exists,
+   * so the earmark is held (reservation unchanged, re-review N2).
+   */
+  "VOID_WITH_UNAPPLIED_REFUND",
   /** A CAPTURE_PENDING for a capture already verified DENIED: never regresses the status. */
   "OUT_OF_ORDER_STATUS",
   /**

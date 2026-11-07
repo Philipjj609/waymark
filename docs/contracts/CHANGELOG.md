@@ -31,6 +31,10 @@ Additive (minor) relative to 0.2.0:
   `RECONCILIATION`, and `resolvedBy` may also be `capture:<captureId>`; reasons `OUT_OF_ORDER_STATUS`,
   `RECONCILIATION_LIVE_CAPTURE`; event `PROVIDER_STATUS_FACT_RECORDED`. A reused `reconciliationId` with a different
   observation is `IDEMPOTENCY_CONFLICT`.
+- Folded in before release (re-review of #98, 7 Nov; still 0.3.0): reason `VOID_WITH_UNAPPLIED_REFUND`;
+  `REFUND_BEFORE_CAPTURE` records are now blocking (they never change the reservation). Engine only: a reconciliation that
+  sees a capture of the active checkout updates that checkout as the fact would; a REFUNDED capture counts as returned only
+  with `refundedAmount` equal to its amount; captures are sorted by id before fingerprinting.
 - `sim.snapshot.v1`: each `reservations[]` item adds `realm` (`PAYPAL_SANDBOX`), `status`, `attentionReason`; the snapshot
   adds `attention[]`. Required fields, same rule as 0.2.0: the engine is the only producer; strict consumers update together.
 

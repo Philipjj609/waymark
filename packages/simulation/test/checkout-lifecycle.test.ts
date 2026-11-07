@@ -387,7 +387,8 @@ describe("NEEDS_ATTENTION: verified facts that cannot be applied are recorded (p
     const s = inFlight();
     const out = deliver(s, fact(s, "CAPTURE_REFUNDED", "RF-RB")); // names no capture
     expectRecorded(s, out, "REFUND_BEFORE_CAPTURE");
-    expect(out.state.attention[0]?.blocking).toBe(false);
+    // Re-review N2: money was taken, so it blocks paying the bill, but the checkout is untouched.
+    expect(out.state.attention[0]?.blocking).toBe(true);
     expect(statusOf(out.state)).toBe("AWAITING_PAYER"); // final review H2a
     const cap = deliver(out.state, fact(s, "CAPTURE_COMPLETED", "CAP-RB"));
     expect(cap.state.obligations[PHONE]?.state).toBe("SETTLED");

@@ -640,7 +640,9 @@ describe("property: reservations never overdraw, and each bill settles at most o
               amount,
               ...(status === "PARTIALLY_REFUNDED"
                 ? { refundedAmount: { amountMinor: 1000, currency: "EUR" as const } }
-                : {}),
+                : status === "REFUNDED"
+                  ? { refundedAmount: amount }
+                  : {}),
             });
             const [orderStatus, captures] = {
               voided: ["VOIDED", []] as const,

@@ -509,6 +509,7 @@
                   "REFUND_UNKNOWN_CAPTURE",
                   "REFUND_EXCEEDS_CAPTURE",
                   "STALE_OPERATION_STATUS",
+                  "VOID_WITH_UNAPPLIED_REFUND",
                   "OUT_OF_ORDER_STATUS",
                   "RECONCILIATION_LIVE_CAPTURE",
                   "RESERVATION_NEEDS_ATTENTION"
@@ -588,6 +589,7 @@
               "REFUND_UNKNOWN_CAPTURE",
               "REFUND_EXCEEDS_CAPTURE",
               "STALE_OPERATION_STATUS",
+              "VOID_WITH_UNAPPLIED_REFUND",
               "OUT_OF_ORDER_STATUS",
               "RECONCILIATION_LIVE_CAPTURE",
               "RESERVATION_NEEDS_ATTENTION"
