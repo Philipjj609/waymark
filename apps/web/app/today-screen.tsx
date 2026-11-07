@@ -27,9 +27,7 @@ export function StatusPanel({ view }: { view: TodayView }) {
           </p>
         </div>
       </div>
-      <h3 className="card-title" style={{ marginTop: "var(--space-4)" }}>
-        Things you own
-      </h3>
+      <h3 className="card-title mt-4">Things you own</h3>
       {view.owned.length === 0 ? (
         <p className="empty">Nothing yet.</p>
       ) : (
@@ -64,7 +62,7 @@ export function DecisionCard({
         Decision needed: {bill.creditor}
       </h3>
       <p className="decision-amount figure">{formatFictional(bill.amount)}</p>
-      <p className="small muted" style={{ marginTop: 0 }}>
+      <p className="small muted mt-0">
         Due on day {bill.dueDay}. Time stops here until you choose.
       </p>
       <ul className="choices">
@@ -93,7 +91,7 @@ export function DecisionCard({
             Defer
           </button>
           <p className="choice-consequence">
-            The bill becomes overdue and stays owed in full. In this version of Waymark there is no
+            The bill becomes overdue and stays owed in full. In this version of the game there is no
             late fee; in real life, paying late can cost more.
           </p>
         </li>
@@ -123,7 +121,7 @@ function BillItem({ bill, busy, onAct }: { bill: BillView; busy: boolean; onAct:
         )}
       </div>
       {bill.blocking ? (
-        <p className="bill-meta bill-actions">Decide on this bill above.</p>
+        <p className="bill-meta bill-actions">Decide in the "Decision needed" card.</p>
       ) : (
         bill.actions.length > 0 && (
           <div className="bill-actions">
@@ -199,6 +197,7 @@ export function AdvancePanel({
           />
         </label>
         <button
+          id="advance-button"
           type="button"
           className="btn btn-primary"
           disabled={busy || !view.canAdvance}
@@ -208,7 +207,7 @@ export function AdvancePanel({
         </button>
         {!view.canAdvance && <em className="small muted">Decide on the due bill first.</em>}
       </div>
-      <p className="small muted" style={{ marginBottom: 0 }}>
+      <p className="small muted mb-0">
         Time moves only when you advance it, and stops at the next bill that needs a decision.
       </p>
     </section>

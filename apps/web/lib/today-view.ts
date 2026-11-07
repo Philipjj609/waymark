@@ -76,11 +76,12 @@ const OPEN: ReadonlySet<Obligation["state"]> = new Set([
   "PARTIALLY_SETTLED",
 ]);
 
-function actionsFor(o: Obligation, blocking: boolean): BillView["actions"] {
-  // Mirrors what the engine accepts today (PAY on DUE/OVERDUE; DEFER only on DUE). If it ever
-  // differs, the engine refuses and the UI shows the refusal; nothing is decided here.
-  if (o.state === "DUE" || blocking) return ["PAY", "DEFER"];
-  if (o.state === "OVERDUE" || o.state === "PARTIALLY_SETTLED") return ["PAY"];
+function actionsFor(o: Obligation): BillView["actions"] {
+  // Mirrors what the engine accepts today: PAY_OBLIGATION only on DUE or OVERDUE, and
+  // DEFER_OBLIGATION only on DUE (a blocking bill is always DUE). Every other state, including
+  // PARTIALLY_SETTLED, gets no action rather than a button the engine would always refuse.
+  if (o.state === "DUE") return ["PAY", "DEFER"];
+  if (o.state === "OVERDUE") return ["PAY"];
   return [];
 }
 
@@ -103,7 +104,7 @@ export function todayView(snapshot: WorldSnapshot): TodayView {
         label: meta.label,
         tone: meta.tone,
         blocking,
-        actions: actionsFor(o, blocking),
+        actions: actionsFor(o),
       };
     })
     .sort(

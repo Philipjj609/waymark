@@ -63,12 +63,27 @@ describe("todayView (#104): selects and labels the snapshot, computes no money",
     }
   });
 
-  it("source guard: the view model never does arithmetic on money", () => {
-    const src = readFileSync(
-      fileURLToPath(new URL("../lib/today-view.ts", import.meta.url)),
-      "utf8",
-    );
-    // No amountMinor maths anywhere (formatting lives in the components, values come as-is).
-    expect(src).not.toMatch(/amountMinor\s*[-+*/%]|[-+*/%]\s*[\w.]*amountMinor/);
+  it("offers no action the engine always refuses (e.g. a partly settled bill)", () => {
+    const snap = snapshot(fp30());
+    const o = snap.obligations[0];
+    if (!o) throw new Error("fixture has no obligations");
+    const partial = {
+      ...snap,
+      obligations: [{ ...o, state: "PARTIALLY_SETTLED" as const }],
+    } as WorldSnapshot;
+    expect(todayView(partial).bills[0]).toMatchObject({ label: "Partly paid", actions: [] });
+  });
+
+  it("source guard: no arithmetic or comparison on money in the Today screen code", () => {
+    const MONEY_MATH = /amountMinor\s*([-+*/%<>]|[=!]==?)|([-+*/%<>]|[=!]==?)\s*[\w.?]*amountMinor/;
+    for (const rel of [
+      "../lib/today-view.ts",
+      "../app/today-screen.tsx",
+      "../app/world-shell.tsx",
+    ]) {
+      // Values come from the snapshot as-is; only lib/money.ts formats minor units.
+      const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+      expect({ rel, hit: MONEY_MATH.test(src) }).toEqual({ rel, hit: false });
+    }
   });
 });

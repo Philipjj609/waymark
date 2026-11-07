@@ -35,6 +35,19 @@ for (const size of SIZES) {
       expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
     }
 
+    // Layout: two columns on desktop (bills beside the status), one column on the phone in
+    // loop order (time control and bills before the explanation).
+    const statusBox = await page.getByRole("region", { name: "Today" }).boundingBox();
+    const billsBox = await page.getByRole("region", { name: "Bills" }).boundingBox();
+    const timeBox = await page.getByRole("region", { name: "Time" }).boundingBox();
+    if (!statusBox || !billsBox || !timeBox) throw new Error("Today regions not rendered");
+    if (size.name === "desktop") {
+      expect(billsBox.x).toBeGreaterThan(statusBox.x + statusBox.width - 1);
+    } else {
+      expect(Math.abs(billsBox.x - statusBox.x)).toBeLessThanOrEqual(1);
+      expect(timeBox.y).toBeLessThan(billsBox.y);
+    }
+
     const shot = testInfo.outputPath(`today-${size.name}-decision.png`);
     await page.screenshot({ path: shot, fullPage: true });
     await testInfo.attach(`today-${size.name}-decision`, { path: shot, contentType: "image/png" });
@@ -42,6 +55,8 @@ for (const size of SIZES) {
     // After deciding, the explanation appears inline and the screen stays within the width.
     await sendVia(page, pay);
     await expect(cash(page)).toHaveText("€770.00 (fictional)");
+    // Keyboard users keep their place: focus moves to the time control after a decision.
+    await expect(page.getByRole("button", { name: /^Advance to day/ })).toBeFocused();
     await expect(page.getByRole("heading", { name: "What just happened" })).toBeVisible();
     await expect(page.locator('[data-facts="deterministic"]')).toContainText(
       /you paid Phone provider/,

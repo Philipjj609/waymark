@@ -14,6 +14,8 @@
   --color-accent: #2c6a59;
   --color-accent-ink: #ffffff;
   --color-focus: #1d5fd1;
+  /* control edges need >= 3:1 against the surface (WCAG 1.4.11) */
+  --color-control-border: #858073;
   /* status tones: always paired with a text label, never colour alone */
   --tone-upcoming-ink: #47505c;
   --tone-upcoming-bg: #eceff3;
@@ -25,6 +27,13 @@
   --tone-paid-bg: #e1f0ea;
   --tone-other-ink: #47505c;
   --tone-other-bg: #eceff3;
+  /* explanation provenance badges */
+  --badge-standin-bg: #fde68a;
+  --badge-standin-ink: #78350f;
+  --badge-fallback-bg: #dbeafe;
+  --badge-fallback-ink: #1e3a8a;
+  --badge-ai-bg: #dcfce7;
+  --badge-ai-ink: #14532d;
   /* fictional-money banner */
   --fiction-bg: #fff3c4;
   --fiction-ink: #574200;
@@ -131,6 +140,11 @@ body {
   margin-top: var(--space-4);
 }
 
+.slot-decision:empty,
+.slot-lesson:empty {
+  display: none;
+}
+
 .card-title {
   margin: 0 0 var(--space-3);
   font-size: var(--text-md);
@@ -157,10 +171,56 @@ body {
   align-items: start;
 }
 
+.today-col > * + * {
+  margin-top: var(--space-4);
+}
+
+/* Phone: one column in the order of the play loop, so the time control and the bills come
+   before the (variable-length) explanation. The column wrappers dissolve into one flex list. */
 @media (max-width: 760px) {
   .today-grid {
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
   }
+  .today-col {
+    display: contents;
+  }
+  .today-col > * + * {
+    margin-top: 0;
+  }
+  .slot-status {
+    order: 1;
+  }
+  .slot-decision {
+    order: 2;
+  }
+  .slot-time {
+    order: 3;
+  }
+  .slot-bills {
+    order: 4;
+  }
+  .slot-lesson {
+    order: 5;
+  }
+  .slot-world {
+    order: 6;
+  }
+}
+
+/* small spacing utilities (keep components free of inline styles) */
+.mt-0 {
+  margin-top: 0;
+}
+.mt-3 {
+  margin-top: var(--space-3);
+}
+.mt-4 {
+  margin-top: var(--space-4);
+}
+.mb-0 {
+  margin-bottom: 0;
 }
 
 .status {
@@ -232,7 +292,7 @@ body {
   min-height: 44px; /* touch target */
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-sm);
-  border: 1px solid var(--color-line);
+  border: 1px solid var(--color-control-border);
   background: var(--color-surface);
   color: var(--color-ink);
   font: inherit;
@@ -334,7 +394,7 @@ body {
   width: 5rem;
   min-height: 44px;
   padding: var(--space-2);
-  border: 1px solid var(--color-line);
+  border: 1px solid var(--color-control-border);
   border-radius: var(--radius-sm);
   font: inherit;
 }
@@ -346,16 +406,16 @@ body {
   font-size: var(--text-sm);
 }
 .lesson-badge[data-provenance="TEST_STAND_IN"] {
-  background: #fde68a;
-  color: #78350f;
+  background: var(--badge-standin-bg);
+  color: var(--badge-standin-ink);
 }
 .lesson-badge[data-provenance="PREPARED_FALLBACK"] {
-  background: #dbeafe;
-  color: #1e3a8a;
+  background: var(--badge-fallback-bg);
+  color: var(--badge-fallback-ink);
 }
 .lesson-badge[data-provenance="AI_VALIDATED"] {
-  background: #dcfce7;
-  color: #14532d;
+  background: var(--badge-ai-bg);
+  color: var(--badge-ai-ink);
 }
 .lesson-facts {
   background: var(--tone-upcoming-bg);

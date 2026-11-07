@@ -36,7 +36,7 @@ test("fictional FP-30 month: pay, defer, salary, pay overdue, explanation, reloa
   await advanceTo(page, 8);
   await expectBillState(phone, "DUE", "Due");
   await expect(decisionCard(page)).toContainText("Decision needed: Phone provider");
-  await expect(phone).toContainText("Decide on this bill above.");
+  await expect(phone).toContainText('Decide in the "Decision needed" card.');
   await expect(page.getByText("Decide on the due bill first.")).toBeVisible();
   await expect(page.getByRole("button", { name: /^Advance to day/ })).toBeDisabled();
 

@@ -55,6 +55,13 @@ export function WorldShell() {
   const [explanation, setExplanation] = useState<ExplanationView>({ status: "idle" });
   /** Only the newest explanation request may update the panel. */
   const explainSeq = useRef(0);
+  const focusAdvanceNext = useRef(false);
+
+  useEffect(() => {
+    if (!focusAdvanceNext.current || busy) return;
+    focusAdvanceNext.current = false;
+    document.getElementById("advance-button")?.focus();
+  }, [busy]);
 
   /** Fire-and-forget: the game never waits for (or fails because of) the tutor. */
   const explainLatest = useCallback(
@@ -125,7 +132,12 @@ export function WorldShell() {
           : `rejected: ${r.error?.code ?? "?"}`;
       note(`${describeIntent(intent)}: ${status}${out.duplicate ? " (duplicate)" : ""}`);
       if (r.status === "REJECTED") setMessage(r.error?.message ?? "Rejected");
-      else explainLatest(out.snapshot.worldId);
+      else {
+        explainLatest(out.snapshot.worldId);
+        // A decision unmounts the focused button: keep keyboard users in place by moving focus
+        // to the time control, the next step of the loop.
+        if (intent.kind !== "ADVANCE_TIME") focusAdvanceNext.current = true;
+      }
     } catch (err) {
       setMessage(err instanceof ApiError ? `${err.code}: ${err.message}` : "Network error");
       if (err instanceof ApiError && err.status === 409) {
@@ -172,22 +184,34 @@ export function WorldShell() {
           {message}
         </p>
       )}
+      {/* Desktop: two columns. Phone: one column in loop order (status, decision, time,
+          bills, explanation, world): see .today-grid in globals.css. */}
       <div className="today-grid">
-        <div>
-          <StatusPanel view={view} />
-          <DecisionCard view={view} busy={busy} onAct={onAct} />
-          <LessonPanel view={explanation} />
-          <AdvancePanel
-            view={view}
-            busy={busy}
-            nextDay={nextDay}
-            onTargetDay={setTargetDay}
-            onAdvance={() => act({ kind: "ADVANCE_TIME", payload: { targetDay: nextDay } })}
-          />
+        <div className="today-col">
+          <div className="slot-status">
+            <StatusPanel view={view} />
+          </div>
+          <div className="slot-decision">
+            <DecisionCard view={view} busy={busy} onAct={onAct} />
+          </div>
+          <div className="slot-time">
+            <AdvancePanel
+              view={view}
+              busy={busy}
+              nextDay={nextDay}
+              onTargetDay={setTargetDay}
+              onAdvance={() => act({ kind: "ADVANCE_TIME", payload: { targetDay: nextDay } })}
+            />
+          </div>
+          <div className="slot-lesson">
+            <LessonPanel view={explanation} />
+          </div>
         </div>
-        <div>
-          <BillsPanel view={view} busy={busy} onAct={onAct} />
-          <section className="card" aria-label="World">
+        <div className="today-col">
+          <div className="slot-bills">
+            <BillsPanel view={view} busy={busy} onAct={onAct} />
+          </div>
+          <section className="card slot-world" aria-label="World">
             <details>
               <summary>Recent activity (this browser)</summary>
               <ol className="log" reversed>
@@ -196,17 +220,11 @@ export function WorldShell() {
                 ))}
               </ol>
             </details>
-            <p className="small muted" style={{ marginBottom: 0 }}>
+            <p className="small muted mb-0">
               World <code>{view.worldId}</code> · version {view.version} · {view.eventCount}{" "}
               event(s) recorded · <code>{view.ruleVersion}</code>
             </p>
-            <button
-              type="button"
-              className="btn"
-              style={{ marginTop: "var(--space-3)" }}
-              disabled={busy}
-              onClick={newWorld}
-            >
+            <button type="button" className="btn mt-3" disabled={busy} onClick={newWorld}>
               Start over with a new world
             </button>
           </section>
