@@ -1,7 +1,8 @@
 import type { DomainEvent, LessonResponse, WorldSnapshot } from "@fle/contracts";
 import type { LearnerState } from "@fle/learning";
-import { buildTutorContext, type TutorContext } from "./context.js";
+import { buildTutorContext, modelView, type TutorContext } from "./context.js";
 import { LESSON_DRAFT_JSON_SCHEMA } from "./draft-schema.js";
+import { FACTS_CHECK, factsBlock } from "./facts.js";
 import { fallbackLesson } from "./fallback.js";
 import { PROMPT_VERSION, type TutorProvider, type TutorRequest } from "./types.js";
 import { type ValidationFailure, validateModelOutput } from "./validate.js";
@@ -11,15 +12,17 @@ export const DEFAULT_TIMEOUT_MS = 8000;
 const SYSTEM_PROMPT = [
   "You are a financial-education tutor inside a simulation with fictional money.",
   "Reply with ONE JSON object matching learning.lesson.v1 WITHOUT the `validation` and `provenance` fields.",
-  "Use only facts from the provided context.",
-  "NEVER write a figure yourself: no digits, no number words (one, two, half, dozen, hundred...), no currency symbols, codes or names (EUR, euro, $...).",
-  "Write every amount, day and creditor ONLY as a placeholder, which the server fills in from the context:",
-  "{{cash}} (cash held now), {{day}} (today, renders as 'day N'), {{owedTotal}} (total still owed),",
-  "{{bill:<obligationId>.amount}}, {{bill:<obligationId>.remaining}}, {{bill:<obligationId>.dueDay}} (renders as 'day N'), {{bill:<obligationId>.creditor}},",
-  "where <obligationId> is an obligationId from context.obligations. Example: 'You hold {{cash}}; {{bill:obl_x.creditor}} is owed {{bill:obl_x.remaining}}, due on {{bill:obl_x.dueDay}}.'",
-  "Do not name creditors or other parties in your own words (no 'bank', 'lender', 'loan', 'landlord', 'provider', no capitalised names): use the creditor placeholder. Write in sentence case.",
+  "The app already shows the learner the exact facts from the world's records, right above your text: what they decided, cash before and after, cash now, and the next bill.",
+  "Your job is INTERPRETATION and REFLECTION: explain what the decision means and why it matters, then ask one reflection question. Do not restate the facts.",
+  "Write NO figures at all: no digits, no number words (two, half, twice, fifth, percent, tomorrow...), no amounts, no days, no currency symbols, codes or names. Refer to amounts in words like 'the bill', 'your cash', 'what you still owe'.",
+  "Name parties ONLY with these placeholders, which the server fills in: {{decision.creditor}} (the bill just paid or deferred), {{decision.item}} (what was just bought), {{nextBill.creditor}} (the next bill still owed), {{bill:<obligationId>.creditor}} (any bill in context.obligations).",
+  "Use {{decision.*}} only when context.decision is not null, {{nextBill.creditor}} only when context.nextBill is not null.",
+  "Every claim must match the context: what was paid, deferred or bought (context.decision.action), whether a bill is still owed or overdue (context.obligations), and whether cash rose, fell or stayed the same (context.decision.cashBeforeMinor vs cashAfterMinor). When you say a bill was paid or deferred, name it with its creditor placeholder.",
+  "Do not name creditors or other parties in your own words (no 'bank', 'lender', 'landlord', 'provider', no capitalised names). Write in plain English, sentence case.",
   "Blocks are typed: text, visual (recipe must be one of the allowed recipe names, data must be {}), question.",
   "sourceRefs must be chosen from context.allowedSourceRefs; conceptIds from context.concepts.",
+  "This simulation has NO late fees, penalties, interest or credit score: deferring a bill only marks it overdue and it is still owed. Never mention such consequences. Income is not in the context: do not predict when money arrives.",
+  "Write plain sentences: no markdown headings, no bold, no Title Case labels.",
   "Never judge the learner as wrong; describe what happened and what to consider.",
 ].join(" ");
 
@@ -35,7 +38,7 @@ const request = (
     task: stage === "generate" ? "explain_outcome" : "repair_previous_output",
     promptVersion: PROMPT_VERSION,
     ...(errors ? { errors: errors.map((e) => ({ code: e.code, detail: e.detail })) } : {}),
-    context,
+    context: modelView(context),
   }),
 });
 
@@ -66,8 +69,9 @@ async function callWithTimeout(
  * THE server-side entry point of the AI boundary (#19, ADR-0007).
  *
  * The model proposes a lesson; deterministic code decides whether it may be shown:
- * parse -> recipe whitelist -> no figure outside a server-resolved placeholder -> source refs,
- * then the server substitutes the placeholders with values from the snapshot.
+ * parse -> recipe whitelist -> no figure outside a server-resolved placeholder -> each placeholder
+ * used in a sentence matching its meaning (#88) -> source refs, then the server substitutes the
+ * placeholders with values from the context and puts its deterministic facts block first.
  * On failure: one repair attempt, then a reviewed static fallback. A provider error or
  * timeout goes straight to the fallback (no retry against a failing/slow provider).
  * It never throws and never touches economic state (invariant 3).
@@ -100,9 +104,15 @@ export async function explainOutcome(input: {
     if (result.ok) {
       return {
         ...result.lesson,
+        // #88: deterministic facts first; the model's interpretation and reflection follow.
+        blocks: [factsBlock(ctx), ...result.lesson.blocks],
         validation: {
           ...result.lesson.validation,
-          checks: [...result.lesson.validation.checks, ...(stage === "repair" ? ["repaired"] : [])],
+          checks: [
+            FACTS_CHECK,
+            ...result.lesson.validation.checks,
+            ...(stage === "repair" ? ["repaired"] : []),
+          ],
         },
         provenance: { generator: "MODEL", model: meta.model, promptVersion: PROMPT_VERSION },
       };

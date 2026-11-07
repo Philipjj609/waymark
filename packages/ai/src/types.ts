@@ -23,5 +23,5 @@ export interface TutorProvider {
   complete(request: TutorRequest, options: { readonly signal: AbortSignal }): Promise<string>;
 }
 
-export const PROMPT_VERSION = "tutor.prompt.v2" as const;
+export const PROMPT_VERSION = "tutor.prompt.v3" as const;
 export const CURRICULUM_VERSION = "seed.draft.v1" as const;

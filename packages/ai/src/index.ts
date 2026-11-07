@@ -3,6 +3,7 @@ export * from "./config.js";
 export * from "./context.js";
 export * from "./draft-schema.js";
 export * from "./explain.js";
+export * from "./facts.js";
 export * from "./fake.js";
 export * from "./fallback.js";
 export * from "./nebius.js";

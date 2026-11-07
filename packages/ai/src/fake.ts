@@ -5,6 +5,8 @@ export type FakeBehavior =
   | "valid"
   | "invalid-json"
   | "wrong-number"
+  | "temporal-misuse"
+  | "obligation-mismatch"
   | "bad-recipe"
   | "no-sources"
   | "hang"
@@ -40,31 +42,44 @@ export class FakeTutorProvider implements TutorProvider {
 /**
  * Placeholder-based like a real model must be (placeholders.ts): the fake writes no figure itself.
  * "wrong-number" writes a literal (wrong) figure, which the validator must reject.
+ * "temporal-misuse" replays the production bug of 7 Nov (#88): cash NOW in a sentence about before.
+ * "obligation-mismatch" puts one bill's figure next to another bill's creditor. Both are now
+ * rejected as FIGURE_IN_PROSE: figures appear only in the server's facts block.
  */
 function lessonFor(ctx: TutorContext, behavior: FakeBehavior) {
   const concept = ctx.concepts[0];
   const bill = ctx.obligations.find((o) => o.remainingMinor > 0);
-  const owed = (id: string) =>
+  // Figure-free interpretation (#88): figures live in the facts block; parties via placeholders.
+  const d = ctx.decision;
+  const interpretive = !d
+    ? "Compare the cash you hold with what you still owe before you decide."
+    : d.action === "PAY_OBLIGATION"
+      ? "You paid {{decision.creditor}}, so your cash went down by that bill."
+      : d.action === "DEFER_OBLIGATION"
+        ? "You deferred {{decision.creditor}}, so your cash stayed the same but that bill is still owed."
+        : "You bought {{decision.item}}, so your cash went down by its cost.";
+  const next = ctx.nextBill ? " Plan ahead for {{nextBill.creditor}}." : "";
+  const [a, b] = ctx.obligations;
+  const sentence =
     behavior === "wrong-number"
-      ? `${Math.trunc((bill?.remainingMinor ?? 0) / 100) + 1}.00 EUR`
-      : `{{bill:${id}.remaining}}`;
-  const sentence = bill
-    ? `You hold {{cash}} and {{bill:${bill.obligationId}.creditor}} is owed ${owed(
-        bill.obligationId,
-      )}, due on {{bill:${bill.obligationId}.dueDay}}.`
-    : "You hold {{cash}}.";
+      ? `You hold ${Math.trunc((bill?.remainingMinor ?? 0) / 100) + 1}.00 EUR.`
+      : behavior === "temporal-misuse"
+        ? "You held {{cash}} before paying."
+        : behavior === "obligation-mismatch" && a && b
+          ? `{{bill:${a.obligationId}.creditor}} is owed {{bill:${b.obligationId}.remaining}}.`
+          : `${interpretive}${next}`;
   return {
     schemaVersion: "learning.lesson.v1",
     lessonId: `les_fake_d${ctx.day}`,
     curriculumVersion: "seed.draft.v1",
     conceptIds: [concept?.conceptId ?? "cpt_cash_balance"],
     blocks: [
-      { type: "text", markdown: `${sentence} Today is {{day}}.` },
+      { type: "text", markdown: sentence },
       {
         type: "visual",
         recipe: behavior === "bad-recipe" ? "RunArbitraryScript" : "CashFlowTimeline",
         data: {},
-        textEquivalent: "Your cash ({{cash}}) against everything still owed ({{owedTotal}}).",
+        textEquivalent: "Your cash compared with everything you still owe.",
       },
       {
         type: "question",
