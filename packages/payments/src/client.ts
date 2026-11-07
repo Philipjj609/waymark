@@ -33,7 +33,9 @@ export const SANDBOX_TEST_CARD = "4111111111111111" as const;
 /** PayPal-Request-Id: we always send a UUID (PayPal accepts up to 108 characters). */
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Our ids, echoed as reference_id/custom_id: ASCII, bounded (custom_id allows 127). */
-const REFERENCE = /^[A-Za-z0-9_-]{1,127}$/;
+const REFERENCE = /^[A-Za-z0-9_.:-]{1,127}$/;
+/** Responses larger than this are not parsed (PayPal order responses are a few KB). */
+const MAX_RESPONSE_CHARS = 1_000_000;
 
 export interface PayPalClientConfig {
   readonly clientId: string;
@@ -48,6 +50,10 @@ export interface PayPalClientConfig {
   readonly timeoutMs?: number;
   /** Attempts per call for retryable failures (network, timeout, 5xx, 429). Default 3. */
   readonly maxAttempts?: number;
+  /** Tests and probes only: allow PayPal's sandbox test card (skips buyer approval). Default false. */
+  readonly allowSandboxTestCard?: boolean;
+  /** Origins allowed for return/cancel URLs after buyer approval (no open redirects). Default none. */
+  readonly allowedReturnOrigins?: readonly string[];
 }
 
 export interface ObservedOrderCapture {
@@ -110,12 +116,19 @@ export type PayPalResult<T> =
   | { readonly kind: "CONFLICT"; readonly detail: string; readonly order: ObservedOrder }
   | {
       readonly kind: "UNCERTAIN";
+      /**
+       * UNCLEAR_AFTER_RETRY: an earlier attempt of this call may have reached PayPal, and the final
+       * answer (e.g. a 4xx) does not say what happened to it. IN_PROGRESS: PayPal is still working on
+       * an earlier request with the same id.
+       */
       readonly cause:
         | "TIMEOUT"
         | "NETWORK"
         | "SERVER_ERROR"
         | "RATE_LIMITED"
-        | "MALFORMED_RESPONSE";
+        | "MALFORMED_RESPONSE"
+        | "UNCLEAR_AFTER_RETRY"
+        | "IN_PROGRESS";
       readonly attempts: number;
       readonly httpStatus: number | null;
       readonly debugId: string | null;
@@ -154,18 +167,30 @@ type Raw =
       readonly status: number;
       readonly json: unknown;
       readonly debugId: string | null;
+      /** An earlier attempt of the same call failed in a way that may have reached PayPal. */
+      readonly afterUncertain: boolean;
     }
   | Extract<PayPalResult<never>, { kind: "UNCERTAIN" | "NOT_SENT" }>;
 
+export class ClientConfigError extends Error {
+  override readonly name = "ClientConfigError";
+}
+
 export class PayPalSandboxClient {
   readonly #cfg: Required<Omit<PayPalClientConfig, "baseUrl">> & { readonly baseUrl: string };
+  readonly #returnOrigins: ReadonlySet<string>;
   #token: { readonly value: string; readonly expiresAt: number } | null = null;
   #pending: Promise<string | null> | null = null;
 
   constructor(cfg: PayPalClientConfig) {
     const baseUrl = cfg.baseUrl ?? PAYPAL_SANDBOX_BASE_URL;
     const url = new URL(baseUrl);
-    if (url.protocol !== "https:" || url.hostname !== SANDBOX_HOST || url.pathname !== "/")
+    if (
+      url.protocol !== "https:" ||
+      url.hostname !== SANDBOX_HOST ||
+      url.port !== "" ||
+      url.pathname !== "/"
+    )
       throw new SandboxOnlyError(`only ${PAYPAL_SANDBOX_BASE_URL} is allowed`);
     if (!cfg.clientId || !cfg.clientSecret)
       throw new SandboxOnlyError("missing sandbox credentials");
@@ -177,8 +202,23 @@ export class PayPalSandboxClient {
       now: cfg.now ?? Date.now,
       sleep: cfg.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
       timeoutMs: cfg.timeoutMs ?? 15_000,
-      maxAttempts: Math.min(Math.max(cfg.maxAttempts ?? 3, 1), 5),
+      maxAttempts: cfg.maxAttempts ?? 3,
+      allowSandboxTestCard: cfg.allowSandboxTestCard ?? false,
+      allowedReturnOrigins: cfg.allowedReturnOrigins ?? [],
     };
+    const { timeoutMs, maxAttempts } = this.#cfg;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000)
+      throw new ClientConfigError("timeoutMs must be an integer between 1 and 120000");
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 5)
+      throw new ClientConfigError("maxAttempts must be an integer between 1 and 5");
+    this.#returnOrigins = new Set(
+      this.#cfg.allowedReturnOrigins.map((o) => {
+        const u = new URL(o);
+        if (u.protocol !== "https:" && u.hostname !== "localhost")
+          throw new ClientConfigError(`return origin must be https (or localhost): ${o}`);
+        return u.origin;
+      }),
+    );
   }
 
   /** Never print this object: secrets live in private fields only. */
@@ -233,7 +273,11 @@ export class PayPalSandboxClient {
       httpStatus: null,
       debugId: null,
     };
+    // Once an attempt may have reached PayPal, a later definite-looking answer is not definite for
+    // the call as a whole (#95 review H1).
+    let maybeReached = false;
     for (let attempt = 1; attempt <= this.#cfg.maxAttempts; attempt++) {
+      if (attempt > 1) maybeReached = true;
       let res: Response;
       try {
         res = await this.#cfg.fetch(`${this.#cfg.baseUrl}${path}`, {
@@ -257,7 +301,18 @@ export class PayPalSandboxClient {
         continue;
       }
       const debugId = res.headers.get("paypal-debug-id");
-      const text = await res.text().catch(() => null);
+      let text = await res.text().catch(() => null);
+      if (text !== null && text.length > MAX_RESPONSE_CHARS) {
+        if (res.status < 300)
+          return {
+            kind: "UNCERTAIN",
+            cause: "MALFORMED_RESPONSE",
+            attempts: attempt,
+            httpStatus: res.status,
+            debugId,
+          };
+        text = null;
+      }
       if (res.status >= 500 || res.status === 429) {
         last = {
           kind: "UNCERTAIN",
@@ -283,7 +338,7 @@ export class PayPalSandboxClient {
             debugId,
           };
       }
-      return { ok: true, status: res.status, json, debugId };
+      return { ok: true, status: res.status, json, debugId, afterUncertain: maybeReached };
     }
     return last;
   }
@@ -315,8 +370,10 @@ export class PayPalSandboxClient {
         },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
-      if (!("kind" in raw) && raw.status === 401 && pass === 0) {
-        this.#token = null;
+      if (!("kind" in raw) && raw.status === 401 && pass === 0 && !raw.afterUncertain) {
+        // A 401 is a definite "not processed": drop THIS token (not one a concurrent caller just
+        // refreshed) and repeat once with the same request id.
+        if (this.#token?.value === token) this.#token = null;
         continue;
       }
       return raw;
@@ -333,6 +390,11 @@ export class PayPalSandboxClient {
       return { kind: "NOT_SENT", cause: "invalid referenceId" };
     if (input.sandboxTestCard !== undefined && input.sandboxTestCard !== SANDBOX_TEST_CARD)
       return { kind: "NOT_SENT", cause: "only PayPal's published sandbox test card is allowed" };
+    if (input.sandboxTestCard !== undefined && !this.#cfg.allowSandboxTestCard)
+      return { kind: "NOT_SENT", cause: "sandbox test card not enabled for this client" };
+    for (const u of [input.returnUrl, input.cancelUrl])
+      if (u !== undefined && !this.#returnOrigins.has(originOf(u)))
+        return { kind: "NOT_SENT", cause: "return/cancel URL origin is not allowed" };
     let amount: { currency_code: string; value: string };
     try {
       amount = formatPayPalAmount(input.amount);
@@ -391,7 +453,7 @@ export class PayPalSandboxClient {
         detail: `PayPal returned order ${order.orderId} for ${order.referenceId}/${order.amountValue} ${order.currencyCode}, not the request`,
         order,
       };
-    return this.#orderOutcome(order, raw.status === 200, raw.debugId);
+    return this.#orderOutcome(order, raw.status === 200, raw.debugId, false);
   }
 
   async getOrder(orderId: string): Promise<PayPalResult<ObservedOrder>> {
@@ -431,30 +493,63 @@ export class PayPalSandboxClient {
         httpStatus: raw.status,
         debugId: raw.debugId,
       };
-    return this.#orderOutcome(order, raw.status === 200, raw.debugId);
+    return this.#orderOutcome(order, raw.status === 200, raw.debugId, true);
   }
 
-  /** A successful order response, refined by its capture (if any): completed, pending or declined. */
+  /**
+   * A 2xx order response, refined by its captures. A capture call is OK only with exactly ONE
+   * COMPLETED capture; anything else is DECLINED, PENDING or UNCERTAIN, never OK (#95 review M2).
+   */
   #orderOutcome(
     order: ObservedOrder,
     replayed: boolean,
     debugId: string | null,
+    captureCall: boolean,
   ): PayPalResult<ObservedOrder> {
-    const cap = order.captures.length === 1 ? order.captures[0] : undefined;
-    if (cap?.status === "DECLINED" || cap?.status === "FAILED")
+    const unclear: PayPalResult<ObservedOrder> = {
+      kind: "UNCERTAIN",
+      cause: "MALFORMED_RESPONSE",
+      attempts: 1,
+      httpStatus: null,
+      debugId,
+    };
+    if (order.captures.length === 0)
+      return captureCall ? unclear : { kind: "OK", value: order, replayed, debugId };
+    if (order.captures.length > 1) return unclear;
+    const cap = order.captures[0] as ObservedOrderCapture;
+    if (cap.status === "COMPLETED") return { kind: "OK", value: order, replayed, debugId };
+    if (cap.status === "DECLINED" || cap.status === "FAILED")
       return { kind: "DECLINED", issue: cap.reason ?? cap.status, order, debugId };
-    if (cap?.status === "PENDING") return { kind: "PENDING", order, debugId };
-    return { kind: "OK", value: order, replayed, debugId };
+    if (cap.status === "PENDING") return { kind: "PENDING", order, debugId };
+    return unclear;
   }
 
   #failure(raw: Extract<Raw, { ok: true }>): PayPalResult<never> {
     const j = (raw.json ?? {}) as { name?: unknown; details?: Array<{ issue?: unknown }> };
     const name = typeof j.name === "string" ? j.name : null;
-    const issue = typeof j.details?.[0]?.issue === "string" ? (j.details[0].issue as string) : null;
-    if (raw.status === 422 && issue === "ORDER_NOT_APPROVED")
-      return { kind: "NOT_APPROVED", debugId: raw.debugId };
+    const first = Array.isArray(j.details) ? j.details[0] : undefined;
+    const issue = typeof first?.issue === "string" ? first.issue : null;
+    if (raw.status === 409 || issue === "PREVIOUS_REQUEST_IN_PROGRESS")
+      return {
+        kind: "UNCERTAIN",
+        cause: "IN_PROGRESS",
+        attempts: 1,
+        httpStatus: raw.status,
+        debugId: raw.debugId,
+      };
+    // ALREADY_CAPTURED stays informative even after a retry (an earlier attempt may be the capture).
     if (raw.status === 422 && issue === "ORDER_ALREADY_CAPTURED")
       return { kind: "ALREADY_CAPTURED", debugId: raw.debugId };
+    if (raw.afterUncertain)
+      return {
+        kind: "UNCERTAIN",
+        cause: "UNCLEAR_AFTER_RETRY",
+        attempts: 1,
+        httpStatus: raw.status,
+        debugId: raw.debugId,
+      };
+    if (raw.status === 422 && issue === "ORDER_NOT_APPROVED")
+      return { kind: "NOT_APPROVED", debugId: raw.debugId };
     if (raw.status === 422 && issue && DECLINE_ISSUES.has(issue))
       return { kind: "DECLINED", issue, order: null, debugId: raw.debugId };
     return { kind: "REJECTED", httpStatus: raw.status, name, issue, debugId: raw.debugId };
@@ -462,6 +557,14 @@ export class PayPalSandboxClient {
 }
 
 // ------------------------------------------------------------------------------ parsing
+
+function originOf(u: string): string {
+  try {
+    return new URL(u).origin;
+  } catch {
+    return "invalid";
+  }
+}
 
 /** Only https links on PayPal's sandbox domain are passed on to a buyer. */
 function sandboxUrl(href: string | null): string | null {
@@ -490,14 +593,23 @@ const str = (v: unknown, max = 2048): string | null =>
 
 /** Parses an Orders v2 response. Unknown statuses or shapes -> null (the caller reports UNCERTAIN). */
 export function parseOrder(json: unknown): ObservedOrder | null {
+  try {
+    return parseOrderUnsafe(json);
+  } catch {
+    return null; // hostile shapes never throw out of the client (#95 review M1)
+  }
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+
+function parseOrderUnsafe(json: unknown): ObservedOrder | null {
   if (typeof json !== "object" || json === null) return null;
   const o = json as Record<string, unknown>;
   const orderId = str(o.id, 36);
   const status = o.status as PayPalOrderStatus;
   if (!orderId || !PAYPAL_ORDER_STATUSES.includes(status)) return null;
-  const units = Array.isArray(o.purchase_units)
-    ? (o.purchase_units as Record<string, unknown>[])
-    : [];
+  const units = Array.isArray(o.purchase_units) ? (o.purchase_units as unknown[]) : [];
+  if (!units.every(isObj)) return null;
   if (units.length > 1) return null; // we only ever create one purchase unit
   const unit = units[0] ?? {};
   const amount = (unit.amount ?? {}) as Record<string, unknown>;

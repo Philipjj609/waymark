@@ -51,6 +51,7 @@ const mk = (
     clientId: env.PAYPAL_CLIENT_ID ?? "",
     clientSecret: env.PAYPAL_CLIENT_SECRET ?? "",
     fetch: counted(opts.extra, opts.orderTimeoutMs),
+    allowSandboxTestCard: true, // probe only: completes captures without a human
     ...(opts.maxAttempts ? { maxAttempts: opts.maxAttempts } : {}),
   });
 const decline = {
