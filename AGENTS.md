@@ -45,7 +45,8 @@ _intent_. Then open an issue labelled `type:reconciliation` to make them agree. 
 **Explicitly read-only assignments** (independent reviewers, research councils, any brief that says read-only) follow
 `docs/process/subagents.md` instead of the Git synchronization and claim instructions here: they skip the rebase in
 step 4 and steps 5–6, unless the brief authorizes a specific operation. All other agents, including implementation
-agents with an authorized write scope, follow every step and keep their normal Git operations.
+agents with an authorized write scope, follow the steps that apply to their role (sub-agents never claim, §10) and
+keep their normal authorized Git operations.
 
 A fresh agent with no chat history must be able to do all of the above from GitHub alone. If it can't,
 the previous session's handoff was incomplete: say so on the issue.
