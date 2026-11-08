@@ -114,6 +114,21 @@ importers:
         specifier: workspace:*
         version: link:../simulation
 
+  packages/month-lab:
+    dependencies:
+      '@fle/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@fle/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@fle/simulation':
+        specifier: workspace:*
+        version: link:../simulation
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+
   packages/payments:
     dependencies:
       '@fle/contracts':
