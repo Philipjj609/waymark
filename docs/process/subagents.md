@@ -43,12 +43,12 @@ using normal Git operations (`git fetch`, branches, commits, worktrees) on their
 The brief says that the assignment is read-only, which commit or refs to inspect, and where output goes. The test is
 whether an operation changes repository state, not whether the working files look the same afterwards.
 
-| Inspecting (allowed)                                                                               | Modifying (prohibited)                                                                                                                                                             |
-| -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| reading files in the checkout                                                                      | creating, editing or deleting tracked files                                                                                                                                        |
-| existing Git history, diffs and logs (`git log`, `git show`, `git diff`, `git grep`, `git status`) | the index (`git add`, `git reset`, `git restore --staged`)                                                                                                                         |
-| read-only remote API calls (`gh pr view`, `gh pr diff`, `gh issue view`, `gh api` with GET)        | branches, tags and any other Git ref, temporary ones included (`git switch`, `git checkout`, `git branch`, `git tag`, `git update-ref`); commits, merges, rebases, stashes, pushes |
-| external documentation the brief approves                                                          | worktrees (`git worktree add`, `remove`) and repository configuration (`git config`, hooks, remotes)                                                                               |
+| Inspecting (allowed)                                                                                                   | Modifying (prohibited)                                                                                                                                                             |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| reading files in the checkout                                                                                          | creating, editing or deleting tracked files                                                                                                                                        |
+| existing Git history, diffs and logs (`git log`, `git show`, `git diff`, `git grep`, `git --no-optional-locks status`) | the index (`git add`, `git reset`, `git restore --staged`)                                                                                                                         |
+| read-only remote API calls (`gh pr view`, `gh pr diff`, `gh issue view`, `gh api` with GET)                            | branches, tags and any other Git ref, temporary ones included (`git switch`, `git checkout`, `git branch`, `git tag`, `git update-ref`); commits, merges, rebases, stashes, pushes |
+| external documentation the brief approves                                                                              | worktrees (`git worktree add`, `remove`) and repository configuration (`git config`, hooks, remotes)                                                                               |
 - **`git fetch` and temporary refs are potentially mutating.** `git fetch` writes objects and `FETCH_HEAD` and can
   update refs. A temporary ref changes the ref store even if it is deleted later. Neither is permitted merely because
   the working files stay unchanged. Each needs explicit authorization in the brief.
@@ -60,18 +60,21 @@ whether an operation changes repository state, not whether the working files loo
   `task-claiming.md` don't apply to it. It runs no `git fetch`, `git switch` or `pnpm install`, inspects the commit the
   brief names, and reports the commit it inspected.
 - **Builds and tests.** Installs, builds and test runs write dependencies, caches and generated output, so they are
-  outside a read-only scope unless the brief allows them. The `verifier` agent is a test-running assignment in the
-  parent's worktree, governed by its own definition.
+  outside a read-only scope unless the brief allows them. If you need their results, ask the parent for the output. The
+  `verifier` agent is a test-running assignment in the parent's worktree, governed by its own definition.
 - **No cleanup or maintenance.** Don't run `git gc`, `git prune` or `git clean`, or delete refs or objects, outside the
   assignment's permissions, even to undo your own mistake.
 - **Disclose any scope violation.** If an operation went beyond the scope, stop and say so in your result: the exact
-  command, why it ran, and the resulting repository state (`git status`, `HEAD`, refs created or left behind, objects
-  that may remain). The parent records it on the "Sub-agents used" line (below) and decides what to do.
+  command, why it ran, and the resulting repository state (working-tree status, `HEAD`, refs created or left behind,
+  objects that may remain). The parent records it on the "Sub-agents used" line (below) and decides what to do.
 - **Output stays where it is authorized.** Generated research artifacts go only in the output location the brief names,
   and a repository path counts only if the brief names it. If no location is named, return findings as text to the
-  parent. A `[REVIEW]` comment (`communication.md` §4-D) is allowed only when the brief names it as the output.
+  parent. A `[REVIEW]` comment (`communication.md` §4-D) is allowed only when the brief names it as the output, and any
+  other `gh` write (comment, review, edit, label) is prohibited unless the brief names it.
 - **Enforcement.** Use what the tool can enforce: a Claude Code `tools` allowlist, or Codex with `--sandbox read-only`.
-  An agent with a shell is otherwise bound only by its brief, so name the prohibited operations there.
+  A read-only sandbox can also block network access and writes to the output location, so pass remote data and file
+  output through the parent when it does. An agent with a shell is otherwise bound only by its brief, so name the
+  prohibited operations there.
 
 ## Tooling that exists today
 
