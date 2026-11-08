@@ -806,7 +806,7 @@ function Standing(props: {
   );
 }
 
-const describe = (a: Action): string | null => {
+const describeAction = (a: Action): string | null => {
   switch (a.kind) {
     case "GEAR":
       return a.choice === "RENT"
@@ -837,7 +837,7 @@ function UndoList(props: {
   readonly busy: boolean;
 }) {
   const items = props.actions.flatMap((a, i) => {
-    const label = describe(a);
+    const label = describeAction(a);
     return label ? [{ i, label }] : [];
   });
   if (items.length === 0) return null;
