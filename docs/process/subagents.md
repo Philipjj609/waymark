@@ -56,9 +56,9 @@ whether an operation changes repository state, not whether the working files loo
   authorized, isolated disposable checkout: a separate clone, discarded afterwards. A linked worktree, including
   Claude Code's `isolation: worktree`, shares refs and objects with the main clone, so it isn't isolated for fetches or
   ref changes, and creating one changes the repository's worktree list.
-- **Session start.** A read-only agent claims nothing, so `AGENTS.md` §2 steps 5–6 and the resume steps in
-  `task-claiming.md` don't apply to it. It runs no `git fetch`, `git switch` or `pnpm install`, inspects the commit the
-  brief names, and reports the commit it inspected.
+- **Session start.** A read-only agent claims nothing, so the rebase in `AGENTS.md` §2 step 4, steps 5–6 and the resume
+  steps in `task-claiming.md` don't apply to it. It runs no `git fetch`, `git switch`, rebase or `pnpm install`, inspects
+  the commit the brief names, and reports the commit it inspected.
 - **Builds and tests.** Installs, builds and test runs write dependencies, caches and generated output, so they are
   outside a read-only scope unless the brief allows them. If you need their results, ask the parent for the output. The
   `verifier` agent is a test-running assignment in the parent's worktree, governed by its own definition.
