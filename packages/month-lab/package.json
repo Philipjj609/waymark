@@ -5,7 +5,8 @@
   "type": "module",
   "description": "SPIKE (#110): a playable, branching month compiled onto the pure engine. Rules live above the ledger; every cent still posts through @fle/simulation.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./scenario": "./src/scenario.ts"
   },
   "dependencies": {
     "@fle/contracts": "workspace:*",

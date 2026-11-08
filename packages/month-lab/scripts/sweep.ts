@@ -39,52 +39,52 @@ function candidates(): Candidate[] {
         for (const rush of gear ? [false, true] : [false]) {
           for (const flyers of [false, true]) {
             for (const courier of [false, true]) {
-            for (const shifts of [0, 1, 2, 3]) {
-              for (const f of FINANCE) {
-                const free = [3, 4, 10, 11, 17, 18];
-                const take = (n: number) => free.splice(0, n);
-                const a: Action[] = [];
-                if (gear) a.push({ kind: "GEAR", day: 1, choice: gear });
-                let ok = true;
-                const gig = (
-                  gigId: "LOGO" | "FLYERS" | "MENU" | "RUSH" | "COURIER",
-                  days: number,
-                  day: number,
-                  terms: "STANDARD" | "EARLY" = "STANDARD",
-                  from = 0,
-                ) => {
-                  const picked: number[] = [];
-                  for (const d of [...free]) {
-                    if (d > from && picked.length < days) {
-                      picked.push(d);
-                      free.splice(free.indexOf(d), 1);
+              for (const shifts of [0, 1, 2, 3]) {
+                for (const f of FINANCE) {
+                  const free = [3, 4, 10, 11, 17, 18];
+                  const take = (n: number) => free.splice(0, n);
+                  const a: Action[] = [];
+                  if (gear) a.push({ kind: "GEAR", day: 1, choice: gear });
+                  let ok = true;
+                  const gig = (
+                    gigId: "LOGO" | "FLYERS" | "MENU" | "RUSH" | "COURIER",
+                    days: number,
+                    day: number,
+                    terms: "STANDARD" | "EARLY" = "STANDARD",
+                    from = 0,
+                  ) => {
+                    const picked: number[] = [];
+                    for (const d of [...free]) {
+                      if (d > from && picked.length < days) {
+                        picked.push(d);
+                        free.splice(free.indexOf(d), 1);
+                      }
                     }
+                    if (picked.length < days) ok = false;
+                    a.push({ kind: "TAKE_GIG", day, gigId, workDays: picked, terms });
+                  };
+                  if (logo !== "no") {
+                    gig("LOGO", 2, 1, logo === "early" ? "EARLY" : "STANDARD");
+                    if (logo === "sold") a.push({ kind: "SELL_INVOICE", day: 4, gigId: "LOGO" });
                   }
-                  if (picked.length < days) ok = false;
-                  a.push({ kind: "TAKE_GIG", day, gigId, workDays: picked, terms });
-                };
-                if (logo !== "no") {
-                  gig("LOGO", 2, 1, logo === "early" ? "EARLY" : "STANDARD");
-                  if (logo === "sold") a.push({ kind: "SELL_INVOICE", day: 4, gigId: "LOGO" });
+                  if (flyers) gig("FLYERS", 1, 1);
+                  if (courier) gig("COURIER", 2, 1);
+                  if (menu) gig("MENU", 2, 9, "STANDARD", 9);
+                  if (rush) gig("RUSH", 1, 16, "STANDARD", 16);
+                  const sh = take(shifts);
+                  if (sh.length < shifts) ok = false;
+                  for (const d of sh) a.push({ kind: "SHIFT", day: 1, workDay: d });
+                  a.push(...f.actions);
+                  if (!ok) continue;
+                  out.push({
+                    name: `${gear ?? "no-gear"} logo:${logo} menu:${menu ? "y" : "n"} rush:${rush ? "y" : "n"} flyers:${flyers ? "y" : "n"} courier:${courier ? "y" : "n"} shifts:${shifts} fin:${f.name}`,
+                    actions: a,
+                    gear,
+                    usesDebt: f.debt,
+                    usesSplit: f.name === "split",
+                  });
                 }
-                if (flyers) gig("FLYERS", 1, 1);
-                if (courier) gig("COURIER", 2, 1);
-                if (menu) gig("MENU", 2, 9, "STANDARD", 9);
-                if (rush) gig("RUSH", 1, 16, "STANDARD", 16);
-                const sh = take(shifts);
-                if (sh.length < shifts) ok = false;
-                for (const d of sh) a.push({ kind: "SHIFT", day: 1, workDay: d });
-                a.push(...f.actions);
-                if (!ok) continue;
-                out.push({
-                  name: `${gear ?? "no-gear"} logo:${logo} menu:${menu ? "y" : "n"} rush:${rush ? "y" : "n"} flyers:${flyers ? "y" : "n"} courier:${courier ? "y" : "n"} shifts:${shifts} fin:${f.name}`,
-                  actions: a,
-                  gear,
-                  usesDebt: f.debt,
-                  usesSplit: f.name === "split",
-                });
               }
-            }
             }
           }
         }
@@ -130,10 +130,13 @@ front.sort((a, b) => b.goal - a.goal || b.median - a.median);
 const line = (s: S) =>
   `${String(Math.round(s.goal * 100)).padStart(4)}% rent ${String(Math.round(s.rent * 100)).padStart(3)}% med ${String(s.median / 100).padStart(7)} worst ${String(s.worst / 100).padStart(7)}  ${s.name}`;
 console.log(`plans: ${all.length}  months each: ${months}  ms/month: ${ms.toFixed(2)}`);
-console.log(`reach the goal >=50%: ${scored.filter((s) => s.goal >= 0.5).length}; >=90%: ${scored.filter((s) => s.goal >= 0.9).length}`);
+console.log(
+  `reach the goal >=50%: ${scored.filter((s) => s.goal >= 0.5).length}; >=90%: ${scored.filter((s) => s.goal >= 0.9).length}`,
+);
 console.log(`\nPARETO FRONT (${front.length})`);
 for (const s of front.slice(0, 30)) console.log(line(s));
-const best = (f: (s: S) => boolean) => [...scored].filter(f).sort((a, b) => b.goal - a.goal || b.median - a.median)[0];
+const best = (f: (s: S) => boolean) =>
+  [...scored].filter(f).sort((a, b) => b.goal - a.goal || b.median - a.median)[0];
 console.log("\nBEST BY ARCHETYPE");
 for (const [label, f] of [
   ["no laptop", (s: S) => s.gear === null],

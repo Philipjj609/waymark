@@ -1,0 +1,486 @@
+/*
+ * Spike visual language (#110): a nautical chart of your cash. Depth is money, and aground is out
+ * of money. Temporary and scoped to .lab; no decision on U1–U9, the palette or the brand.
+ */
+.lab {
+  --chart-deep: #a9d6e4;
+  --chart-mid: #c7e6ee;
+  --chart-shoal: #e4f4f6;
+  --chart-land: #e8d9a6;
+  --chart-ink: #10324a;
+  --chart-muted: #456376;
+  --chart-course: #b0177c;
+  --buoy-red: #b42318;
+  --buoy-green: #14704b;
+  --page: #f2f9fa;
+  --card: #ffffff;
+  --hairline: #bcd6df;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --sans: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+
+  background: var(--page);
+  color: var(--chart-ink);
+  font-family: var(--sans);
+  min-height: 100vh;
+  padding: 16px clamp(16px, 4vw, 48px) 64px;
+}
+
+.lab h1 {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 500;
+  font-size: clamp(1.7rem, 4.4vw, 3rem);
+  line-height: 1.1;
+  margin: 8px 0 4px;
+  max-width: 22ch;
+}
+
+.lab h2 {
+  font-family: var(--serif);
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.lab h3 {
+  font-size: 1rem;
+  font-weight: 650;
+  margin: 0 0 4px;
+}
+
+.lab p {
+  margin: 0 0 8px;
+  max-width: 68ch;
+}
+
+.lab-sub {
+  color: var(--chart-muted);
+}
+
+.lab-fiction {
+  background: #fff4c7;
+  color: #574200;
+  display: inline-block;
+  font-size: 0.85rem;
+  padding: 3px 10px;
+}
+
+.lab-loading {
+  font-family: var(--serif);
+  font-style: italic;
+}
+
+.lab-status {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 16px 0 8px;
+}
+
+.lab-day {
+  font-family: var(--serif);
+  font-size: 1.4rem;
+  font-style: italic;
+}
+
+.lab-cash {
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.lab-stop {
+  color: var(--chart-course);
+  font-weight: 600;
+}
+
+.lab-chart-wrap {
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  padding: 8px;
+}
+
+.chart {
+  display: block;
+  height: auto;
+  width: 100%;
+}
+
+.depth-deep {
+  fill: var(--chart-deep);
+}
+.depth-mid {
+  fill: var(--chart-mid);
+}
+.depth-shoal {
+  fill: var(--chart-shoal);
+}
+.depth-aground {
+  fill: var(--chart-land);
+}
+
+.zero-line {
+  stroke: var(--chart-ink);
+  stroke-width: 1.5;
+}
+
+.axis-label {
+  fill: var(--chart-muted);
+  font-family: var(--sans);
+  font-size: 15px;
+}
+
+.water-label {
+  fill: var(--chart-muted);
+  font-family: var(--serif);
+  font-size: 16px;
+  font-style: italic;
+}
+
+.water-label.strong {
+  fill: var(--chart-ink);
+  font-weight: 600;
+}
+
+.goal-post {
+  stroke: var(--chart-ink);
+  stroke-dasharray: 2 5;
+}
+
+.goal-line {
+  stroke: var(--buoy-green);
+  stroke-width: 4;
+}
+
+.hatch-line {
+  stroke: var(--buoy-green);
+  stroke-width: 2;
+}
+
+.promise {
+  opacity: 0.55;
+}
+
+.promise-label {
+  fill: var(--chart-ink);
+  font-family: var(--serif);
+  font-size: 14px;
+  font-style: italic;
+}
+
+.rock path {
+  fill: var(--buoy-red);
+}
+
+.forecast-line {
+  fill: none;
+  stroke: var(--chart-course);
+  stroke-dasharray: 3 7;
+  stroke-width: 2.5;
+}
+
+.course-line {
+  animation: draw-course 700ms ease-out both;
+  fill: none;
+  stroke: var(--chart-course);
+  stroke-dasharray: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 4;
+}
+
+.branch-line {
+  fill: none;
+  opacity: 0.75;
+  stroke-width: 2.5;
+}
+
+@keyframes draw-course {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.fog {
+  opacity: 0.9;
+}
+
+.fog-dot {
+  fill: #6d8a99;
+}
+
+.today-line {
+  stroke: var(--chart-ink);
+  stroke-width: 1;
+}
+
+.boat {
+  fill: var(--chart-course);
+  stroke: #ffffff;
+  stroke-width: 3;
+}
+
+.pin line {
+  stroke: var(--chart-ink);
+  stroke-dasharray: 8 4;
+  stroke-width: 2;
+}
+
+.pin text {
+  fill: var(--chart-ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.short-label {
+  fill: var(--buoy-red);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.lab-strip {
+  display: grid;
+  gap: 3px;
+  grid-template-columns: repeat(30, minmax(0, 1fr));
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.lab-strip button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--chart-ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  min-height: 34px;
+  padding: 0;
+  width: 100%;
+}
+
+.lab-strip button:disabled {
+  color: var(--chart-muted);
+  cursor: default;
+}
+
+.lab-strip button[data-free] {
+  background: var(--chart-land);
+}
+
+.lab-strip button[data-work] {
+  background: var(--chart-ink);
+  color: #ffffff;
+}
+
+.lab-strip button[data-today] {
+  border-color: var(--chart-course);
+  font-weight: 700;
+}
+
+.lab-strip button:not(:disabled):hover {
+  outline: 2px solid var(--chart-course);
+}
+
+.lab-branches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.lab button {
+  background: var(--card);
+  border: 1px solid var(--chart-muted);
+  border-radius: 3px;
+  color: var(--chart-ink);
+  cursor: pointer;
+  font: inherit;
+  min-height: 40px;
+  padding: 6px 12px;
+}
+
+.lab button[aria-pressed="true"] {
+  background: var(--chart-ink);
+  color: #ffffff;
+}
+
+.lab button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.lab button.lab-primary {
+  background: var(--chart-course);
+  border-color: var(--chart-course);
+  color: #ffffff;
+  font-weight: 650;
+}
+
+.lab-go {
+  font-size: 1.05rem;
+  margin: 16px 0;
+  width: 100%;
+}
+
+.lab :focus-visible {
+  outline: 3px solid #1d5fd1;
+  outline-offset: 2px;
+}
+
+.lab-pin,
+.lab-reveal,
+.lab-decide,
+.lab-undo,
+.lab-end {
+  background: var(--card);
+  border-left: 5px solid var(--chart-course);
+  margin: 16px 0;
+  padding: 16px;
+}
+
+.lab-pin input[type="range"],
+.lab-card input[type="range"] {
+  display: block;
+  margin: 6px 0 12px;
+  width: 100%;
+}
+
+.lab-foresight {
+  font-family: var(--serif);
+  font-size: 1.1rem;
+  font-style: italic;
+  margin: 12px 0;
+}
+
+.lab-warn,
+.lab-error {
+  color: var(--buoy-red);
+  font-weight: 600;
+}
+
+.lab-bill {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.lab-bill p {
+  flex-basis: 100%;
+}
+
+.lab-world {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  margin-top: 16px;
+}
+
+.lab-card {
+  border-top: 1px solid var(--hairline);
+  padding: 12px 0;
+}
+
+.lab-card select {
+  font: inherit;
+  margin-left: 8px;
+  min-height: 34px;
+}
+
+.lab-card label {
+  display: block;
+}
+
+.lab-card .lab-check {
+  margin: 8px 0;
+}
+
+.lab-chips {
+  border: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.lab-log p {
+  border-top: 1px solid var(--hairline);
+  font-family: var(--serif);
+  padding-top: 8px;
+}
+
+.lab-log span {
+  color: var(--chart-muted);
+  font-family: var(--sans);
+  font-size: 0.85rem;
+}
+
+.lab-log p[data-tone="WARN"] {
+  color: var(--buoy-red);
+}
+
+.lab-log p[data-tone="GOOD"] {
+  color: var(--buoy-green);
+}
+
+.lab-refusal {
+  background: #fff1ef;
+  padding: 8px;
+}
+
+.lab-note,
+.lab-receipt {
+  color: var(--chart-muted);
+  font-size: 0.9rem;
+}
+
+.lab-diff {
+  border-top: 1px solid var(--hairline);
+  margin: 12px 0;
+  padding-top: 12px;
+}
+
+.lab-hist {
+  margin: 16px 0;
+}
+
+.lab-bars {
+  align-items: flex-end;
+  display: flex;
+  gap: 2px;
+  height: 90px;
+  margin-top: 8px;
+}
+
+.lab-bars div {
+  background: var(--chart-muted);
+  flex: 1;
+  min-height: 2px;
+}
+
+.lab-bars div[data-goal] {
+  background: var(--buoy-green);
+}
+
+@media (max-width: 640px) {
+  .lab-strip {
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+  }
+
+  .promise-label {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .course-line {
+    animation: none;
+  }
+}

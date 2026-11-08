@@ -36,15 +36,9 @@ export const ActionSchema = z.discriminatedUnion("kind", [
       amountMinor: cents,
     })
     .strict(),
-  z
-    .object({ kind: z.literal("STANDING"), day, bill: z.enum(["phone", "rent", "food"]) })
-    .strict(),
-  z
-    .object({ kind: z.literal("PAY"), day, bill: z.string().regex(/^[a-z0-9_]{1,40}$/) })
-    .strict(),
-  z
-    .object({ kind: z.literal("DEFER"), day, bill: z.string().regex(/^[a-z0-9_]{1,40}$/) })
-    .strict(),
+  z.object({ kind: z.literal("STANDING"), day, bill: z.enum(["phone", "rent", "food"]) }).strict(),
+  z.object({ kind: z.literal("PAY"), day, bill: z.string().regex(/^[a-z0-9_]{1,40}$/) }).strict(),
+  z.object({ kind: z.literal("DEFER"), day, bill: z.string().regex(/^[a-z0-9_]{1,40}$/) }).strict(),
   z
     .object({
       kind: z.literal("PREDICT"),

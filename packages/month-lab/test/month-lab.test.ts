@@ -48,7 +48,12 @@ describe("the month runs on the real engine", () => {
   });
 
   it("books a loan as a liability, and repayment clears it", () => {
-    const borrow: Action = { kind: "BORROW", day: 1, lender: "FRIEND", amountMinor: FRIEND.maxMinor };
+    const borrow: Action = {
+      kind: "BORROW",
+      day: 1,
+      lender: "FRIEND",
+      amountMinor: FRIEND.maxMinor,
+    };
     const mid = runMonth({ seed: "s", actions: [borrow, ...standing], untilDay: 5 });
     expect(mid.state.ledger.balance(person, "LIABILITY:FriendLoan", "EUR").amountMinor).toBe(
       FRIEND.maxMinor,
@@ -85,12 +90,7 @@ describe("changing your mind", () => {
 
   it("keeps the same luck across different plans, so differences come from decisions", () => {
     const a = runMonth({ seed: "luck", actions: [refurb, logo, ...standing], untilDay: LAST_DAY });
-    const other: Action[] = [
-      refurb,
-      logo,
-      { kind: "SHIFT", day: 1, workDay: 10 },
-      ...standing,
-    ];
+    const other: Action[] = [refurb, logo, { kind: "SHIFT", day: 1, workDay: 10 }, ...standing];
     const b = runMonth({ seed: "luck", actions: other, untilDay: LAST_DAY });
     expect(b.plan.gigs[0]?.payDay).toBe(a.plan.gigs[0]?.payDay);
     expect(b.plan.surpriseDay).toBe(a.plan.surpriseDay);
@@ -109,7 +109,7 @@ describe("what the player can see", () => {
     expect(expected?.latestDay).toBe(16);
     expect(JSON.stringify(view)).not.toContain("payDay");
     expect(view.forecast.at(-1)?.knownCashMinor).toBeLessThan(
-      view.cashMinor + 90_000 + expected!.amountMinor,
+      view.cashMinor + 90_000 + (expected?.amountMinor ?? 0),
     );
   });
 
@@ -277,7 +277,9 @@ describe("the scenario has real choices (balance regression, real engine)", () =
 
 describe("the request boundary", () => {
   it("rejects unknown fields and oversized plans", () => {
-    expect(RunRequestSchema.safeParse({ runId: "abcd", actions: [], extra: 1 }).success).toBe(false);
+    expect(RunRequestSchema.safeParse({ runId: "abcd", actions: [], extra: 1 }).success).toBe(
+      false,
+    );
     const huge = Array.from({ length: 81 }, () => ({ kind: "SHIFT", day: 1, workDay: 3 }));
     expect(RunRequestSchema.safeParse({ runId: "abcd", actions: huge }).success).toBe(false);
   });

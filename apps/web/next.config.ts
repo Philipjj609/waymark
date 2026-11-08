@@ -12,6 +12,7 @@ const config: NextConfig = {
     "@fle/contracts",
     "@fle/domain",
     "@fle/learning",
+    "@fle/month-lab",
     "@fle/persistence",
     "@fle/server",
     "@fle/simulation",

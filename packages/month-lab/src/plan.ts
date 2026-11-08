@@ -7,8 +7,8 @@ import {
   FREE_DAYS,
   FRIEND,
   GEAR,
-  type GigId,
   GIGS,
+  type GigId,
   INVOICE_SALE_PERCENT,
   LANDLORD,
   LAST_DAY,
@@ -33,7 +33,12 @@ export function percentOf(minor: number, percent: number): number {
 
 /** Something the rules made happen. Found by running the engine, then fed back into the plan. */
 export type Effect =
-  | { readonly kind: "VOID"; readonly day: number; readonly actionIndex: number; readonly code: string }
+  | {
+      readonly kind: "VOID";
+      readonly day: number;
+      readonly actionIndex: number;
+      readonly code: string;
+    }
   | { readonly kind: "LATE"; readonly day: number; readonly bill: string };
 
 export const effectKey = (e: Effect): string =>
@@ -131,7 +136,10 @@ export function judgeSplit(
     return { code: "ALREADY_ARRANGED", message: "You already have an arrangement this month." };
   }
   if (context.asks >= LANDLORD.maxAsks) {
-    return { code: "STOPPED_LISTENING", message: "Ms. Duarte will not discuss it again this month." };
+    return {
+      code: "STOPPED_LISTENING",
+      message: "Ms. Duarte will not discuss it again this month.",
+    };
   }
   if (ask.day >= LANDLORD.askBeforeDay) {
     return {
@@ -141,14 +149,18 @@ export function judgeSplit(
   }
   const minFirst = percentOf(rentMinor, LANDLORD.minFirstPercent);
   const firstOk = ask.firstMinor >= minFirst && ask.firstMinor < rentMinor;
-  const secondOk = ask.secondDay > LANDLORD.askBeforeDay && ask.secondDay <= LANDLORD.latestSecondDay;
+  const secondOk =
+    ask.secondDay > LANDLORD.askBeforeDay && ask.secondDay <= LANDLORD.latestSecondDay;
   if (firstOk && secondOk) return { ok: true };
   return {
     code: "TERMS_REFUSED",
     message: `She needs at least 60% on the due date and the rest by day ${LANDLORD.latestSecondDay}.`,
     nearest: {
       firstMinor: Math.min(Math.max(ask.firstMinor, minFirst), rentMinor - 100),
-      secondDay: Math.min(Math.max(ask.secondDay, LANDLORD.askBeforeDay + 1), LANDLORD.latestSecondDay),
+      secondDay: Math.min(
+        Math.max(ask.secondDay, LANDLORD.askBeforeDay + 1),
+        LANDLORD.latestSecondDay,
+      ),
     },
   };
 }
@@ -213,7 +225,7 @@ export function buildPlan(
   const phoneLate = lateFirst.get("phone");
   const phoneCutFrom = phoneLate ?? null;
 
-  actions.forEach((a, i) => {
+  const applyAction = (a: Action, i: number): unknown => {
     if (voided.has(i)) {
       if (a.kind === "GEAR") {
         refuse(i, voided.get(i) ?? "VOID", "You could not afford that on the day.");
@@ -251,8 +263,18 @@ export function buildPlan(
         if (opens === null || a.day < opens || closes === null || a.day > closes) {
           return refuse(i, "OFFER_NOT_OPEN", `${spec.title} is not on offer on day ${a.day}.`);
         }
-        if (phoneCutFrom !== null && a.day >= phoneCutFrom && a.gigId !== "LOGO" && a.gigId !== "FLYERS" && a.gigId !== "COURIER") {
-          return refuse(i, "PHONE_CUT_OFF", "Your phone is cut off, so this offer never reached you.");
+        if (
+          phoneCutFrom !== null &&
+          a.day >= phoneCutFrom &&
+          a.gigId !== "LOGO" &&
+          a.gigId !== "FLYERS" &&
+          a.gigId !== "COURIER"
+        ) {
+          return refuse(
+            i,
+            "PHONE_CUT_OFF",
+            "Your phone is cut off, so this offer never reached you.",
+          );
         }
         if (gigs.some((g) => g.gigId === a.gigId)) {
           return refuse(i, "ALREADY_TAKEN", "You already took that job.");
@@ -412,7 +434,8 @@ export function buildPlan(
           });
           return;
         }
-        if (borrowedQuick) return refuse(i, "ALREADY_BORROWED", "You already have a QuickCash loan.");
+        if (borrowedQuick)
+          return refuse(i, "ALREADY_BORROWED", "You already have a QuickCash loan.");
         const due = Math.min(a.day + QUICKCASH.termDays, LAST_DAY);
         if (a.amountMinor > QUICKCASH.maxMinor) {
           return refuse(i, "LOAN_REFUSED", "QuickCash lends at most €300.", {
@@ -457,7 +480,8 @@ export function buildPlan(
       default:
         return;
     }
-  });
+  };
+  for (const [i, a] of actions.entries()) applyAction(a, i);
 
   // Client money, unless the invoice was sold.
   for (const g of gigs) {
@@ -525,11 +549,7 @@ function canWork(workDay: number, today: number, used: ReadonlySet<number>): boo
   return workDay > today && FREE_DAYS.includes(workDay) && !used.has(workDay);
 }
 
-function closingDay(
-  gig: GigId,
-  rushOpens: number,
-  menuOpens: number | null,
-): number | null {
+function closingDay(gig: GigId, rushOpens: number, menuOpens: number | null): number | null {
   if (gig === "RUSH") return rushOpens + RUSH_WINDOW_DAYS - 1;
   if (gig === "MENU") return menuOpens === null ? null : menuOpens + REFERRAL_WINDOW_DAYS - 1;
   return OPEN_UNTIL[gig] ?? null;
@@ -543,7 +563,11 @@ export function offersOn(day: number, plan: Plan): OfferView[] {
     const opens = gig.id === "RUSH" ? plan.rushOpens : gig.id === "MENU" ? plan.menuOpens : 1;
     const closes = closingDay(gig.id, plan.rushOpens, plan.menuOpens);
     if (opens === null || closes === null || day < opens || day > closes) continue;
-    if (plan.phoneCutFrom !== null && day >= plan.phoneCutFrom && (gig.id === "MENU" || gig.id === "RUSH")) {
+    if (
+      plan.phoneCutFrom !== null &&
+      day >= plan.phoneCutFrom &&
+      (gig.id === "MENU" || gig.id === "RUSH")
+    ) {
       continue;
     }
     out.push({

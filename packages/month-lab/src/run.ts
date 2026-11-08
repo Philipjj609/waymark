@@ -101,9 +101,7 @@ function withIncomeAccounts(state: WorldState, plan: Plan): WorldState {
   return { ...state, incomes };
 }
 
-type Attempt =
-  | { readonly restart: Effect }
-  | { readonly done: EngineRun };
+type Attempt = { readonly restart: Effect } | { readonly done: EngineRun };
 
 /**
  * Run the month once against a fixed set of effects. Stops at the first effect it has not seen, so
@@ -159,10 +157,7 @@ function attempt(
       if (options.mode !== "STRESS") {
         if (a.kind === "PAY" && billByKey.has(a.bill)) pay(a.bill, i);
         if (a.kind === "DEFER" && billByKey.has(a.bill)) {
-          send(
-            { kind: "DEFER_OBLIGATION", payload: { obligationId: obligationId(a.bill) } },
-            i,
-          );
+          send({ kind: "DEFER_OBLIGATION", payload: { obligationId: obligationId(a.bill) } }, i);
         }
       }
     }
@@ -201,10 +196,7 @@ function attempt(
     if (options.mode === "STRESS") {
       // A plan does not get to be clairvoyant: pay what cash allows, carry the rest forward.
       for (const decision of [...state.blocking]) {
-        send(
-          { kind: "DEFER_OBLIGATION", payload: { obligationId: decision.obligationId } },
-          null,
-        );
+        send({ kind: "DEFER_OBLIGATION", payload: { obligationId: decision.obligationId } }, null);
       }
       for (const o of Object.values(state.obligations)) {
         if (o.state === "OVERDUE") {
