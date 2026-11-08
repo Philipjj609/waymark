@@ -1,7 +1,7 @@
 # Sub-agent protocol
 
-Status: v1, 2026-11-06 (ADR-0012). Capabilities below were **verified in the vendors' documentation on 6 Nov 2026**.
-Don't rely on features not listed here without checking them first.
+Status: v1.1, 2026-11-08 (adds read-only assignments); v1, 2026-11-06 (ADR-0012). Capabilities below were **verified
+in the vendors' documentation on 6 Nov 2026**. Don't rely on features not listed here without checking them first.
 
 ## Principle
 
@@ -30,8 +30,51 @@ ownership of the issue, integration, quality and the final handoff. Sub-agents a
    conversation. Prefer read-only sub-agents for research and review.
 6. **Producer ≠ verifier:** a sub-agent that writes code doesn't approve it. The parent (or a separate reviewer sub-agent) checks it.
 7. **Preserve intermediate results:** important findings go into the issue (comment) or a file in the branch, so the
-   work survives a crash or a context reset. Don't keep them only in the sub-agent's transcript.
+   work survives a crash or a context reset. Don't keep them only in the sub-agent's transcript. Read-only assignments
+   use their authorized output location instead of the branch (see below).
 8. **The parent verifies before reporting:** a sub-agent's summary is a claim, not proof. Re-run the tests or open the file.
+
+## Read-only assignments
+
+These rules apply when an assignment is **explicitly read-only**: independent reviewers, research councils and any
+agent whose brief says read-only. They don't restrict implementation agents with an authorized write scope, which keep
+using normal Git operations (`git fetch`, branches, commits, worktrees) on their own branch.
+
+The brief says that the assignment is read-only, which commit or refs to inspect, and where output goes. The test is
+whether an operation changes repository state, not whether the working files look the same afterwards.
+
+| Inspecting (allowed)                                                                                                   | Modifying (prohibited)                                                                                                                                                             |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| reading files in the checkout                                                                                          | creating, editing or deleting tracked files                                                                                                                                        |
+| existing Git history, diffs and logs (`git log`, `git show`, `git diff`, `git grep`, `git --no-optional-locks status`) | the index (`git add`, `git reset`, `git restore --staged`)                                                                                                                         |
+| read-only remote API calls (`gh pr view`, `gh pr diff`, `gh issue view`, `gh api` with GET)                            | branches, tags and any other Git ref, temporary ones included (`git switch`, `git checkout`, `git branch`, `git tag`, `git update-ref`); commits, merges, rebases, stashes, pushes |
+| external documentation the brief approves                                                                              | worktrees (`git worktree add`, `remove`) and repository configuration (`git config`, hooks, remotes)                                                                               |
+- **`git fetch` and temporary refs are potentially mutating.** `git fetch` writes objects and `FETCH_HEAD` and can
+  update refs. A temporary ref changes the ref store even if it is deleted later. Neither is permitted merely because
+  the working files stay unchanged. Each needs explicit authorization in the brief.
+- **Fresh repository data.** Prefer read-only remote API calls. If they aren't enough, ask for an explicitly
+  authorized, isolated disposable checkout: a separate clone, discarded afterwards. A linked worktree, including
+  Claude Code's `isolation: worktree`, shares refs and objects with the main clone, so it isn't isolated for fetches or
+  ref changes, and creating one changes the repository's worktree list.
+- **Session start.** A read-only agent claims nothing, so the rebase in `AGENTS.md` §2 step 4, steps 5–6 and the resume
+  steps in `task-claiming.md` don't apply to it. It runs no `git fetch`, `git switch`, rebase or `pnpm install`, inspects
+  the commit the brief names, and reports the commit it inspected.
+- **Builds and tests.** Installs, builds and test runs write dependencies, caches and generated output, so they are
+  outside a read-only scope unless the brief allows them. If you need their results, ask the parent for the output. The
+  `verifier` agent is a test-running assignment in the parent's worktree, governed by its own definition.
+- **No cleanup or maintenance.** Don't run `git gc`, `git prune` or `git clean`, or delete refs or objects, outside the
+  assignment's permissions, even to undo your own mistake.
+- **Disclose any scope violation.** If an operation went beyond the scope, stop and say so in your result: the exact
+  command, why it ran, and the resulting repository state (working-tree status, `HEAD`, refs created or left behind,
+  objects that may remain). The parent records it on the "Sub-agents used" line (below) and decides what to do.
+- **Output stays where it is authorized.** Generated research artifacts go only in the output location the brief names,
+  and a repository path counts only if the brief names it. If no location is named, return findings as text to the
+  parent. A `[REVIEW]` comment (`communication.md` §4-D) is allowed only when the brief names it as the output, and any
+  other `gh` write (comment, review, edit, label) is prohibited unless the brief names it.
+- **Enforcement.** Use what the tool can enforce: a Claude Code `tools` allowlist, or Codex with `--sandbox read-only`.
+  A read-only sandbox can also block network access and writes to the output location, so pass remote data and file
+  output through the parent when it does. An agent with a shell is otherwise bound only by its brief, so name the
+  prohibited operations there.
 
 ## Tooling that exists today
 
