@@ -18,10 +18,10 @@ import { readSession, startSession } from "../../../lib/session";
 
 export const runtime = "nodejs";
 
-const RUNS: Limit = { name: "lab-runs", max: 240, windowMs: 60_000 };
+const RUNS: Limit = { name: "lab-runs", max: 120, windowMs: 60_000 };
 const RUNS_IP: Limit = { name: "lab-runs-ip", max: 600, windowMs: 60_000 };
 /** A backstop: a made-up cookie gets a fresh session bucket, so per-session is not enough. */
-const RUNS_ALL: Limit = { name: "lab-runs-all", max: 3000, windowMs: 60_000 };
+const RUNS_ALL: Limit = { name: "lab-runs-all", max: 900, windowMs: 60_000 };
 const STRESS: Limit = { name: "lab-stress", max: 12, windowMs: 60_000 };
 const STRESS_ALL: Limit = { name: "lab-stress-all", max: 15, windowMs: 60_000 };
 const STRESS_MONTHS = 120;
@@ -46,6 +46,9 @@ export async function POST(req: Request): Promise<Response> {
     const unsafe = rejectUnsafeWrite(req);
     if (unsafe) return unsafe;
 
+    if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY_CHARS) {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "request too large");
+    }
     const text = await req.text();
     if (text.length > MAX_BODY_CHARS) {
       return errorResponse(413, "PAYLOAD_TOO_LARGE", "request too large");
@@ -71,11 +74,17 @@ export async function POST(req: Request): Promise<Response> {
 
     const stress = StressRequestSchema.safeParse(body);
     if (stress.success) {
-      if (!hit(STRESS_ALL, "all") || !hit(STRESS, owner)) return tooMany();
+      if (!hit(STRESS, owner) || !hit(STRESS_ALL, "all")) return tooMany();
       const { runId, actions, cursor: raw } = stress.data.run;
       if (!readCursor(owner, runId, raw).ended) return ahead();
       return json(
-        { stress: stressTest(labSeed(owner, runId), actions, STRESS_MONTHS) },
+        {
+          stress: stressTest(
+            labSeed(owner, runId, readCursor(owner, runId, raw).nonce),
+            actions,
+            STRESS_MONTHS,
+          ),
+        },
         200,
         setCookie,
       );
@@ -83,7 +92,7 @@ export async function POST(req: Request): Promise<Response> {
 
     const parsed = RunRequestSchema.safeParse(body);
     if (!parsed.success) return errorResponse(400, "INVALID_REQUEST", "invalid month request");
-    if (!hit(RUNS_ALL, "all") || !hit(RUNS, owner)) return tooMany();
+    if (!hit(RUNS, owner) || !hit(RUNS_ALL, "all")) return tooMany();
 
     const { runId, actions, atDay, fromDay, watchBelowMinor, pinMinor, transferMinor } =
       parsed.data;
@@ -97,7 +106,7 @@ export async function POST(req: Request): Promise<Response> {
     if (!respectsHistory(cursor, actions) || !claimCursor(owner, runId, cursor)) return rewrites();
 
     const view = monthView({
-      seed: labSeed(owner, runId),
+      seed: labSeed(owner, runId, cursor.nonce),
       actions,
       hindsight: isHindsight(cursor, actions),
       // Viewing is bounded by the furthest day reached; only running forward extends it.

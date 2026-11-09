@@ -1271,7 +1271,7 @@ function Books({ view }: { readonly view: MonthView }) {
 const STATUS_WORDS: Record<string, string> = {
   NO_EVIDENCE: "No evidence yet",
   INCONCLUSIVE: "Not enough to say",
-  SUPPORTED: "You showed this",
+  SUPPORTED: "Some sign you get this",
   NEEDS_SUPPORT: "Might be worth another look",
 };
 
@@ -1318,6 +1318,7 @@ function Transfer(props: {
         {concepts.map((c) => (
           <li key={c.conceptId}>
             {c.label}: <strong>{STATUS_WORDS[c.status] ?? c.status}</strong>
+            {c.observations === 1 ? " (from one moment only)" : ""}
           </li>
         ))}
       </ul>

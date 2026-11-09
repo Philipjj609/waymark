@@ -57,7 +57,7 @@ export const RunRequestSchema = z
       .array(ActionSchema)
       .max(60)
       .refine((list) => list.filter((a) => a.kind === "GEAR").length <= 4, "too many laptops")
-      .refine((list) => list.filter((a) => a.kind === "PREDICT").length <= 6, "too many estimates"),
+      .refine((list) => list.filter((a) => a.kind === "PREDICT").length <= 3, "too many estimates"),
     /** Show this day. Omit to run forward from `fromDay` to the next stop. */
     atDay: day.optional(),
     fromDay: day.optional(),

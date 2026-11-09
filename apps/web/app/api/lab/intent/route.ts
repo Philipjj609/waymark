@@ -13,7 +13,18 @@ export const runtime = "nodejs";
 const INTENT: Limit = { name: "lab-intent", max: 20, windowMs: 60_000 };
 const INTENT_ALL: Limit = { name: "lab-intent-all", max: 60, windowMs: 60_000 };
 /** A hard ceiling on model spend per process and day. */
-const INTENT_DAY: Limit = { name: "lab-intent-day", max: 300, windowMs: 24 * 60 * 60_000 };
+const INTENT_DAILY_CAP = 300;
+const spend = { day: "", calls: 0 };
+/** Its own counter: the shared limiter sweeps old windows hourly, which would reset a daily cap. */
+function withinDailyCap(): boolean {
+  const day = new Date().toISOString().slice(0, 10);
+  if (spend.day !== day) {
+    spend.day = day;
+    spend.calls = 0;
+  }
+  spend.calls += 1;
+  return spend.calls <= INTENT_DAILY_CAP;
+}
 
 const RequestSchema = z
   .object({
@@ -60,7 +71,7 @@ export async function POST(req: Request): Promise<Response> {
 
     if (!hasValidCursor(session.hash, parsed.data.runId, parsed.data.cursor))
       return worldNotFound();
-    if (!hit(INTENT_DAY, "all") || !hit(INTENT_ALL, "all") || !hit(INTENT, session.hash)) {
+    if (!hit(INTENT, session.hash) || !hit(INTENT_ALL, "all") || !withinDailyCap()) {
       return errorResponse(429, "RATE_LIMITED", "too many requests", { "retry-after": "60" });
     }
 

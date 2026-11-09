@@ -34,9 +34,12 @@ function secret(): string {
 const mac = (text: string) => createHmac("sha256", secret()).update(text).digest("hex");
 
 /** Luck for one run of one session. The seed never leaves the server. */
-export const labSeed = (sessionHash: string, runId: string) => mac(`seed:${sessionHash}:${runId}`);
+export const labSeed = (sessionHash: string, runId: string, nonce = "") =>
+  mac(`seed:${sessionHash}:${runId}:${nonce}`);
 
 export interface LabCursor {
+  /** Server-chosen when a month starts. Starting again without a cursor means new luck. */
+  readonly nonce: string;
   readonly maxDay: number;
   /** Digest of every decision dated before maxDay. */
   readonly committed: string;
@@ -55,13 +58,15 @@ const digest = (actions: readonly unknown[]) =>
 const before = (actions: readonly DatedAction[], day: number) => actions.filter((a) => a.day < day);
 
 export const startCursor = (): LabCursor => ({
+  nonce: randomBytes(6).toString("hex"),
   maxDay: 1,
   committed: digest([]),
   ended: false,
   live: null,
 });
 
-const body = (c: LabCursor) => `${c.maxDay}.${c.ended ? 1 : 0}.${c.committed}.${c.live ?? "-"}`;
+const body = (c: LabCursor) =>
+  `${c.nonce}.${c.maxDay}.${c.ended ? 1 : 0}.${c.committed}.${c.live ?? "-"}`;
 
 export function signCursor(sessionHash: string, runId: string, cursor: LabCursor): string {
   return `${body(cursor)}.${mac(`cursor:${sessionHash}:${runId}:${body(cursor)}`)}`;
@@ -74,9 +79,10 @@ export function readCursor(
   text: string | undefined,
 ): LabCursor {
   if (!text) return startCursor();
-  const [day, ended, committed, live, signature] = text.split(".");
-  if (!day || !ended || !committed || !live || !signature) return startCursor();
+  const [nonce, day, ended, committed, live, signature] = text.split(".");
+  if (!nonce || !day || !ended || !committed || !live || !signature) return startCursor();
   const cursor: LabCursor = {
+    nonce,
     maxDay: Number(day),
     ended: ended === "1",
     committed,
@@ -94,7 +100,7 @@ export function readCursor(
 
 /** True only for a cursor this server signed for this session and run. */
 export function hasValidCursor(sessionHash: string, runId: string, text: string): boolean {
-  const signature = text.split(".")[4];
+  const signature = text.split(".")[5];
   if (!signature) return false;
   const body = text.slice(0, text.length - signature.length - 1);
   const expected = Buffer.from(mac(`cursor:${sessionHash}:${runId}:${body}`));
@@ -120,6 +126,7 @@ export function advanceCursor(
   const maxDay = Math.max(cursor.maxDay, view.head);
   const ended = view.status === "MONTH_END";
   return {
+    nonce: cursor.nonce,
     maxDay,
     committed: digest(before(actions, maxDay)),
     ended,

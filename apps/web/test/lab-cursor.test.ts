@@ -25,12 +25,12 @@ describe("lab cursor", () => {
   it("treats a missing, tampered or foreign cursor as the start", () => {
     const signed = signCursor("s1", "run1", mid);
     expect(readCursor("s1", "run1", undefined).maxDay).toBe(1);
-    expect(readCursor("s1", "run1", signed.replace(/^10/, "30")).maxDay).toBe(1);
+    expect(readCursor("s1", "run1", signed.replace(".10.", ".30.")).maxDay).toBe(1);
     expect(readCursor("s1", "run2", signed).maxDay).toBe(1);
     expect(readCursor("s2", "run1", signed).maxDay).toBe(1);
     expect(hasValidCursor("s1", "run1", signed)).toBe(true);
     expect(hasValidCursor("s2", "run1", signed)).toBe(false);
-    expect(hasValidCursor("s1", "run1", "1.0.x.-.deadbeef")).toBe(false);
+    expect(hasValidCursor("s1", "run1", "n.1.0.x.-.deadbeef")).toBe(false);
   });
 
   it("gives each session and run its own luck", () => {

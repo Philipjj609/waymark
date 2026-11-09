@@ -88,7 +88,7 @@ test("drag work, guess, ask, run, ask what if, and start a fresh month", async (
   await expect(page.getByText(/couldn't turn that into something/)).toBeVisible();
 
   await runToEnd(page);
-  await expect(page.getByText("Ms. Duarte:")).toBeVisible();
+  await expect(page.locator(".lab-voices").getByText("Ms. Duarte:")).toBeVisible();
   await page.screenshot({ path: "test-results/lab-4-end.png", fullPage: true });
 
   await settled(page, () => page.getByRole("button", { name: /^Day 2\. Ask what if/ }).click());
@@ -202,7 +202,7 @@ test("cannot look ahead, leak a draw or forge a price", async ({ request, baseUR
     data: {
       text: "ask Marta for 100",
       runId: "e2e-run-2",
-      cursor: "1.0.x.-.deadbeef",
+      cursor: "n.1.0.x.-.deadbeef",
       day: 1,
       invoices: [],
     },

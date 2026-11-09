@@ -117,17 +117,10 @@ function guessObservation(guess: GuessFact, index: number): Observation | null {
 }
 
 /**
- * Paying a bill with plenty of cash shows nothing, and the shared mapping table would credit it as
- * understanding. Until that table changes (a fix for its owner), such payments are left out here.
+ * Paying a bill says nothing reliable about understanding, and judging it by how much cash the
+ * player held would let luck decide the evidence (invariant 9). The shared mapping table credits
+ * such payments, so they are left out here until that table's owner changes it.
  */
-function paymentWasRoutine(run: EngineRun, day: number): boolean {
-  const cash = run.cashByDay.get(day) ?? 0;
-  const soon = run.plan.bills
-    .filter((b) => b.dueDay > day && b.dueDay <= day + 7 && b.revealDay <= day)
-    .reduce((sum, b) => sum + b.amountMinor, 0);
-  return cash >= soon;
-}
-
 export function learningReading(
   run: EngineRun,
   guesses: readonly GuessFact[],
@@ -142,12 +135,7 @@ export function learningReading(
   for (const event of run.state.events) {
     const interpreted = interpretFact({ kind: "EVENT", event }, context);
     if (!interpreted) continue;
-    if (
-      interpreted.observation.kind === "ON_TIME_PAYMENT" &&
-      paymentWasRoutine(run, event.worldDay)
-    ) {
-      continue;
-    }
+    if (interpreted.observation.kind === "ON_TIME_PAYMENT") continue;
     state = recordObservation(state, interpreted.observation);
   }
   guesses.forEach((guess, i) => {

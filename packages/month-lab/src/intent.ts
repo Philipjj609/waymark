@@ -45,14 +45,18 @@ const notModelled = (message: string): IntentResult => ({
 
 const euros = (minor: number) => `€${(minor - (minor % 100)) / 100}`;
 
-function summarize(action: Action): string | null {
+function summarize(action: Action, context: IntentContext): string | null {
   switch (action.kind) {
     case "ASK_SPLIT":
       return `Ask Ms. Duarte: ${euros(action.firstMinor)} on rent day, the rest on day ${action.secondDay}.`;
     case "BORROW":
-      return `Borrow ${euros(action.amountMinor)} from ${action.lender === "FRIEND" ? FRIEND.label : QUICKCASH.label}.`;
-    case "SELL_INVOICE":
-      return "Sell this invoice for cash tomorrow, at the buyer's rate.";
+      return action.lender === "FRIEND"
+        ? `Borrow ${euros(action.amountMinor)} from ${FRIEND.label}, free, repaid by day ${FRIEND.repayDay}.`
+        : `Borrow ${euros(action.amountMinor)} from ${QUICKCASH.label}, repaying it plus ${QUICKCASH.feePercent}% within ${QUICKCASH.termDays} days.`;
+    case "SELL_INVOICE": {
+      const label = context.invoices.find((i) => i.gigId === action.gigId)?.label;
+      return `Sell the invoice for ${label ?? "this job"} for cash tomorrow, at less than it is worth.`;
+    }
     default:
       return null;
   }
@@ -141,7 +145,7 @@ export async function readIntent(
   const card = (action: Action, source: "AI" | "RULES"): IntentResult => ({
     kind: "CARD",
     action,
-    summary: summarize(action) ?? "",
+    summary: summarize(action, context) ?? "",
     source,
   });
   if (model) {
