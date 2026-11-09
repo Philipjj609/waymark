@@ -298,6 +298,8 @@
 .lab-strip button[data-work] {
   background: var(--chart-ink);
   color: #ffffff;
+  font-weight: 700;
+  text-decoration: underline;
 }
 
 .lab-strip button[data-today] {
@@ -657,8 +659,12 @@
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
-  .rock-label {
-    display: none;
+  .lab-chart-scroll {
+    overflow-x: auto;
+  }
+
+  .lab-chart-scroll .chart {
+    min-width: 680px;
   }
 
   .promise-label {

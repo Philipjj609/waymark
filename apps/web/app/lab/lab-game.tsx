@@ -470,16 +470,18 @@ export function LabGame() {
       )}
 
       <div className="lab-chart-wrap">
-        <MonthChart
-          view={view}
-          branches={chartBranches}
-          activeId={active.id}
-          fogged={fogged}
-          pinMinor={fogged || reading ? pin : null}
-          dropDays={dropDays}
-          onPin={setPin}
-          nothingDecided={nothingDecided}
-        />
+        <div className="lab-chart-scroll">
+          <MonthChart
+            view={view}
+            branches={chartBranches}
+            activeId={active.id}
+            fogged={fogged}
+            pinMinor={fogged || reading ? pin : null}
+            dropDays={dropDays}
+            onPin={setPin}
+            nothingDecided={nothingDecided}
+          />
+        </div>
         <DayStrip
           view={view}
           active={active}
@@ -732,7 +734,7 @@ function DayStrip(props: {
               aria-label={`Day ${day}${workDays.has(day) ? ", you work" : FREE_DAYS.includes(day) ? ", free day" : ""}${droppable ? ". Put the job here" : past ? ". Ask what if from here" : ""}`}
               onClick={() => (droppable ? onPlace(day) : onRewind(day))}
             >
-              {workDays.has(day) ? `■${day}` : day}
+              {day}
             </button>
           </li>
         );
