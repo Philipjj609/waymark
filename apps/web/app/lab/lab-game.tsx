@@ -86,6 +86,7 @@ export function LabGame() {
   const [notice, setNotice] = useState<string | null>(null);
   const [tally, setTally] = useState<readonly boolean[]>([]);
 
+  const promptRef = useRef<HTMLHeadingElement>(null);
   const active = branches.find((b) => b.id === activeId) ?? null;
   const view = active?.view ?? null;
 
@@ -158,7 +159,16 @@ export function LabGame() {
         action.kind !== "PAY" && action.kind !== "DEFER" && action.kind !== "PREDICT";
       setNotice(null);
       void run(active.id, [...active.actions, action], { atDay: view.head }).then((next) => {
-        if (next && planChange && !active.whatIf && guesses < MAX_GUESSES && next.head < LAST_DAY) {
+        const refused = next?.refusals.some((r) => r.actionIndex === active.actions.length);
+        if (
+          next &&
+          planChange &&
+          !refused &&
+          !active.whatIf &&
+          guesses < MAX_GUESSES &&
+          next.head < LAST_DAY
+        ) {
+          setHand(null);
           setFogged(true);
           setReading(null);
           setPin(null);
@@ -263,6 +273,18 @@ export function LabGame() {
     startMonth();
   }, [branches, startMonth]);
 
+  // When the game asks for something, take keyboard and screen-reader users to the question.
+  const prompting = fogged
+    ? "guess"
+    : reading
+      ? "reading"
+      : view?.status === "AWAITING_DECISION"
+        ? `bill-${view.head}`
+        : null;
+  useEffect(() => {
+    if (prompting) promptRef.current?.focus();
+  }, [prompting]);
+
   const tokens: Token[] = useMemo(() => {
     if (!view || !active) return [];
     const out: Token[] = view.offers.map((o) => ({
@@ -337,7 +359,8 @@ export function LabGame() {
         .elementFromPoint(u.clientX, u.clientY)
         ?.closest("[data-day]")
         ?.getAttribute("data-day");
-      if (target) place(token, Number(target));
+      const open = view?.freeDaysLeft.filter((d) => d <= token.deliverBy) ?? [];
+      if (target && open.includes(Number(target))) place(token, Number(target));
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -362,12 +385,12 @@ export function LabGame() {
   }
 
   const blocking = view.status === "AWAITING_DECISION";
-  const dueNow = view.bills.filter(
-    (b) => b.state === "DUE" || (b.state === "OVERDUE" && b.dueDay <= view.head),
-  );
+  const dueNow = view.bills.filter((b) => b.state === "DUE");
   const finished = view.status === "MONTH_END";
   const otherFinished = branches.filter((b) => b.id !== active.id && b.view?.outcome);
-  const refusal = view.refusals.at(-1);
+  const refusal = view.refusals.find((r) => r.actionIndex === active.actions.length - 1);
+  const overdue = view.bills.filter((b) => b.state === "OVERDUE");
+  const liveEnded = branches.some((b) => !b.whatIf && b.view?.outcome);
   const madeIt = tally.filter(Boolean).length;
   const nothingDecided = active.actions.length === 0;
   const invoices = view.expected
@@ -491,6 +514,7 @@ export function LabGame() {
             if (hand) place(hand, d);
           }}
           onRewind={rewindTo}
+          canRewind={liveEnded === true}
           disabled={busy}
         />
         <p className="lab-legend">
@@ -534,7 +558,9 @@ export function LabGame() {
 
       {fogged && (
         <section className="lab-pin" aria-label="Your guess">
-          <h2>You changed your plan. Where do you think your cash will be lowest?</h2>
+          <h2 ref={promptRef} tabIndex={-1}>
+            You changed your plan. Where do you think your cash will be lowest?
+          </h2>
           <p>
             Click the chart at your guess, or use the slider. You can keep your plan whatever you
             guess.
@@ -564,7 +590,7 @@ export function LabGame() {
 
       {reading && (
         <section className="lab-reveal" aria-label="Your guess compared">
-          <h2>
+          <h2 ref={promptRef} tabIndex={-1}>
             You guessed {euros(reading.guessMinor)}. With only the money you can be sure of, your
             cash gets to {euros(reading.knowableLowMinor)} on day {reading.lowDay}.
           </h2>
@@ -602,9 +628,32 @@ export function LabGame() {
         </section>
       )}
 
+      {overdue.length > 0 && !finished && (
+        <section className="lab-decide" aria-label="Unpaid bills">
+          <h2>Still unpaid</h2>
+          {overdue.map((b) => (
+            <div key={b.key} className="lab-bill">
+              <p>
+                <strong>{b.label}</strong>: {euros(b.amountMinor)}, due day {b.dueDay}
+              </p>
+              <button
+                type="button"
+                className="lab-primary"
+                disabled={busy || view.cashMinor < b.amountMinor}
+                onClick={() => act({ kind: "PAY", day: view.head, bill: b.key })}
+              >
+                Pay {euros(b.amountMinor)}
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+
       {blocking && (
         <section className="lab-decide" aria-label="Decision">
-          <h2>This needs a decision</h2>
+          <h2 ref={promptRef} tabIndex={-1}>
+            This needs a decision
+          </h2>
           {dueNow.map((b) => (
             <div key={b.key} className="lab-bill">
               <p>
@@ -707,9 +756,11 @@ function DayStrip(props: {
   readonly dropDays: readonly number[];
   readonly onPlace: (day: number) => void;
   readonly onRewind: (day: number) => void;
+  /** Luck is shared across what-ifs, so they open only once the live month is over. */
+  readonly canRewind: boolean;
   readonly disabled: boolean;
 }) {
-  const { view, active, hand, dropDays, onPlace, onRewind, disabled } = props;
+  const { view, active, hand, dropDays, onPlace, onRewind, canRewind, disabled } = props;
   const workDays = new Set(
     active.actions.flatMap((a) =>
       a.kind === "SHIFT" ? [a.workDay] : a.kind === "TAKE_GIG" ? a.workDays : [],
@@ -719,7 +770,9 @@ function DayStrip(props: {
     <ol className="lab-strip" aria-label="Days of the month">
       {Array.from({ length: LAST_DAY }, (_, i) => i + 1).map((day) => {
         const past =
-          !hand && (day < view.head || (day === view.head && view.status === "MONTH_END"));
+          canRewind &&
+          !hand &&
+          (day < view.head || (day === view.head && view.status === "MONTH_END"));
         const droppable = dropDays.includes(day);
         return (
           <li key={day}>
@@ -921,7 +974,7 @@ function People(props: {
             Rent is {euros(rent.amountMinor)} on day {rent.dueDay}. She may split it if you ask
             before then: at least {LANDLORD.minFirstPercent}% on the day, the rest by day{" "}
             {LANDLORD.latestSecondDay}, {euros(LANDLORD.feeMinor)} for the trouble. After that she
-            expects it kept to the day.
+            allows one day's grace, not three.
           </p>
           <label>
             On day {rent.dueDay}: <strong>{euros(first)}</strong>
@@ -1108,7 +1161,7 @@ function Reckoning(props: {
         b.view ? <Difference key={b.id} name={b.name} mine={view} theirs={b.view} /> : null,
       )}
       <div className="lab-chips">
-        <button type="button" className="lab-primary" onClick={onLiveAgain}>
+        <button type="button" className="lab-primary" disabled={busy} onClick={onLiveAgain}>
           Live a new month, with new luck
         </button>
         <button type="button" disabled={busy} onClick={onStress}>

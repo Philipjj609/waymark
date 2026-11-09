@@ -15,14 +15,12 @@ const ended = /You finished day 30|In hindsight/;
 async function runToEnd(page: Page) {
   for (let i = 0; i < 40; i++) {
     if (await page.getByRole("heading", { name: ended }).isVisible()) return;
-    const pay = page.getByRole("button", { name: /^Pay / }).first();
+    const pay = page.locator('button:has-text("Pay €"):enabled').first();
+    const defer = page.getByRole("button", { name: "Leave it unpaid for now" }).first();
     if (await pay.isVisible()) {
-      const enabled = await pay.isEnabled();
-      await settled(page, () =>
-        enabled
-          ? pay.click()
-          : page.getByRole("button", { name: "Leave it unpaid for now" }).first().click(),
-      );
+      await settled(page, () => pay.click());
+    } else if (await defer.isVisible()) {
+      await settled(page, () => defer.click());
     } else {
       await settled(page, () =>
         page.getByRole("button", { name: "Run to the next decision" }).click(),
@@ -63,7 +61,7 @@ test("drag work, guess, ask, run, ask what if, and start a fresh month", async (
   await settled(page, () => page.mouse.up());
   await expect(page.getByRole("button", { name: /^Day 4, you work/ })).toBeVisible();
   await page.screenshot({ path: "test-results/lab-3-placed.png", fullPage: true });
-  await page.getByRole("slider", { name: /Lowest cash this month/ }).fill("15000");
+  await page.getByRole("slider", { name: /Lowest cash this month/ }).fill("17000");
   await settled(page, () => page.getByRole("button", { name: "See the real line" }).click());
   await expect(page.getByText(/is New shop logo/)).toBeVisible();
   await settled(page, () => page.getByRole("button", { name: "I counted that money" }).click());

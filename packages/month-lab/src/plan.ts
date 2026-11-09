@@ -12,12 +12,12 @@ import {
   INVOICE_SALE_PERCENT,
   LANDLORD,
   LAST_DAY,
+  MIN_LOAN_MINOR,
   OPEN_UNTIL,
   QUICKCASH,
   REFERRAL_IF_DELIVERED_BY,
   REFERRAL_WINDOW_DAYS,
   REFURB_FAILS_ONE_IN,
-  RENT_LATE,
   RUSH_APPEARS,
   RUSH_CHANCE_IN_FOUR,
   RUSH_WINDOW_DAYS,
@@ -93,7 +93,7 @@ export interface Plan {
   readonly usedDays: ReadonlySet<number>;
   readonly shifts: number;
   readonly refusals: readonly Refusal[];
-  readonly standing: ReadonlySet<string>;
+  readonly standing: ReadonlyMap<string, number>;
   readonly goodwill: { readonly landlord: number; readonly friend: number };
   readonly phoneCutFrom: number | null;
   readonly splitAgreed: boolean;
@@ -219,7 +219,7 @@ export function buildPlan(
 
   const gigs: AcceptedGig[] = [];
   const used = new Set<number>();
-  const standing = new Set<string>();
+  const standing = new Map<string, number>();
   let gearChoice: Plan["gearChoice"] = null;
   let gearPurchase: Plan["gearPurchase"] = null;
   let shifts = 0;
@@ -297,8 +297,10 @@ export function buildPlan(
         if (spec.needsGear && !gearChoice) {
           return refuse(i, "NEEDS_GEAR", "This job needs a laptop. Buy one first.");
         }
-        if (spec.needsGear && repairLate !== undefined && a.workDays.some((d) => d >= repairLate)) {
-          return refuse(i, "LAPTOP_DEAD", "The laptop stays broken until the repair is paid.");
+        // Judged on the first day of work: a job already under way when the laptop dies still
+        // stands, so this can never erase the repair bill that caused it.
+        if (spec.needsGear && repairLate !== undefined && Math.min(...a.workDays) >= repairLate) {
+          return refuse(i, "LAPTOP_DEAD", "You left the repair too long. No laptop this month.");
         }
         const days = [...a.workDays].sort((x, y) => x - y);
         const last = days.at(-1) ?? 0;
@@ -353,6 +355,7 @@ export function buildPlan(
         const index = gigs.findIndex((g) => g.gigId === a.gigId);
         const gig = gigs[index];
         if (!gig) return refuse(i, "NO_SUCH_INVOICE", "You have no invoice for that job.");
+        if (a.day + 1 > LAST_DAY) return refuse(i, "TOO_LATE", "The buyer could not pay in time.");
         if (a.day < gig.deliveredDay) return refuse(i, "NOT_DELIVERED", "Deliver the work first.");
         if (a.day >= gig.payDay) return refuse(i, "ALREADY_PAID", "The client has already paid.");
         if (gig.soldOn !== null) return refuse(i, "ALREADY_SOLD", "You already sold that invoice.");
@@ -422,6 +425,11 @@ export function buildPlan(
       }
       case "BORROW": {
         const day = a.day + 1;
+        if (a.amountMinor < MIN_LOAN_MINOR) {
+          return refuse(i, "LOAN_REFUSED", "Nobody arranges a loan that small.", {
+            amountMinor: MIN_LOAN_MINOR,
+          });
+        }
         if (a.lender === "FRIEND") {
           if (borrowedFriend) return refuse(i, "ALREADY_BORROWED", "You already asked Marta.");
           const limit =
@@ -501,7 +509,7 @@ export function buildPlan(
         return;
       }
       case "STANDING":
-        standing.add(a.bill);
+        if (!standing.has(a.bill)) standing.set(a.bill, a.day);
         return;
       default:
         return;
@@ -546,7 +554,7 @@ export function buildPlan(
   const everything = options.payEverythingAutomatically;
   const finalBills = bills.map((b) => ({
     ...b,
-    auto: b.auto || everything === true || standing.has(b.key) || isStandingPart(b.key, standing),
+    auto: b.auto || everything === true || standsFor(b, standing),
   }));
 
   return {
@@ -570,8 +578,10 @@ export function buildPlan(
   };
 }
 
-function isStandingPart(key: string, standing: ReadonlySet<string>): boolean {
-  return key.startsWith("rent_part") && standing.has("rent");
+/** A standing order covers bills that fall due after it was set up, never earlier ones. */
+function standsFor(bill: BillSpec, standing: ReadonlyMap<string, number>): boolean {
+  const from = standing.get(bill.key.startsWith("rent_part") ? "rent" : bill.key);
+  return from !== undefined && bill.dueDay >= from;
 }
 
 function canWork(workDay: number, today: number, used: ReadonlySet<number>): boolean {

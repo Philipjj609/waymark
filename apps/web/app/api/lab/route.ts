@@ -13,7 +13,7 @@ const RUNS_IP: Limit = { name: "lab-runs-ip", max: 600, windowMs: 60_000 };
 /** A backstop: dropping the cookie gets a fresh session bucket, so per-session is not enough. */
 const RUNS_ALL: Limit = { name: "lab-runs-all", max: 3000, windowMs: 60_000 };
 const STRESS: Limit = { name: "lab-stress", max: 12, windowMs: 60_000 };
-const STRESS_ALL: Limit = { name: "lab-stress-all", max: 40, windowMs: 60_000 };
+const STRESS_ALL: Limit = { name: "lab-stress-all", max: 15, windowMs: 60_000 };
 const STRESS_MONTHS = 120;
 const MAX_BODY_CHARS = 32_000;
 

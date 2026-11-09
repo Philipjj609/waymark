@@ -111,7 +111,7 @@ function fromRules(text: string, context: IntentContext): Action | null {
   if (/\bsell\b/.test(lower) && /invoice/.test(lower)) {
     const invoice = context.invoices[0];
     return invoice
-      ? ActionSchema.parse({ kind: "SELL_INVOICE", day: context.day, gigId: invoice.gigId })
+      ? ({ kind: "SELL_INVOICE", day: context.day, gigId: invoice.gigId } as Action)
       : null;
   }
   if (amount === undefined) return null;
@@ -165,7 +165,8 @@ export async function readIntent(
       clearTimeout(timer);
     }
   }
-  const byRules = fromRules(text, context);
-  if (byRules) return card(byRules, "RULES");
+  // Rule output is held to the same schema as model output.
+  const byRules = ActionSchema.safeParse(fromRules(text, context));
+  if (byRules.success) return card(byRules.data, "RULES");
   return notModelled("I couldn't turn that into something this world can do yet.");
 }

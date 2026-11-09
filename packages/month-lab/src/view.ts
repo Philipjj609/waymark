@@ -20,7 +20,14 @@ export interface Movement {
 }
 
 export interface Stop {
-  readonly kind: "MONTH_START" | "DECISION" | "NEW_OFFER" | "OFFER_ENDING" | "WATCH" | "MONTH_END";
+  readonly kind:
+    | "MONTH_START"
+    | "DECISION"
+    | "NEW_OFFER"
+    | "OFFER_ENDING"
+    | "LAST_CHANCE"
+    | "WATCH"
+    | "MONTH_END";
   readonly label: string;
 }
 
@@ -247,6 +254,15 @@ function stopsAt(run: EngineRun, day: number): Stop[] {
     if (opens === day && day > 1) stops.push({ kind: "NEW_OFFER", label: `New: ${o.title}` });
     if (o.closesOn === day) stops.push({ kind: "OFFER_ENDING", label: `Last day: ${o.title}` });
   }
+  const overdue = (key: string) => run.state.obligations[`obl_${key}`]?.state === "OVERDUE";
+  for (const b of plan.bills) {
+    if (b.late && day === b.dueDay + b.late.afterDays && overdue(b.key)) {
+      stops.push({ kind: "LAST_CHANCE", label: `Last day to pay ${b.label} before it costs you` });
+    }
+  }
+  if (day === LAST_DAY - 1 && plan.bills.some((b) => overdue(b.key))) {
+    stops.push({ kind: "LAST_CHANCE", label: "Last chance to settle what you owe" });
+  }
   return stops;
 }
 
@@ -364,7 +380,9 @@ export function monthView(request: ViewRequest): MonthView {
       actionIndex: r.actionIndex,
       code: r.code,
       message:
-        r.code === "INSUFFICIENT_FUNDS" ? "You do not have enough cash for that today." : r.message,
+        r.code === "INSUFFICIENT_FUNDS"
+          ? "You do not have enough cash for that today."
+          : "That can't be done right now.",
     }));
   const isEnd = head >= LAST_DAY && run.awaitingBills.length === 0;
   const stops: Stop[] = [...stopsAt(run, head)];

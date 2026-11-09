@@ -10,14 +10,21 @@ export const runtime = "nodejs";
 
 /** Each call may reach a paid model. */
 const INTENT: Limit = { name: "lab-intent", max: 20, windowMs: 60_000 };
-const INTENT_ALL: Limit = { name: "lab-intent-all", max: 120, windowMs: 60_000 };
+const INTENT_ALL: Limit = { name: "lab-intent-all", max: 60, windowMs: 60_000 };
 
 const RequestSchema = z
   .object({
     text: z.string().trim().min(2).max(240),
     day: z.number().int().min(1).max(30),
     invoices: z
-      .array(z.object({ gigId: z.string().max(20), label: z.string().max(80) }).strict())
+      .array(
+        z
+          .object({
+            gigId: z.enum(["LOGO", "FLYERS", "MENU", "RUSH", "COURIER"]),
+            label: z.string().max(80),
+          })
+          .strict(),
+      )
       .max(6),
   })
   .strict();
@@ -37,7 +44,14 @@ export async function POST(req: Request): Promise<Response> {
     if (!hit(INTENT_ALL, "all") || !hit(INTENT, session.hash)) {
       return errorResponse(429, "RATE_LIMITED", "too many requests", { "retry-after": "60" });
     }
-    const body: unknown = await req.json().catch(() => null);
+    const raw = await req.text();
+    if (raw.length > 4_000) return errorResponse(413, "PAYLOAD_TOO_LARGE", "request too large");
+    let body: unknown = null;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return errorResponse(400, "INVALID_REQUEST", "invalid idea");
+    }
     const parsed = RequestSchema.safeParse(body);
     if (!parsed.success) return errorResponse(400, "INVALID_REQUEST", "invalid idea");
 

@@ -31,7 +31,7 @@ export const GIGS: Readonly<Record<GigId, GigSpec>> = {
     id: "LOGO",
     client: "Bea at Northside Bikes",
     title: "New shop logo",
-    payMinor: 26_000,
+    payMinor: 28_000,
     workDays: 2,
     needsGear: true,
     deliverBy: 12,
@@ -51,7 +51,7 @@ export const GIGS: Readonly<Record<GigId, GigSpec>> = {
     id: "MENU",
     client: "Ines at Café Lume",
     title: "Autumn menu design",
-    payMinor: 28_000,
+    payMinor: 30_000,
     workDays: 2,
     needsGear: true,
     deliverBy: 18,
@@ -91,6 +91,9 @@ export const RUSH_WINDOW_DAYS = 3;
 
 export const EARLY_TERMS = { percent: 92, payDelay: [1, 3] as const };
 export const INVOICE_SALE_PERCENT = 85;
+
+/** Below this a fee would round to nothing, and a loan is not worth arranging. */
+export const MIN_LOAN_MINOR = 2_000;
 
 export const SHIFT = { payMinor: 7_000, paidAfterDays: 2, roster: 3 } as const;
 

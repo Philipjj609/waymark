@@ -155,8 +155,14 @@ function attempt(
         if (!ok) return { kind: "VOID", day, actionIndex: i, code: "INSUFFICIENT_FUNDS" };
       }
       if (options.mode !== "STRESS") {
-        if (a.kind === "PAY" && billByKey.has(a.bill)) pay(a.bill, i);
-        if (a.kind === "DEFER" && billByKey.has(a.bill)) {
+        // A bill the player has not met yet behaves exactly like one that does not exist, or a
+        // refusal here would reveal whether a surprise is coming.
+        const known = (key: string) => {
+          const bill = billByKey.get(key);
+          return bill !== undefined && bill.revealDay <= a.day;
+        };
+        if (a.kind === "PAY" && known(a.bill)) pay(a.bill, i);
+        if (a.kind === "DEFER" && known(a.bill)) {
           send({ kind: "DEFER_OBLIGATION", payload: { obligationId: obligationId(a.bill) } }, i);
         }
       }
@@ -206,7 +212,8 @@ function attempt(
     }
     const fromActions = check(applyDay(day));
     if (fromActions) return fromActions;
-    const late = lateOn(day);
+    // Grace runs out when the player leaves the day, so the last day to pay really is payable.
+    const late = day < limit || limit === LAST_DAY ? lateOn(day) : null;
     if (late) return { restart: late };
     cashByDay.set(day, cash());
   }

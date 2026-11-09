@@ -179,7 +179,7 @@ describe("the world answers", () => {
   it("makes a deferred rent cost something, and damages the reference", () => {
     const standingOthers = standing.filter((a) => a.kind === "STANDING" && a.bill !== "rent");
     const actions: Action[] = [...standingOthers, { kind: "DEFER", day: 10, bill: "rent" }];
-    const view = monthView({ seed: "late", actions, atDay: 13 });
+    const view = monthView({ seed: "late", actions, atDay: 14 });
     expect(view.bills.some((b) => b.key === "late_rent")).toBe(true);
     expect(view.goodwill.landlord).toBe(0);
   });
@@ -191,7 +191,7 @@ describe("the world answers", () => {
     ];
     const view = monthView({ seed: "cut", actions, atDay: 9 });
     expect(view.phoneWorks).toBe(true);
-    const later = monthView({ seed: "cut", actions, atDay: 11 });
+    const later = monthView({ seed: "cut", actions, atDay: 12 });
     expect(later.phoneWorks).toBe(false);
   });
 
@@ -222,7 +222,7 @@ describe("foresight is judged only on what was knowable", () => {
 
   it("recognises money counted before it arrived", () => {
     const knowable = monthView({ seed: "f", actions: plan, atDay: 1 }).lowestKnown.cashMinor;
-    const view = monthView({ seed: "f", actions: [...plan, predict(knowable + 26_000)], atDay: 1 });
+    const view = monthView({ seed: "f", actions: [...plan, predict(knowable + 28_000)], atDay: 1 });
     expect(view.foresight[0]?.signature).toBe("COUNTED_PROMISED_MONEY");
   });
 
@@ -297,7 +297,7 @@ describe("rules the reviews asked for", () => {
       { kind: "PAY", day: 10, bill: "rent_part1" },
       { kind: "DEFER", day: 16, bill: "rent_part2" },
     ];
-    const view = monthView({ seed, actions, atDay: 17 });
+    const view = monthView({ seed, actions, atDay: 18 });
     expect(view.bills.some((b) => b.key === "late_rent_part2")).toBe(true);
   });
 
@@ -310,6 +310,114 @@ describe("rules the reviews asked for", () => {
     );
     expect(monthView({ seed, actions: standing, atDay: 8 }).terms.friendMaxMinor).toBe(10_000);
     expect(JSON.stringify(monthView({ seed, actions: standing, atDay: 7 }))).not.toContain("Slow");
+  });
+});
+
+describe("what the verification pass proved", () => {
+  const lucky = seedWhere(noSurprise);
+  const unlucky = seedWhere((s) => !noSurprise(s));
+
+  it("treats a bill you have not met like one that does not exist", () => {
+    const probe = (seed: string, kind: "PAY" | "DEFER") =>
+      monthView({ seed, actions: [{ kind, day: 1, bill: "surprise" }], atDay: 1 }).refusals;
+    expect(probe(unlucky, "PAY")).toEqual([]);
+    expect(probe(lucky, "PAY")).toEqual([]);
+    expect(probe(unlucky, "DEFER")).toEqual([]);
+  });
+
+  it("gives the same forecast before a surprise is revealed, counting known money only", () => {
+    const day = runMonth({ seed: unlucky, actions: [], untilDay: 1 }).plan.surpriseDay as number;
+    const early = Math.min(day - 1, 5);
+    const a = monthView({ seed: unlucky, actions: [newLaptop, logo], atDay: early }).forecast;
+    const b = monthView({ seed: lucky, actions: [newLaptop, logo], atDay: early }).forecast;
+    expect(a).toEqual(b);
+    const end = OPENING_CASH - GEAR.NEW.priceMinor - 3_000 - 55_000 - 15_000 + 90_000;
+    expect(a.at(-1)?.knownCashMinor).toBe(end);
+  });
+
+  it("slips a client payment in a slow week", () => {
+    const actions = [refurb, logo];
+    const seed = seedWhere((s) => {
+      const p = runMonth({ seed: s, actions, untilDay: 1 }).plan;
+      const pay = p.gigs[0]?.payDay ?? 0;
+      return p.slowWeek && pay >= 17 && pay <= 22;
+    });
+    const plan = runMonth({ seed, actions, untilDay: 1 }).plan;
+    expect(plan.gigs[0]?.payDay).toBeGreaterThan(plan.gigs[0]?.latestPay ?? 99);
+  });
+
+  it("refuses more than Marta can lend in a slow week", () => {
+    const seed = seedWhere(
+      (s) => runMonth({ seed: s, actions: [], untilDay: 1 }).plan.slowWeek && noSurprise(s),
+    );
+    const ask: Action = { kind: "BORROW", day: 8, lender: "FRIEND", amountMinor: 15_000 };
+    const view = monthView({ seed, actions: [...standing, ask], atDay: 8 });
+    expect(view.refusals[0]).toMatchObject({ code: "LOAN_REFUSED" });
+  });
+
+  it("keeps a referral away when the phone is cut off", () => {
+    const seed = seedWhere(noSurprise);
+    const delayedLogo: Action = { ...logo, workDays: [10, 11] } as Action;
+    const actions: Action[] = [
+      newLaptop,
+      delayedLogo,
+      { kind: "DEFER", day: 8, bill: "phone" },
+      { kind: "DEFER", day: 10, bill: "rent" },
+      { kind: "STANDING", day: 1, bill: "food" },
+    ];
+    const view = monthView({ seed, actions, atDay: 12 });
+    expect(view.phoneWorks).toBe(false);
+    expect(view.offers.some((o) => o.gigId === "MENU")).toBe(false);
+  });
+
+  it("does not charge lateness on the last day you can still pay", () => {
+    const others = standing.filter((a) => a.kind === "STANDING" && a.bill !== "rent");
+    const seed = seedWhere(noSurprise);
+    const deferred: Action[] = [...others, { kind: "DEFER", day: 10, bill: "rent" }];
+    const lastDay = monthView({ seed, actions: deferred, atDay: 13 });
+    expect(lastDay.bills.some((b) => b.key === "late_rent")).toBe(false);
+    expect(lastDay.stops.some((s) => s.kind === "LAST_CHANCE")).toBe(true);
+    const paid = monthView({
+      seed,
+      actions: [...deferred, { kind: "PAY", day: 13, bill: "rent" }],
+      atDay: 14,
+    });
+    expect(paid.bills.some((b) => b.key === "late_rent")).toBe(false);
+  });
+
+  it("applies a standing order only to bills due after it was set", () => {
+    const seed = seedWhere(noSurprise);
+    const others = standing.filter((a) => a.kind === "STANDING" && a.bill !== "rent");
+    const actions: Action[] = [
+      ...others,
+      { kind: "DEFER", day: 10, bill: "rent" },
+      { kind: "STANDING", day: 14, bill: "rent" },
+    ];
+    const view = monthView({ seed, actions, atDay: 14 });
+    expect(view.bills.find((b) => b.key === "rent")?.state).toBe("OVERDUE");
+  });
+
+  it("refuses tiny loans instead of crashing, and a sale that cannot complete", () => {
+    const seed = seedWhere(noSurprise);
+    const tiny: Action = { kind: "BORROW", day: 1, lender: "QUICK", amountMinor: 6 };
+    expect(monthView({ seed, actions: [tiny], atDay: 1 }).refusals[0]).toMatchObject({
+      code: "LOAN_REFUSED",
+    });
+  });
+
+  it("keeps a job already started when the repair goes unpaid", () => {
+    const actions = [refurb, { ...logo, workDays: [3, 10] } as Action];
+    const seed = seedWhere((s) => {
+      const p = runMonth({ seed: s, actions, untilDay: 1 }).plan;
+      return p.bills.some((b) => b.key === "repair") && p.surpriseDay === null;
+    });
+    const view = monthView({
+      seed,
+      actions: [...actions, ...standing, { kind: "DEFER", day: 4, bill: "repair" }],
+      atDay: 9,
+    });
+    expect(view.bills.some((b) => b.key === "repair")).toBe(true);
+    expect(view.refusals.some((r) => r.code === "LAPTOP_DEAD")).toBe(false);
   });
 });
 
@@ -335,6 +443,12 @@ describe("typed ideas", () => {
 
   it("answers honestly when the world does not have that", async () => {
     expect(await readIntent("sublet my room", context, model('{"action":null}'))).toMatchObject({
+      kind: "NOT_IN_THIS_WORLD",
+    });
+  });
+
+  it("holds rule readings to the action schema", async () => {
+    expect(await readIntent("rent 400 now, rest on day 99", context, null)).toMatchObject({
       kind: "NOT_IN_THIS_WORLD",
     });
   });
