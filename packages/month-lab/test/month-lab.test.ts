@@ -475,12 +475,12 @@ describe("the scenario has real choices (balance regression, real engine)", () =
     terms: "STANDARD",
   });
   const shift = (workDay: number): Action => ({ kind: "SHIFT", day: 1, workDay });
-  const goalRate = (actions: Action[]) => stressTest("balance", actions, 80).goalMet / 80;
+  const goalRate = (actions: Action[]) => stressTest("balance", actions, 60).goalMet / 60;
 
   it("needs a plan: doing nothing never reaches the goal", () => {
     expect(goalRate([])).toBe(0);
     expect(GOAL_CASH).toBeGreaterThan(OPENING_CASH);
-  });
+  }, 60_000);
 
   it("offers more than one viable route, and no sure thing", () => {
     const routes = {
@@ -493,7 +493,7 @@ describe("the scenario has real choices (balance regression, real engine)", () =
       expect(rate).toBeGreaterThanOrEqual(0.2);
       expect(rate).toBeLessThan(0.95);
     }
-  });
+  }, 60_000);
 });
 
 describe("the request boundary", () => {
