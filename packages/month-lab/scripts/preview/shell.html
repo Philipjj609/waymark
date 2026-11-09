@@ -174,14 +174,15 @@ body {
     box.select();
     byId("saved").textContent = message;
   }
-  var dbReady = (window.claude && window.claude.use) ? window.claude.use("db") : Promise.resolve(null);
-  var docId = "s" + Math.random().toString(36).slice(2, 12);
+  var use = window.claude?.use;
+  var dbReady = use ? window.claude.use("db") : Promise.resolve(null);
+  var userReady = use ? window.claude.use("user") : Promise.resolve(null);
   byId("feedback-form").addEventListener("submit", (event) => {
     event.preventDefault();
     byId("saved").textContent = "Saving…";
     dbReady.then((db) => {
       if (!db) throw new Error("no store");
-      return db.doc("sessions/" + docId).set(answers());
+      return userReady.then((user) => user.id()).then((id) => db.doc(`sessions/${id}`).set(answers()));
     }).then(() => {
       byId("saved").textContent = "Saved. Thank you.";
     }).catch(() => {
