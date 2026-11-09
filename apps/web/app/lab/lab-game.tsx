@@ -56,6 +56,9 @@ interface Token {
 
 type GuessReason = Extract<Action, { kind: "PREDICT" }>["reason"];
 
+/** Only the first branch is the live month; every other one is a what-if. */
+const branchWhatIf = (id: string) => id !== "a";
+
 const newRunId = () => crypto.randomUUID().replaceAll("-", "").slice(0, 24);
 
 async function post<T>(path: string, body: unknown): Promise<T> {
@@ -94,7 +97,7 @@ export function LabGame() {
     async (
       id: string,
       actions: readonly Action[],
-      at: { atDay?: number; fromDay?: number; pinMinor?: number },
+      at: { atDay?: number; fromDay?: number; pinMinor?: number; transferMinor?: number },
     ) => {
       setBusy(true);
       setError(null);
@@ -103,6 +106,7 @@ export function LabGame() {
           runId,
           actions,
           cursor: cursor.current,
+          ...(branchWhatIf(id) ? { hindsight: true } : {}),
           ...at,
         });
         cursor.current = reply.cursor;
@@ -266,6 +270,14 @@ export function LabGame() {
       setBusy(false);
     }
   }, [active, runId]);
+
+  const answerTransfer = useCallback(
+    (amountMinor: number) => {
+      if (!active || !view) return;
+      void run(active.id, active.actions, { atDay: view.head, transferMinor: amountMinor });
+    },
+    [active, view, run],
+  );
 
   const liveAgain = useCallback(() => {
     const live = branches.find((b) => !b.whatIf);
@@ -549,6 +561,9 @@ export function LabGame() {
       {active.rewoundTo === view.head && (
         <UndoList actions={active.actions} onUndo={undo} busy={busy} />
       )}
+      {!active.whatIf && !finished && !fogged && !reading && !blocking && (
+        <SecondThoughts actions={active.actions} day={view.head} onUndo={undo} busy={busy} />
+      )}
 
       {error && (
         <p role="alert" className="lab-error">
@@ -705,6 +720,7 @@ export function LabGame() {
           busy={busy}
           onStress={() => void runStress()}
           onLiveAgain={liveAgain}
+          onAnswer={answerTransfer}
           tally={tally}
         />
       )}
@@ -713,7 +729,14 @@ export function LabGame() {
         <div className="lab-world">
           <section aria-label="People and money">
             <h2>People</h2>
-            <IdeaBox view={view} invoices={invoices} onConfirm={act} busy={busy || fogged} />
+            <IdeaBox
+              runId={runId}
+              cursor={cursor.current ?? ""}
+              view={view}
+              invoices={invoices}
+              onConfirm={act}
+              busy={busy || fogged}
+            />
             <People view={view} act={act} busy={busy || fogged} />
           </section>
           <section aria-label="What has happened" className="lab-log">
@@ -815,6 +838,35 @@ const describeAction = (a: Action): string | null => {
   }
 };
 
+/** Reconsidering: nothing has happened yet today, so today's decisions can still change. */
+function SecondThoughts(props: {
+  readonly actions: readonly Action[];
+  readonly day: number;
+  readonly onUndo: (i: number) => void;
+  readonly busy: boolean;
+}) {
+  const today = props.actions.flatMap((a, i) => {
+    const label = a.day === props.day ? describeAction(a) : null;
+    return label ? [{ i, label }] : [];
+  });
+  if (today.length === 0) return null;
+  return (
+    <section className="lab-second" aria-label="Second thoughts">
+      <p>
+        <strong>Second thoughts?</strong> Time hasn't moved yet, so you can still change today's
+        decisions.
+      </p>
+      <div className="lab-chips">
+        {today.map(({ i, label }) => (
+          <button key={i} type="button" disabled={props.busy} onClick={() => props.onUndo(i)}>
+            Undo: {label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function UndoList(props: {
   readonly actions: readonly Action[];
   readonly onUndo: (i: number) => void;
@@ -841,12 +893,14 @@ function UndoList(props: {
 }
 
 function IdeaBox(props: {
+  readonly runId: string;
+  readonly cursor: string;
   readonly view: MonthView;
   readonly invoices: ReadonlyArray<{ gigId: string; label: string }>;
   readonly onConfirm: (a: Action) => void;
   readonly busy: boolean;
 }) {
-  const { view, invoices, onConfirm, busy } = props;
+  const { runId, cursor, view, invoices, onConfirm, busy } = props;
   const [text, setText] = useState("");
   const [waiting, setWaiting] = useState(false);
   const [result, setResult] = useState<IntentResult | null>(null);
@@ -861,6 +915,8 @@ function IdeaBox(props: {
     try {
       const reply = await post<{ result: IntentResult }>("/api/lab/intent", {
         text: sentence,
+        runId,
+        cursor,
         day: view.head,
         invoices,
       });
@@ -1103,9 +1159,10 @@ function Reckoning(props: {
   readonly busy: boolean;
   readonly onStress: () => void;
   readonly onLiveAgain: () => void;
+  readonly onAnswer: (amountMinor: number) => void;
   readonly tally: readonly boolean[];
 }) {
-  const { view, whatIf, others, stress, busy, onStress, onLiveAgain } = props;
+  const { view, whatIf, others, stress, busy, onStress, onLiveAgain, onAnswer } = props;
   const o = view.outcome;
   if (!o) return null;
   const gap = o.goalMinor - o.cashMinor;
@@ -1160,6 +1217,8 @@ function Reckoning(props: {
       {others.map((b) =>
         b.view ? <Difference key={b.id} name={b.name} mine={view} theirs={b.view} /> : null,
       )}
+      <Books view={view} />
+      {view.learning && <Transfer learning={view.learning} busy={busy} onAnswer={onAnswer} />}
       <div className="lab-chips">
         <button type="button" className="lab-primary" disabled={busy} onClick={onLiveAgain}>
           Live a new month, with new luck
@@ -1176,6 +1235,93 @@ function Reckoning(props: {
         </p>
       )}
     </section>
+  );
+}
+
+function Books({ view }: { readonly view: MonthView }) {
+  return (
+    <details className="lab-books">
+      <summary>Open your books</summary>
+      <p>
+        Everything here was posted to a double-entry ledger when it happened. All amounts are
+        fictional.
+      </p>
+      <table>
+        <tbody>
+          {view.books.map((b) => (
+            <tr key={b.account}>
+              <th scope="row">{b.account.replace(":", ": ")}</th>
+              <td>{euros(b.balanceMinor)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <h3>Not in your books</h3>
+      <ul>
+        {view.notOnBooks.map((n) => (
+          <li key={n.label}>
+            <strong>{n.label}.</strong> {n.note}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+const STATUS_WORDS: Record<string, string> = {
+  NO_EVIDENCE: "No evidence yet",
+  INCONCLUSIVE: "Not enough to say",
+  SUPPORTED: "You showed this",
+  NEEDS_SUPPORT: "Might be worth another look",
+};
+
+function Transfer(props: {
+  readonly learning: NonNullable<MonthView["learning"]>;
+  readonly busy: boolean;
+  readonly onAnswer: (amountMinor: number) => void;
+}) {
+  const { learning, busy, onAnswer } = props;
+  const [value, setValue] = useState("");
+  const { transfer, concepts } = learning;
+  return (
+    <div className="lab-transfer">
+      <h3>A different situation</h3>
+      <p>{transfer.prompt}</p>
+      {transfer.result === null ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const euro = Number(value);
+            if (Number.isInteger(euro) && euro >= 0) onAnswer(euro * 100);
+          }}
+        >
+          <label htmlFor="lab-transfer-answer">Sam is short by, in euros</label>
+          <input
+            id="lab-transfer-answer"
+            inputMode="numeric"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <button type="submit" disabled={busy || value.trim() === ""}>
+            Check
+          </button>
+        </form>
+      ) : (
+        <p>{transfer.feedback}</p>
+      )}
+      <p className="lab-note">Draft question, not yet reviewed.</p>
+      <h3>What this month showed about how you think</h3>
+      <p className="lab-note">
+        Based on your guesses and decisions, never on how much money you ended with.
+      </p>
+      <ul className="lab-concepts">
+        {concepts.map((c) => (
+          <li key={c.conceptId}>
+            {c.label}: <strong>{STATUS_WORDS[c.status] ?? c.status}</strong>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

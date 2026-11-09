@@ -7,6 +7,7 @@ export {
   RunRequestSchema,
 } from "./actions.js";
 export { type IntentModel, type IntentResult, readIntent } from "./intent.js";
+export { type ConceptReading, TRANSFER } from "./learning.js";
 export type { OfferView, Refusal } from "./plan.js";
 export * as scenario from "./scenario.js";
 export {

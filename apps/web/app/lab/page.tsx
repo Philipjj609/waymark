@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { labEnabled } from "../../lib/lab-cursor";
 import { LabGame } from "./lab-game";
 import "./lab.css";
 
@@ -10,8 +11,8 @@ export const metadata = {
   description: "Fictional money. An experiment in planning a month and trying it again.",
 };
 
-/** SPIKE (#110). Off unless WAYMARK_LAB=1, and not linked from the app. */
+/** SPIKE (#110). Off unless enabled (see labEnabled), and not linked from the app. */
 export default function LabPage() {
-  if (process.env.WAYMARK_LAB !== "1") notFound();
+  if (!labEnabled()) notFound();
   return <LabGame />;
 }

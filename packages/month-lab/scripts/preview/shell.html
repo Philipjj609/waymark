@@ -1,0 +1,202 @@
+<title>Month Rehearsal Playtest</title>
+<style>
+/*__LAB_CSS__*/
+/* Layout: the real game, with a short brief above it and a feedback form below. */
+:root {
+  --test-bg: #f2f9fa;
+  --test-ink: #10324a;
+  --test-muted: #456376;
+  --test-line: #bcd6df;
+  --test-card: #ffffff;
+  --test-accent: #b0177c;
+}
+body {
+  background: var(--test-bg);
+  color: var(--test-ink);
+}
+.brief,
+.feedback {
+  background: var(--test-card);
+  border-bottom: 1px solid var(--test-line);
+  font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  padding-block: 16px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.feedback {
+  border-top: 1px solid var(--test-line);
+}
+.brief h2,
+.feedback h2 {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-size: 1.3rem;
+  margin: 0 0 6px;
+}
+.brief p,
+.feedback p {
+  margin: 0 0 8px;
+  max-width: 68ch;
+}
+.brief ul {
+  margin: 0;
+  max-width: 68ch;
+  padding-left: 18px;
+}
+.feedback form {
+  display: grid;
+  gap: 12px;
+  max-width: 68ch;
+}
+.feedback label {
+  display: grid;
+  gap: 4px;
+  font-weight: 600;
+}
+.feedback textarea,
+.feedback input,
+.feedback select {
+  background: var(--test-card);
+  border: 1px solid var(--test-muted);
+  color: var(--test-ink);
+  font: inherit;
+  font-weight: 400;
+  padding: 8px;
+  width: 100%;
+}
+.feedback button {
+  background: var(--test-accent);
+  border: 1px solid var(--test-accent);
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  justify-self: start;
+  min-height: 44px;
+  padding: 6px 14px;
+}
+.feedback .quiet {
+  background: var(--test-card);
+  color: var(--test-ink);
+  border-color: var(--test-muted);
+}
+.feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+#saved {
+  color: var(--test-muted);
+  margin-top: 8px;
+}
+</style>
+<section class="brief" aria-label="About this test">
+  <h2>Thanks for trying this</h2>
+  <p>
+    This is a rough prototype of a game about getting through a month on not much money. We are testing the game, not you. There are no wrong moves. All the money and people are made up.
+  </p>
+  <ul>
+    <li>Play for about ten minutes. Try to reach the goal, and try anything else you are curious about.</li>
+    <li>If someone is with you, say what you are thinking as you go.</li>
+    <li>When you finish or get stuck, answer the short questions at the bottom.</li>
+  </ul>
+</section>
+<div id="lab-root"></div>
+<section class="feedback" aria-label="Your feedback">
+  <h2>How did that go?</h2>
+  <p>
+    Saving sends your answers, the steps you took in the game and any ideas you typed to the person running this test. Nothing else about you is collected. Please leave out anything private.
+  </p>
+  <form id="feedback-form">
+    <label>A first name or nickname (optional)
+      <input id="f-name" maxlength="40" autocomplete="off">
+    </label>
+    <label>What did you think the game wanted you to do?
+      <textarea id="f-goal" rows="2" maxlength="600"></textarea>
+    </label>
+    <label>What confused you most?
+      <textarea id="f-confused" rows="2" maxlength="600"></textarea>
+    </label>
+    <label>Was there a moment when you had a real choice? What was it?
+      <textarea id="f-choice" rows="2" maxlength="600"></textarea>
+    </label>
+    <label>Did you try anything that the game wouldn't let you do?
+      <textarea id="f-blocked" rows="2" maxlength="600"></textarea>
+    </label>
+    <label>Did you learn anything about money? What?
+      <textarea id="f-learned" rows="2" maxlength="600"></textarea>
+    </label>
+    <label>Would you play another month?
+      <select id="f-again">
+        <option value="">Choose one</option>
+        <option>Yes</option>
+        <option>Maybe</option>
+        <option>No</option>
+      </select>
+    </label>
+    <div class="feedback-actions">
+      <button type="submit">Save my answers</button>
+      <button type="button" class="quiet" id="copy">Copy my answers instead</button>
+    </div>
+  </form>
+  <p id="saved" role="status"></p>
+  <textarea id="fallback" rows="6" hidden aria-label="Your answers, to copy and send"></textarea>
+</section>
+<script>
+(() => {
+  var steps = [];
+  var started = Date.now();
+  window.__labLog = (event) => {
+    if (steps.length < 400) {
+      event.t = Math.round((Date.now() - started) / 1000);
+      steps.push(event);
+    }
+  };
+  function byId(id) { return document.getElementById(id); }
+  function answers() {
+    return {
+      name: byId("f-name").value.trim(),
+      goal: byId("f-goal").value.trim(),
+      confused: byId("f-confused").value.trim(),
+      choice: byId("f-choice").value.trim(),
+      blocked: byId("f-blocked").value.trim(),
+      learned: byId("f-learned").value.trim(),
+      again: byId("f-again").value,
+      seconds: Math.round((Date.now() - started) / 1000),
+      monthsEnded: steps.filter((s) => s.type === "step" && s.status === "MONTH_END").length,
+      steps: steps,
+    };
+  }
+  function showFallback(message) {
+    var box = byId("fallback");
+    box.value = JSON.stringify(answers(), null, 1);
+    box.hidden = false;
+    box.focus();
+    box.select();
+    byId("saved").textContent = message;
+  }
+  var dbReady = (window.claude && window.claude.use) ? window.claude.use("db") : Promise.resolve(null);
+  var docId = "s" + Math.random().toString(36).slice(2, 12);
+  byId("feedback-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    byId("saved").textContent = "Saving…";
+    dbReady.then((db) => {
+      if (!db) throw new Error("no store");
+      return db.doc("sessions/" + docId).set(answers());
+    }).then(() => {
+      byId("saved").textContent = "Saved. Thank you.";
+    }).catch(() => {
+      showFallback("This view can't save answers. Copy the text below and send it to whoever invited you.");
+    });
+  });
+  byId("copy").addEventListener("click", () => {
+    var text = JSON.stringify(answers(), null, 1);
+    var done = () => { byId("saved").textContent = "Copied. Please send it to whoever invited you."; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => { showFallback("Select the text below and copy it."); });
+    } else {
+      showFallback("Select the text below and copy it.");
+    }
+  });
+})();
+</script>
+<script>/*__LAB_JS__*/</script>

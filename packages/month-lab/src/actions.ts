@@ -65,8 +65,12 @@ export const RunRequestSchema = z
     watchBelowMinor: z.number().int().min(0).max(10_000_000).optional(),
     /** A guess to compare with known money. Reading it changes nothing. */
     pinMinor: z.number().int().min(-10_000_000).max(10_000_000).optional(),
+    /** An answer to the month-end question. It is evidence about learning, never about money. */
+    transferMinor: z.number().int().min(0).max(10_000_000).optional(),
     /** Proof of the furthest day this run has reached. See apps/web/lib/lab-cursor.ts. */
     cursor: z.string().max(200).optional(),
+    /** Browser-only preview: there is no server cursor, so the page declares its own what-ifs. */
+    hindsight: z.boolean().optional(),
   })
   .strict();
 export type RunRequest = z.infer<typeof RunRequestSchema>;

@@ -49,7 +49,7 @@ export const GIGS: Readonly<Record<GigId, GigSpec>> = {
   },
   MENU: {
     id: "MENU",
-    client: "Ines at Café Lume",
+    client: "Rosa at Café Lume",
     title: "Autumn menu design",
     payMinor: 30_000,
     workDays: 2,

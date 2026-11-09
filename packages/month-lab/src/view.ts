@@ -1,5 +1,12 @@
-import type { DomainEvent } from "@fle/contracts";
+import type { DomainEvent, EntityId } from "@fle/contracts";
 import { type Action, isPlanAction } from "./actions.js";
+import {
+  type ConceptReading,
+  learningReading,
+  scoreTransfer,
+  TRANSFER,
+  type TransferResult,
+} from "./learning.js";
 import { type OfferView, offersOn, type Plan, type Refusal } from "./plan.js";
 import { type EngineRun, runMonth } from "./run.js";
 import {
@@ -12,6 +19,7 @@ import {
   LAST_DAY,
   SLOW_WEEK,
 } from "./scenario.js";
+import type { ForesightSignature } from "./view-types.js";
 
 export interface Movement {
   readonly day: number;
@@ -58,7 +66,7 @@ export interface Outcome {
   readonly ownsLaptop: boolean;
 }
 
-export type ForesightSignature = "MATCHED" | "COUNTED_PROMISED_MONEY" | "OFF_BY_A_BILL" | "OTHER";
+export type { ForesightSignature };
 
 /** A guess held against what was knowable at the moment it was made. */
 export interface PinReading {
@@ -107,6 +115,22 @@ export interface MonthView {
   readonly foresight: readonly Foresight[];
   readonly outcome: Outcome | null;
   readonly pinReading: PinReading | null;
+  /** True when this is a what-if on a finished month: it can teach, but earns nothing. */
+  readonly hindsight: boolean;
+  /** What the ledger holds, account by account. Everything here was posted by the engine. */
+  readonly books: ReadonlyArray<{ readonly account: string; readonly balanceMinor: number }>;
+  /** Real to the player, deliberately not accounting: shown apart so the two are never confused. */
+  readonly notOnBooks: ReadonlyArray<{ readonly label: string; readonly note: string }>;
+  /** Month end of a live month only. The same evidence model FP-30 uses. */
+  readonly learning: {
+    readonly concepts: readonly ConceptReading[];
+    readonly transfer: {
+      readonly prompt: string;
+      readonly reviewStatus: string;
+      readonly result: TransferResult | null;
+      readonly feedback: string | null;
+    };
+  } | null;
   /** Terms as they stand today. They can change, and only for days already reached. */
   readonly terms: { readonly friendMaxMinor: number; readonly invoiceSalePercent: number };
   /**
@@ -281,6 +305,36 @@ function nextStopDay(
   return probe.day;
 }
 
+const PERSON = "ent_person" as EntityId;
+
+/**
+ * The game tracks these, but they are not accounting entries. A promised payment is not a booked
+ * receivable (#13), and goodwill is not an asset. Listing them apart keeps that explicit.
+ */
+function notOnBooks(run: EngineRun): MonthView["notOnBooks"] {
+  const { plan, day } = run;
+  const out: { label: string; note: string }[] = [];
+  for (const g of plan.gigs) {
+    if (g.soldOn === null && g.deliveredDay <= day && g.payDay > day) {
+      out.push({
+        label: `${GIGS[g.gigId].title}: promised, not paid`,
+        note: "Income is booked only when the money arrives, so this is not in your books yet.",
+      });
+    }
+  }
+  if (plan.gigs.some((g) => g.soldOn !== null)) {
+    out.push({
+      label: "Sold invoices",
+      note: "Booked as income at the price you sold for. The part you gave up never appears.",
+    });
+  }
+  out.push({
+    label: "Goodwill with Ms. Duarte and Marta",
+    note: "A relationship, tracked by the game. It has no money value in your books.",
+  });
+  return out;
+}
+
 function outcomeOf(run: EngineRun): Outcome {
   const { plan, state } = run;
   const cashMinor = cashOf(run);
@@ -362,6 +416,8 @@ export interface ViewRequest {
   readonly fromDay?: number;
   readonly watchBelowMinor?: number;
   readonly pinMinor?: number;
+  readonly transferMinor?: number;
+  readonly hindsight?: boolean;
 }
 
 /** One player-visible moment of one branch. Nothing undrawn leaves this function. */
@@ -371,6 +427,8 @@ export function monthView(request: ViewRequest): MonthView {
   const target = request.atDay ?? nextStopDay(seed, actions, fromDay, watchBelowMinor);
   const run = runMonth({ seed, actions, untilDay: target });
   const head = run.day;
+  const transfer =
+    request.transferMinor === undefined ? null : scoreTransfer(request.transferMinor);
   const forecast = forecastFrom(run);
   const lowest = forecast.reduce((m, f) => (f.knownCashMinor < m.knownCashMinor ? f : m));
   const planRefused = new Set(run.plan.refusals.map((r) => r.actionIndex));
@@ -432,7 +490,26 @@ export function monthView(request: ViewRequest): MonthView {
     refusals: [...run.plan.refusals, ...engineRefusals],
     movements: movementsOf(run.state.events, head),
     foresight: foresightOf(seed, actions),
-    outcome: isEnd ? outcomeOf(run) : null,
+    outcome: isEnd
+      ? { ...outcomeOf(run), goalMet: request.hindsight ? false : outcomeOf(run).goalMet }
+      : null,
+    hindsight: request.hindsight === true,
+    books: run.state.ledger
+      .trialBalance(PERSON, "EUR")
+      .map((r) => ({ account: r.account, balanceMinor: r.balance.amountMinor })),
+    notOnBooks: notOnBooks(run),
+    learning:
+      isEnd && !request.hindsight
+        ? {
+            concepts: learningReading(run, foresightOf(seed, actions), transfer),
+            transfer: {
+              prompt: TRANSFER.prompt,
+              reviewStatus: TRANSFER.reviewStatus,
+              result: transfer,
+              feedback: transfer === null ? null : TRANSFER.feedback,
+            },
+          }
+        : null,
     pinReading: request.pinMinor === undefined ? null : readPin(run, request.pinMinor),
     terms: {
       friendMaxMinor:
@@ -444,13 +521,14 @@ export function monthView(request: ViewRequest): MonthView {
           ? SLOW_WEEK.salePercent
           : INVOICE_SALE_PERCENT,
     },
-    receipt: isEnd
-      ? {
-          stateHash: run.state.headHash,
-          events: run.state.events.length,
-          commands: run.commandCount,
-        }
-      : null,
+    receipt:
+      isEnd && !request.hindsight
+        ? {
+            stateHash: run.state.headHash,
+            events: run.state.events.length,
+            commands: run.commandCount,
+          }
+        : null,
   };
 }
 

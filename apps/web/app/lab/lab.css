@@ -637,6 +637,62 @@
   padding: 10px;
 }
 
+.lab-second {
+  border-top: 1px solid var(--hairline);
+  margin: 12px 0;
+  padding-top: 8px;
+}
+
+.lab-books,
+.lab-transfer {
+  border-top: 1px solid var(--hairline);
+  margin: 12px 0;
+  padding-top: 12px;
+}
+
+.lab-books summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.lab-books table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  margin: 8px 0;
+}
+
+.lab-books th {
+  font-weight: 400;
+  padding: 2px 24px 2px 0;
+  text-align: left;
+}
+
+.lab-books td {
+  text-align: right;
+}
+
+.lab-transfer form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.lab-transfer label {
+  flex-basis: 100%;
+}
+
+.lab-transfer input {
+  font: inherit;
+  min-height: 40px;
+  padding: 0 8px;
+  width: 8ch;
+}
+
+.lab-concepts {
+  padding-left: 18px;
+}
+
 .lab-voices {
   list-style: none;
   padding: 0;

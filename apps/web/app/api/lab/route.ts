@@ -2,7 +2,17 @@ import { monthView, RunRequestSchema, stressTest } from "@fle/month-lab";
 import { z } from "zod";
 import { rejectUnsafeWrite } from "../../../lib/csrf";
 import { errorResponse, guarded, json, worldNotFound } from "../../../lib/http";
-import { labSeed, readCursor, signCursor } from "../../../lib/lab-cursor";
+import {
+  advanceCursor,
+  claimCursor,
+  isHindsight,
+  labEnabled,
+  labSeed,
+  readCursor,
+  rememberCursor,
+  respectsHistory,
+  signCursor,
+} from "../../../lib/lab-cursor";
 import { clientIp, hit, type Limit } from "../../../lib/rate-limit";
 import { readSession, startSession } from "../../../lib/session";
 
@@ -10,7 +20,7 @@ export const runtime = "nodejs";
 
 const RUNS: Limit = { name: "lab-runs", max: 240, windowMs: 60_000 };
 const RUNS_IP: Limit = { name: "lab-runs-ip", max: 600, windowMs: 60_000 };
-/** A backstop: dropping the cookie gets a fresh session bucket, so per-session is not enough. */
+/** A backstop: a made-up cookie gets a fresh session bucket, so per-session is not enough. */
 const RUNS_ALL: Limit = { name: "lab-runs-all", max: 3000, windowMs: 60_000 };
 const STRESS: Limit = { name: "lab-stress", max: 12, windowMs: 60_000 };
 const STRESS_ALL: Limit = { name: "lab-stress-all", max: 15, windowMs: 60_000 };
@@ -21,16 +31,18 @@ const StressRequestSchema = z.object({ stress: z.literal(true), run: RunRequestS
 
 const tooMany = () =>
   errorResponse(429, "RATE_LIMITED", "too many requests", { "retry-after": "60" });
+const ahead = () => errorResponse(400, "INVALID_REQUEST", "actions are ahead of this month");
+const rewrites = () => errorResponse(409, "STORE_CONFLICT", "this month has already moved on");
 
 /**
- * SPIKE (#110), off unless WAYMARK_LAB=1. The browser holds its branch as a list of typed
- * intentions and the server reruns the month through the real engine on every call, so there is
- * nothing to store and nothing to corrupt. All money is fictional. Luck comes from a seed the
- * browser never receives, and a signed cursor stops a client from looking ahead of where it is.
+ * SPIKE (#110), off unless enabled (see labEnabled). The browser holds its branch as a list of
+ * typed intentions and the server reruns the month through the real engine on every call. All money
+ * is fictional. This route cannot reach the world store, so nothing here can touch a persisted
+ * world or a payment record. Luck comes from a seed the browser never receives.
  */
 export async function POST(req: Request): Promise<Response> {
   return guarded(async () => {
-    if (process.env.WAYMARK_LAB !== "1") return worldNotFound();
+    if (!labEnabled()) return worldNotFound();
     const unsafe = rejectUnsafeWrite(req);
     if (unsafe) return unsafe;
 
@@ -60,11 +72,8 @@ export async function POST(req: Request): Promise<Response> {
     const stress = StressRequestSchema.safeParse(body);
     if (stress.success) {
       if (!hit(STRESS_ALL, "all") || !hit(STRESS, owner)) return tooMany();
-      const { runId, actions, cursor } = stress.data.run;
-      const maxDay = readCursor(owner, runId, cursor);
-      if (actions.some((a) => a.day > maxDay)) {
-        return errorResponse(400, "INVALID_REQUEST", "actions are ahead of this month");
-      }
+      const { runId, actions, cursor: raw } = stress.data.run;
+      if (!readCursor(owner, runId, raw).ended) return ahead();
       return json(
         { stress: stressTest(labSeed(owner, runId), actions, STRESS_MONTHS) },
         200,
@@ -76,21 +85,30 @@ export async function POST(req: Request): Promise<Response> {
     if (!parsed.success) return errorResponse(400, "INVALID_REQUEST", "invalid month request");
     if (!hit(RUNS_ALL, "all") || !hit(RUNS, owner)) return tooMany();
 
-    const { runId, actions, atDay, fromDay, watchBelowMinor, pinMinor, cursor } = parsed.data;
-    const maxDay = readCursor(owner, runId, cursor);
-    if (actions.some((a) => a.day > maxDay) || (fromDay !== undefined && fromDay > maxDay)) {
-      return errorResponse(400, "INVALID_REQUEST", "actions are ahead of this month");
+    const { runId, actions, atDay, fromDay, watchBelowMinor, pinMinor, transferMinor } =
+      parsed.data;
+    const cursor = readCursor(owner, runId, parsed.data.cursor);
+    if (
+      actions.some((a) => a.day > cursor.maxDay) ||
+      (fromDay !== undefined && fromDay > cursor.maxDay)
+    ) {
+      return ahead();
     }
+    if (!respectsHistory(cursor, actions) || !claimCursor(owner, runId, cursor)) return rewrites();
+
     const view = monthView({
       seed: labSeed(owner, runId),
       actions,
+      hindsight: isHindsight(cursor, actions),
       // Viewing is bounded by the furthest day reached; only running forward extends it.
-      ...(atDay !== undefined ? { atDay: Math.min(atDay, maxDay) } : {}),
+      ...(atDay !== undefined ? { atDay: Math.min(atDay, cursor.maxDay) } : {}),
       ...(fromDay !== undefined ? { fromDay } : {}),
       ...(watchBelowMinor !== undefined ? { watchBelowMinor } : {}),
       ...(pinMinor !== undefined ? { pinMinor } : {}),
+      ...(transferMinor !== undefined ? { transferMinor } : {}),
     });
-    const nextCursor = signCursor(owner, runId, Math.max(maxDay, view.head));
-    return json({ view, cursor: nextCursor }, 200, setCookie);
+    const next = advanceCursor(cursor, actions, view);
+    rememberCursor(owner, runId, next);
+    return json({ view, cursor: signCursor(owner, runId, next) }, 200, setCookie);
   });
 }

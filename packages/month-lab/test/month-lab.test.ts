@@ -421,6 +421,57 @@ describe("what the verification pass proved", () => {
   });
 });
 
+describe("books versus scenario facts", () => {
+  const seed = seedWhere(noSurprise);
+  const account = (view: ReturnType<typeof monthView>, name: string) =>
+    view.books.find((b) => b.account === name)?.balanceMinor;
+
+  it("books each mechanic to the right account", () => {
+    const loan: Action = { kind: "BORROW", day: 1, lender: "QUICK", amountMinor: 10_000 };
+    const split: Action = { kind: "ASK_SPLIT", day: 1, firstMinor: 40_000, secondDay: 16 };
+    const view = monthView({ seed, actions: [loan, split, ...standing], atDay: LAST_DAY });
+    expect(account(view, "LIABILITY:QuickCash") ?? 0).toBe(0);
+    expect(account(view, "EXPENSE:Rent")).toBe(55_000);
+    expect(account(view, "EXPENSE:Fees")).toBe(1_500 + 2_500);
+    expect(account(view, "REVENUE:Wages")).toBe(90_000);
+  });
+
+  it("does not book a promised payment, and says so", () => {
+    const view = monthView({ seed, actions: [newLaptop, logo], atDay: 5 });
+    expect(view.books.some((b) => b.account.includes("Receivable"))).toBe(false);
+    expect(account(view, "ASSET:Equipment")).toBe(GEAR.NEW.priceMinor);
+    expect(view.notOnBooks.some((n) => n.label.includes("promised"))).toBe(true);
+  });
+});
+
+describe("learning is read through the existing evidence model", () => {
+  const seed = seedWhere(noSurprise);
+  const statusOf = (view: ReturnType<typeof monthView>, id: string) =>
+    view.learning?.concepts.find((c) => c.conceptId === id)?.status;
+
+  it("does not credit a routine payment or read money as understanding", () => {
+    const view = monthView({ seed, actions: standing, atDay: LAST_DAY });
+    expect(statusOf(view, "cpt_liquidity")).toBe("NO_EVIDENCE");
+  });
+
+  it("credits a correct unfamiliar question, and separates a misconception from a slip", () => {
+    const right = monthView({ seed, actions: standing, atDay: LAST_DAY, transferMinor: 1_500 });
+    expect(right.learning?.transfer.result).toBe("SUPPORTS");
+    expect(statusOf(right, "cpt_liquidity")).toBe("SUPPORTED");
+    const named = monthView({ seed, actions: standing, atDay: LAST_DAY, transferMinor: 0 });
+    expect(named.learning?.transfer.result).toBe("CONTRADICTS");
+    const slip = monthView({ seed, actions: standing, atDay: LAST_DAY, transferMinor: 700 });
+    expect(slip.learning?.transfer.result).toBe("INCONCLUSIVE");
+  });
+
+  it("gives hindsight no goal, no receipt and no learning evidence", () => {
+    const view = monthView({ seed, actions: standing, atDay: LAST_DAY, hindsight: true });
+    expect(view.outcome?.goalMet).toBe(false);
+    expect(view.receipt).toBeNull();
+    expect(view.learning).toBeNull();
+  });
+});
+
 describe("typed ideas", () => {
   const context = { day: 2, invoices: [{ gigId: "LOGO", label: "New shop logo" }] };
   const model = (reply: string): IntentModel => ({ complete: async () => reply });

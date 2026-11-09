@@ -64,6 +64,7 @@ export default defineConfig({
       APP_BASE_URL: BASE_URL,
       WORLD_STORE: "memory",
       WAYMARK_LAB: "1",
+      LAB_SECRET: "e2e-only-secret-not-used-anywhere-else-0123456789",
       DATABASE_URL: "",
       AI_PROVIDER: "fake",
       NEBIUS_API_KEY: "",

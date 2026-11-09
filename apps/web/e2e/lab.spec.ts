@@ -166,4 +166,46 @@ test("cannot look ahead, leak a draw or forge a price", async ({ request, baseUR
     data: { runId: "e2e-run-1", actions: [], atDay: 2, cursor: "30.deadbeef" },
   });
   expect((await bad.json()).view.head).toBe(1);
+  // A live month is append-only, and a saved cursor cannot take it back.
+  const start = await (
+    await request.post("/api/lab", {
+      headers,
+      data: { runId: "e2e-run-2", actions: plan, atDay: 1 },
+    })
+  ).json();
+  const moved = await (
+    await request.post("/api/lab", {
+      headers,
+      data: { runId: "e2e-run-2", actions: plan, fromDay: 1, cursor: start.cursor },
+    })
+  ).json();
+  expect(moved.view.head).toBeGreaterThan(1);
+  const rewritten = await request.post("/api/lab", {
+    headers,
+    data: { runId: "e2e-run-2", actions: plan.slice(0, 1), atDay: 2, cursor: moved.cursor },
+  });
+  expect(rewritten.status()).toBe(409);
+  const rolledBack = await request.post("/api/lab", {
+    headers,
+    data: { runId: "e2e-run-2", actions: plan, atDay: 1, cursor: start.cursor },
+  });
+  expect(rolledBack.status()).toBe(409);
+
+  // A stress test and the paid model both need a month this server really started.
+  const stress = await request.post("/api/lab", {
+    headers,
+    data: { stress: true, run: { runId: "e2e-run-2", actions: plan, cursor: moved.cursor } },
+  });
+  expect(stress.status()).toBe(400);
+  const idea = await request.post("/api/lab/intent", {
+    headers,
+    data: {
+      text: "ask Marta for 100",
+      runId: "e2e-run-2",
+      cursor: "1.0.x.-.deadbeef",
+      day: 1,
+      invoices: [],
+    },
+  });
+  expect(idea.status()).toBe(404);
 });
