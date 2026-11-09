@@ -1,88 +1,143 @@
 import type { Action } from "../src/actions.js";
+import { FREE_DAYS, GIGS, type GigId } from "../src/scenario.js";
 import { stressTest } from "../src/view.js";
 
-/** Enumerate the plan space through the real engine and report the Pareto front. */
-type Gear = "NEW" | "REFURB" | "RENT" | null;
+/**
+ * Enumerate the plan space through the real engine: every job set, every placement on the free
+ * days, several financing choices. Screens all plans cheaply, then reruns the leaders properly.
+ * Usage: tsx packages/month-lab/scripts/sweep.ts [screenMonths] [finalMonths]
+ */
+type Gear = "NEW" | "REFURB" | null;
+type LogoTerms = "none" | "standard" | "early" | "sold";
+
 interface Candidate {
   readonly name: string;
   readonly actions: Action[];
   readonly gear: Gear;
-  readonly usesDebt: boolean;
-  readonly usesSplit: boolean;
+  readonly debt: boolean;
+  readonly split: boolean;
 }
 
-const FINANCE: ReadonlyArray<{ name: string; actions: Action[]; debt: boolean }> = [
-  { name: "-", actions: [], debt: false },
+const FINANCE: ReadonlyArray<{ name: string; actions: Action[]; debt: boolean; split: boolean }> = [
+  { name: "none", actions: [], debt: false, split: false },
   {
-    name: "split",
+    name: "split-day1",
     actions: [{ kind: "ASK_SPLIT", day: 1, firstMinor: 33_000, secondDay: 16 }],
     debt: false,
+    split: true,
   },
   {
-    name: "friend",
+    name: "split-day9",
+    actions: [{ kind: "ASK_SPLIT", day: 9, firstMinor: 33_000, secondDay: 16 }],
+    debt: false,
+    split: true,
+  },
+  {
+    name: "marta-150",
     actions: [{ kind: "BORROW", day: 1, lender: "FRIEND", amountMinor: 15_000 }],
     debt: true,
+    split: false,
   },
   {
-    name: "quick",
+    name: "quick-150",
     actions: [{ kind: "BORROW", day: 1, lender: "QUICK", amountMinor: 15_000 }],
     debt: true,
+    split: false,
   },
 ];
 
+interface Job {
+  readonly id: GigId | "SHIFT";
+  readonly days: number;
+}
+
+const assignments = (jobs: readonly Job[], free: readonly number[]): number[][][] => {
+  const [job, ...rest] = jobs;
+  if (!job) return [[]];
+  const out: number[][][] = [];
+  const pick = (from: readonly number[], n: number): number[][] => {
+    if (n === 0) return [[]];
+    return from.flatMap((d, i) => pick(from.slice(i + 1), n - 1).map((p) => [d, ...p]));
+  };
+  for (const days of pick(free, job.days)) {
+    const left = free.filter((d) => !days.includes(d));
+    for (const tail of assignments(rest, left)) out.push([days, ...tail]);
+  }
+  return out;
+};
+
 function candidates(): Candidate[] {
   const out: Candidate[] = [];
-  const gears: Gear[] = [null, "NEW", "REFURB", "RENT"];
+  const gears: Gear[] = [null, "NEW", "REFURB"];
+  const logoOptions: LogoTerms[] = ["none", "standard", "early", "sold"];
   for (const gear of gears) {
-    for (const logo of gear ? ["no", "std", "early", "sold"] : ["no"]) {
-      for (const menu of gear && logo !== "no" ? [false, true] : [false]) {
+    for (const logo of gear ? logoOptions : (["none"] as LogoTerms[])) {
+      for (const menu of gear && logo !== "none" ? [false, true] : [false]) {
         for (const rush of gear ? [false, true] : [false]) {
           for (const flyers of [false, true]) {
             for (const courier of [false, true]) {
               for (const shifts of [0, 1, 2, 3]) {
-                for (const f of FINANCE) {
-                  const free = [3, 4, 10, 11, 17, 18];
-                  const take = (n: number) => free.splice(0, n);
+                const jobs: Job[] = [];
+                if (logo !== "none") jobs.push({ id: "LOGO", days: 2 });
+                if (menu) jobs.push({ id: "MENU", days: 2 });
+                if (rush) jobs.push({ id: "RUSH", days: 1 });
+                if (flyers) jobs.push({ id: "FLYERS", days: 1 });
+                if (courier) jobs.push({ id: "COURIER", days: 2 });
+                for (let s = 0; s < shifts; s++) jobs.push({ id: "SHIFT", days: 1 });
+                if (jobs.reduce((sum, j) => sum + j.days, 0) > FREE_DAYS.length) continue;
+                const seen = new Set<string>();
+                for (const placed of assignments(jobs, FREE_DAYS)) {
+                  const key = placed.map((d, i) => `${jobs[i]?.id}:${d.join("+")}`);
+                  const shiftsSorted = key.filter((k) => k.startsWith("SHIFT")).sort();
+                  const canonical = [
+                    ...key.filter((k) => !k.startsWith("SHIFT")),
+                    ...shiftsSorted,
+                  ].join(",");
+                  if (seen.has(canonical)) continue;
+                  seen.add(canonical);
                   const a: Action[] = [];
                   if (gear) a.push({ kind: "GEAR", day: 1, choice: gear });
                   let ok = true;
-                  const gig = (
-                    gigId: "LOGO" | "FLYERS" | "MENU" | "RUSH" | "COURIER",
-                    days: number,
-                    day: number,
-                    terms: "STANDARD" | "EARLY" = "STANDARD",
-                    from = 0,
-                  ) => {
-                    const picked: number[] = [];
-                    for (const d of [...free]) {
-                      if (d > from && picked.length < days) {
-                        picked.push(d);
-                        free.splice(free.indexOf(d), 1);
-                      }
+                  let logoDelivered = 0;
+                  jobs.forEach((job, i) => {
+                    const days = placed[i] ?? [];
+                    const last = days.at(-1) ?? 0;
+                    if (job.id === "SHIFT") {
+                      a.push({ kind: "SHIFT", day: 1, workDay: days[0] ?? 0 });
+                      return;
                     }
-                    if (picked.length < days) ok = false;
-                    a.push({ kind: "TAKE_GIG", day, gigId, workDays: picked, terms });
-                  };
-                  if (logo !== "no") {
-                    gig("LOGO", 2, 1, logo === "early" ? "EARLY" : "STANDARD");
-                    if (logo === "sold") a.push({ kind: "SELL_INVOICE", day: 4, gigId: "LOGO" });
-                  }
-                  if (flyers) gig("FLYERS", 1, 1);
-                  if (courier) gig("COURIER", 2, 1);
-                  if (menu) gig("MENU", 2, 9, "STANDARD", 9);
-                  if (rush) gig("RUSH", 1, 16, "STANDARD", 16);
-                  const sh = take(shifts);
-                  if (sh.length < shifts) ok = false;
-                  for (const d of sh) a.push({ kind: "SHIFT", day: 1, workDay: d });
-                  a.push(...f.actions);
-                  if (!ok) continue;
-                  out.push({
-                    name: `${gear ?? "no-gear"} logo:${logo} menu:${menu ? "y" : "n"} rush:${rush ? "y" : "n"} flyers:${flyers ? "y" : "n"} courier:${courier ? "y" : "n"} shifts:${shifts} fin:${f.name}`,
-                    actions: a,
-                    gear,
-                    usesDebt: f.debt,
-                    usesSplit: f.name === "split",
+                    if (last > GIGS[job.id].deliverBy) ok = false;
+                    let decided = 1;
+                    if (job.id === "LOGO") logoDelivered = last;
+                    if (job.id === "MENU") {
+                      decided = logoDelivered + 1;
+                      if (logoDelivered > 12 || (days[0] ?? 0) <= decided) ok = false;
+                    }
+                    if (job.id === "RUSH") {
+                      decided = 16;
+                      if ((days[0] ?? 0) <= decided) ok = false;
+                    }
+                    a.push({
+                      kind: "TAKE_GIG",
+                      day: decided,
+                      gigId: job.id,
+                      workDays: days,
+                      terms: job.id === "LOGO" && logo === "early" ? "EARLY" : "STANDARD",
+                    });
+                    if (job.id === "LOGO" && logo === "sold") {
+                      a.push({ kind: "SELL_INVOICE", day: last, gigId: "LOGO" });
+                    }
                   });
+                  if (!ok) continue;
+                  for (const f of FINANCE) {
+                    out.push({
+                      name: `${gear ?? "no-laptop"} ${placed.map((d, i) => `${jobs[i]?.id}@${d.join("+")}`).join(" ")} logo=${logo} fin=${f.name}`,
+                      actions: [...a, ...f.actions],
+                      gear,
+                      debt: f.debt,
+                      split: f.split,
+                    });
+                  }
                 }
               }
             }
@@ -94,10 +149,7 @@ function candidates(): Candidate[] {
   return out;
 }
 
-const months = Number(process.argv[2] ?? 60);
-const all = candidates();
-const started = performance.now();
-const scored = all.map((c) => {
+const score = (c: Candidate, months: number) => {
   const r = stressTest("sweep", c.actions, months);
   return {
     ...c,
@@ -105,13 +157,13 @@ const scored = all.map((c) => {
     rent: r.rentOnTime / months,
     median: r.medianCashMinor,
     worst: r.worstCashMinor,
-    owns: c.gear === "NEW" || c.gear === "REFURB" ? 1 : 0,
-    noDebt: c.usesDebt ? 0 : 1,
-    goodwill: c.usesSplit ? 0 : 1,
+    owns: c.gear ? 1 : 0,
+    noDebt: c.debt ? 0 : 1,
+    goodwill: c.split ? 0 : 1,
   };
-});
-const ms = (performance.now() - started) / (all.length * months);
-type S = (typeof scored)[number];
+};
+type S = ReturnType<typeof score>;
+
 const dominates = (a: S, b: S) =>
   a.goal >= b.goal &&
   a.median >= b.median &&
@@ -125,26 +177,54 @@ const dominates = (a: S, b: S) =>
     a.owns > b.owns ||
     a.noDebt > b.noDebt ||
     a.goodwill > b.goodwill);
-const front = scored.filter((s) => !scored.some((o) => dominates(o, s)));
-front.sort((a, b) => b.goal - a.goal || b.median - a.median);
+
+const pct = (n: number) => String(Math.round(n * 100)).padStart(3);
+const eur = (n: number) => String(n / 100).padStart(7);
 const line = (s: S) =>
-  `${String(Math.round(s.goal * 100)).padStart(4)}% rent ${String(Math.round(s.rent * 100)).padStart(3)}% med ${String(s.median / 100).padStart(7)} worst ${String(s.worst / 100).padStart(7)}  ${s.name}`;
-console.log(`plans: ${all.length}  months each: ${months}  ms/month: ${ms.toFixed(2)}`);
+  `${pct(s.goal)}% rent ${pct(s.rent)}% med ${eur(s.median)} worst ${eur(s.worst)}  ${s.name}`;
+
+const screenMonths = Number(process.argv[2] ?? 12);
+const finalMonths = Number(process.argv[3] ?? 150);
+const all = candidates();
+const started = performance.now();
+const screened = all.map((c) => score(c, screenMonths));
+console.log(`plans: ${all.length}, screened on ${screenMonths} months`);
+const take = (f: (s: S) => boolean, n: number) =>
+  screened
+    .filter(f)
+    .sort((a, b) => b.goal - a.goal || b.median - a.median)
+    .slice(0, n);
+const shortlist = new Map<string, S>();
+for (const s of [
+  ...take(() => true, 60),
+  ...take((s) => s.gear === null, 25),
+  ...take((s) => s.gear === "REFURB", 25),
+  ...take((s) => s.gear === "NEW", 25),
+  ...take((s) => s.debt, 15),
+  ...take((s) => s.split, 15),
+]) {
+  shortlist.set(s.name, s);
+}
+const finals = [...shortlist.values()].map((s) => score(s, finalMonths));
+const front = finals.filter((s) => !finals.some((o) => dominates(o, s)));
+front.sort((a, b) => b.goal - a.goal || b.median - a.median);
+console.log(`finalists: ${finals.length}, each on ${finalMonths} months`);
 console.log(
-  `reach the goal >=50%: ${scored.filter((s) => s.goal >= 0.5).length}; >=90%: ${scored.filter((s) => s.goal >= 0.9).length}`,
+  `reach goal >=50%: ${finals.filter((s) => s.goal >= 0.5).length}; >=90%: ${finals.filter((s) => s.goal >= 0.9).length}`,
 );
 console.log(`\nPARETO FRONT (${front.length})`);
-for (const s of front.slice(0, 30)) console.log(line(s));
-const best = (f: (s: S) => boolean) =>
-  [...scored].filter(f).sort((a, b) => b.goal - a.goal || b.median - a.median)[0];
-console.log("\nBEST BY ARCHETYPE");
+for (const s of front.slice(0, 25)) console.log(line(s));
+console.log("\nBEST BY ROUTE");
 for (const [label, f] of [
   ["no laptop", (s: S) => s.gear === null],
-  ["rent laptop", (s: S) => s.gear === "RENT"],
   ["refurbished", (s: S) => s.gear === "REFURB"],
   ["new laptop", (s: S) => s.gear === "NEW"],
-  ["uses debt", (s: S) => s.usesDebt],
+  ["borrowing", (s: S) => s.debt],
+  ["split rent", (s: S) => s.split],
 ] as const) {
-  const b = best(f);
-  if (b) console.log(label.padEnd(12), line(b));
+  const best = [...finals].filter(f).sort((a, b) => b.goal - a.goal || b.median - a.median)[0];
+  if (best) console.log(label.padEnd(12), line(best));
 }
+console.log(
+  `\nms per simulated month: ${((performance.now() - started) / (all.length * screenMonths + finals.length * finalMonths)).toFixed(2)}`,
+);

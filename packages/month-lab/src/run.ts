@@ -143,7 +143,7 @@ function attempt(
   const applyDay = (day: number): Effect | null => {
     for (const [i, a] of options.actions.entries()) {
       if (a.day !== day) continue;
-      if (a.kind === "GEAR" && plan.gearPurchase?.actionIndex === i && a.choice !== "RENT") {
+      if (a.kind === "GEAR" && plan.gearPurchase?.actionIndex === i) {
         const spec = GEAR[a.choice];
         const ok = send(
           {
@@ -228,7 +228,7 @@ function attempt(
 export function runMonth(options: RunOptions): EngineRun {
   const effects: Effect[] = [];
   const seen = new Set<string>();
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 120; i++) {
     const result = attempt(options, effects, seen);
     if ("done" in result) return result.done;
     effects.push(result.restart);

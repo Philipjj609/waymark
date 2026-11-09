@@ -19,9 +19,13 @@ import {
   REFURB_FAILS_ONE_IN,
   RENT_LATE,
   RUSH_APPEARS,
+  RUSH_CHANCE_IN_FOUR,
   RUSH_WINDOW_DAYS,
   SALARY,
   SHIFT,
+  SLOW_WEEK,
+  SMALL_LATE,
+  SPLIT_LATE,
   SURPRISE,
 } from "./scenario.js";
 
@@ -84,7 +88,7 @@ export interface Plan {
   readonly bills: readonly PlannedBill[];
   readonly incomes: readonly PlannedIncome[];
   readonly gigs: readonly AcceptedGig[];
-  readonly gearChoice: "NEW" | "REFURB" | "RENT" | null;
+  readonly gearChoice: "NEW" | "REFURB" | null;
   readonly gearPurchase: { readonly actionIndex: number; readonly day: number } | null;
   readonly usedDays: ReadonlySet<number>;
   readonly shifts: number;
@@ -94,7 +98,8 @@ export interface Plan {
   readonly phoneCutFrom: number | null;
   readonly splitAgreed: boolean;
   readonly landlordAsks: number;
-  readonly rushOpens: number;
+  readonly rushOpens: number | null;
+  readonly slowWeek: boolean;
   readonly menuOpens: number | null;
   readonly surpriseDay: number | null;
 }
@@ -118,11 +123,14 @@ function draws(seed: string) {
   const happens = surprise.int(1, SURPRISE.chanceOneIn) === 1;
   const surpriseDay = surprise.int(SURPRISE.days[0], SURPRISE.days[1]);
   const surpriseMinor = surprise.int(SURPRISE.steps[0], SURPRISE.steps[1]) * SURPRISE.stepMinor;
+  const rush = createRng(seed, "rush-opens");
+  const rushDay = rush.int(RUSH_APPEARS[0], RUSH_APPEARS[1]);
   return {
     delay,
     surprise: happens ? { day: surpriseDay, minor: surpriseMinor } : null,
     refurbFails: createRng(seed, "refurb").int(1, REFURB_FAILS_ONE_IN) === 1,
-    rushOpens: createRng(seed, "rush-opens").int(RUSH_APPEARS[0], RUSH_APPEARS[1]),
+    rushOpens: rush.int(1, 4) <= RUSH_CHANCE_IN_FOUR ? rushDay : null,
+    slowWeek: createRng(seed, "slow-week").int(1, SLOW_WEEK.chanceOneIn) === 1,
   };
 }
 
@@ -203,6 +211,7 @@ export function buildPlan(
       amountMinor: luck.surprise.minor,
       dueDay: luck.surprise.day,
       account: "EXPENSE:Health",
+      late: SMALL_LATE,
       revealDay: luck.surprise.day,
       auto: false,
     });
@@ -224,6 +233,9 @@ export function buildPlan(
 
   const phoneLate = lateFirst.get("phone");
   const phoneCutFrom = phoneLate ?? null;
+
+  const repairLate = lateFirst.get("repair");
+  const stress = options.payEverythingAutomatically === true;
 
   const applyAction = (a: Action, i: number): unknown => {
     if (voided.has(i)) {
@@ -253,19 +265,22 @@ export function buildPlan(
       case "GEAR": {
         if (gearChoice) return refuse(i, "ALREADY_EQUIPPED", "You already sorted out a laptop.");
         gearChoice = a.choice;
-        if (a.choice !== "RENT") gearPurchase = { actionIndex: i, day: a.day };
+        gearPurchase = { actionIndex: i, day: a.day };
         return;
       }
       case "TAKE_GIG": {
         const spec = GIGS[a.gigId];
         const closes = closingDay(a.gigId, luck.rushOpens, menuOpens);
         const opens = a.gigId === "RUSH" ? luck.rushOpens : a.gigId === "MENU" ? menuOpens : 1;
-        if (opens === null || a.day < opens || closes === null || a.day > closes) {
+        // A stress test asks whether the plan survives other futures, so a rush job counts on the
+        // day it appears there, not on the day it happened to appear in the month you played.
+        const decided = stress && a.gigId === "RUSH" && opens !== null ? opens : a.day;
+        if (opens === null || decided < opens || closes === null || decided > closes) {
           return refuse(i, "OFFER_NOT_OPEN", `${spec.title} is not on offer on day ${a.day}.`);
         }
         if (
           phoneCutFrom !== null &&
-          a.day >= phoneCutFrom &&
+          decided >= phoneCutFrom &&
           a.gigId !== "LOGO" &&
           a.gigId !== "FLYERS" &&
           a.gigId !== "COURIER"
@@ -280,14 +295,17 @@ export function buildPlan(
           return refuse(i, "ALREADY_TAKEN", "You already took that job.");
         }
         if (spec.needsGear && !gearChoice) {
-          return refuse(i, "NEEDS_GEAR", "This job needs a laptop. Buy, repair or rent one first.");
+          return refuse(i, "NEEDS_GEAR", "This job needs a laptop. Buy one first.");
+        }
+        if (spec.needsGear && repairLate !== undefined && a.workDays.some((d) => d >= repairLate)) {
+          return refuse(i, "LAPTOP_DEAD", "The laptop stays broken until the repair is paid.");
         }
         const days = [...a.workDays].sort((x, y) => x - y);
         const last = days.at(-1) ?? 0;
         if (
           days.length !== spec.workDays ||
           new Set(days).size !== days.length ||
-          days.some((d) => !canWork(d, a.day, used)) ||
+          days.some((d) => !canWork(d, decided, used)) ||
           last > spec.deliverBy
         ) {
           return refuse(
@@ -297,17 +315,6 @@ export function buildPlan(
           );
         }
         for (const d of days) used.add(d);
-        if (spec.needsGear && gearChoice === "RENT") {
-          bills.push({
-            key: `rental_${a.gigId.toLowerCase()}`,
-            label: `Laptop rental for ${spec.title}`,
-            amountMinor: GEAR.RENT.perWorkDayMinor * spec.workDays,
-            dueDay: days[0] ?? last,
-            account: "EXPENSE:Rental",
-            revealDay: 1,
-            auto: true,
-          });
-        }
         if (spec.needsGear && gearChoice === "REFURB" && luck.refurbFails) {
           if (!bills.some((b) => b.key === "repair")) {
             bills.push({
@@ -316,6 +323,7 @@ export function buildPlan(
               amountMinor: GEAR.REFURB_REPAIR_MINOR,
               dueDay: (days[0] ?? last) + 1,
               account: "EXPENSE:Repairs",
+              late: SMALL_LATE,
               revealDay: (days[0] ?? last) + 1,
               auto: false,
             });
@@ -324,7 +332,10 @@ export function buildPlan(
         const early = a.terms === "EARLY";
         const band = early ? EARLY_TERMS.payDelay : spec.payDelay;
         const payMinor = early ? percentOf(spec.payMinor, EARLY_TERMS.percent) : spec.payMinor;
-        const payDay = last + luck.delay(a.gigId, band, early ? ":early" : "");
+        const drawn = last + luck.delay(a.gigId, band, early ? ":early" : "");
+        const slips =
+          luck.slowWeek && drawn >= SLOW_WEEK.payWindow[0] && drawn <= SLOW_WEEK.payWindow[1];
+        const payDay = slips ? drawn + SLOW_WEEK.slipDays : drawn;
         gigs.push({
           gigId: a.gigId,
           workDays: days,
@@ -349,7 +360,12 @@ export function buildPlan(
         incomes.push({
           key: `invoice_sale_${a.gigId.toLowerCase()}`,
           label: `Invoice sold (${GIGS[a.gigId].title})`,
-          amountMinor: percentOf(gig.payMinor, INVOICE_SALE_PERCENT),
+          amountMinor: percentOf(
+            gig.payMinor,
+            luck.slowWeek && a.day >= SLOW_WEEK.saleFromDay
+              ? SLOW_WEEK.salePercent
+              : INVOICE_SALE_PERCENT,
+          ),
           day: a.day + 1,
           account: "REVENUE:Freelance",
           certain: true,
@@ -378,7 +394,7 @@ export function buildPlan(
             amountMinor: a.firstMinor,
             dueDay: rent.dueDay,
             account: "EXPENSE:Rent",
-            late: RENT_LATE,
+            late: SPLIT_LATE,
             revealDay: 1,
             auto: false,
           },
@@ -388,7 +404,7 @@ export function buildPlan(
             amountMinor: rent.amountMinor - a.firstMinor,
             dueDay: a.secondDay,
             account: "EXPENSE:Rent",
-            late: RENT_LATE,
+            late: SPLIT_LATE,
             revealDay: 1,
             auto: false,
           },
@@ -408,10 +424,17 @@ export function buildPlan(
         const day = a.day + 1;
         if (a.lender === "FRIEND") {
           if (borrowedFriend) return refuse(i, "ALREADY_BORROWED", "You already asked Marta.");
-          if (a.amountMinor > FRIEND.maxMinor || a.day >= FRIEND.repayDay) {
-            return refuse(i, "LOAN_REFUSED", "Marta can lend at most €200, repaid by day 20.", {
-              amountMinor: FRIEND.maxMinor,
-            });
+          const limit =
+            luck.slowWeek && a.day >= SLOW_WEEK.friendFromDay
+              ? SLOW_WEEK.friendMaxMinor
+              : FRIEND.maxMinor;
+          if (a.amountMinor > limit || a.day + 1 >= FRIEND.repayDay) {
+            return refuse(
+              i,
+              "LOAN_REFUSED",
+              `Marta can lend at most €${(limit - (limit % 100)) / 100}, repaid by day ${FRIEND.repayDay}.`,
+              { amountMinor: limit },
+            );
           }
           borrowedFriend = true;
           incomes.push({
@@ -437,6 +460,9 @@ export function buildPlan(
         if (borrowedQuick)
           return refuse(i, "ALREADY_BORROWED", "You already have a QuickCash loan.");
         const due = Math.min(a.day + QUICKCASH.termDays, LAST_DAY);
+        if (due <= a.day + 1) {
+          return refuse(i, "LOAN_REFUSED", "It is too late in the month to take this loan.");
+        }
         if (a.amountMinor > QUICKCASH.maxMinor) {
           return refuse(i, "LOAN_REFUSED", "QuickCash lends at most €300.", {
             amountMinor: QUICKCASH.maxMinor,
@@ -481,7 +507,9 @@ export function buildPlan(
         return;
     }
   };
-  for (const [i, a] of actions.entries()) applyAction(a, i);
+  // Day order, not list order: a laptop bought on day 10 cannot do work on day 3.
+  const inDayOrder = [...actions.entries()].sort((x, y) => x[1].day - y[1].day || x[0] - y[0]);
+  for (const [i, a] of inDayOrder) applyAction(a, i);
 
   // Client money, unless the invoice was sold.
   for (const g of gigs) {
@@ -536,6 +564,7 @@ export function buildPlan(
     splitAgreed,
     landlordAsks,
     rushOpens: luck.rushOpens,
+    slowWeek: luck.slowWeek,
     menuOpens,
     surpriseDay: luck.surprise?.day ?? null,
   };
@@ -549,8 +578,8 @@ function canWork(workDay: number, today: number, used: ReadonlySet<number>): boo
   return workDay > today && FREE_DAYS.includes(workDay) && !used.has(workDay);
 }
 
-function closingDay(gig: GigId, rushOpens: number, menuOpens: number | null): number | null {
-  if (gig === "RUSH") return rushOpens + RUSH_WINDOW_DAYS - 1;
+function closingDay(gig: GigId, rushOpens: number | null, menuOpens: number | null): number | null {
+  if (gig === "RUSH") return rushOpens === null ? null : rushOpens + RUSH_WINDOW_DAYS - 1;
   if (gig === "MENU") return menuOpens === null ? null : menuOpens + REFERRAL_WINDOW_DAYS - 1;
   return OPEN_UNTIL[gig] ?? null;
 }

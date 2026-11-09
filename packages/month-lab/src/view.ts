@@ -2,7 +2,16 @@ import type { DomainEvent } from "@fle/contracts";
 import { type Action, isPlanAction } from "./actions.js";
 import { type OfferView, offersOn, type Plan, type Refusal } from "./plan.js";
 import { type EngineRun, runMonth } from "./run.js";
-import { FREE_DAYS, GIGS, GOAL_CASH, LANDLORD, LAST_DAY } from "./scenario.js";
+import {
+  FREE_DAYS,
+  FRIEND,
+  GIGS,
+  GOAL_CASH,
+  INVOICE_SALE_PERCENT,
+  LANDLORD,
+  LAST_DAY,
+  SLOW_WEEK,
+} from "./scenario.js";
 
 export interface Movement {
   readonly day: number;
@@ -11,15 +20,7 @@ export interface Movement {
 }
 
 export interface Stop {
-  readonly kind:
-    | "MONTH_START"
-    | "DECISION"
-    | "MONEY_IN"
-    | "NEW_OFFER"
-    | "OFFER_ENDING"
-    | "WORK_DELIVERED"
-    | "WATCH"
-    | "MONTH_END";
+  readonly kind: "MONTH_START" | "DECISION" | "NEW_OFFER" | "OFFER_ENDING" | "WATCH" | "MONTH_END";
   readonly label: string;
 }
 
@@ -51,6 +52,17 @@ export interface Outcome {
 }
 
 export type ForesightSignature = "MATCHED" | "COUNTED_PROMISED_MONEY" | "OFF_BY_A_BILL" | "OTHER";
+
+/** A guess held against what was knowable at the moment it was made. */
+export interface PinReading {
+  readonly guessMinor: number;
+  readonly knowableLowMinor: number;
+  readonly lowDay: number;
+  readonly gapMinor: number;
+  readonly signature: ForesightSignature;
+  /** Promised payments that together explain the gap exactly. Labels, never draws. */
+  readonly promisedLabels: readonly string[];
+}
 
 export interface Foresight {
   readonly day: number;
@@ -87,12 +99,18 @@ export interface MonthView {
   readonly movements: readonly Movement[];
   readonly foresight: readonly Foresight[];
   readonly outcome: Outcome | null;
-  /** Reproducible proof of this exact branch: same inputs, same hash. */
+  readonly pinReading: PinReading | null;
+  /** Terms as they stand today. They can change, and only for days already reached. */
+  readonly terms: { readonly friendMaxMinor: number; readonly invoiceSalePercent: number };
+  /**
+   * Reproducible proof of this exact branch. Month end only: before that the hash and event count
+   * commit to bills the player has not met yet, and could be matched against guesses.
+   */
   readonly receipt: {
     readonly stateHash: string;
     readonly events: number;
     readonly commands: number;
-  };
+  } | null;
 }
 
 const cashOf = (run: EngineRun) => run.cashByDay.get(run.day) ?? 0;
@@ -154,8 +172,22 @@ function feedFor(run: EngineRun, actions: readonly Action[]): FeedItem[] {
       "GOOD",
     );
   }
-  if (!cutBefore(plan.rushOpens)) {
+  if (plan.rushOpens !== null && !cutBefore(plan.rushOpens)) {
     add(plan.rushOpens, GIGS.RUSH.client, "Need a poster fast. Interested?", "GOOD");
+  }
+  if (plan.slowWeek) {
+    add(
+      SLOW_WEEK.friendFromDay,
+      "Marta",
+      "Money's tight this month. I could only lend €100 now.",
+      "WARN",
+    );
+    add(
+      SLOW_WEEK.saleFromDay,
+      "Invoice buyer",
+      `Slow week for everyone. We're paying ${SLOW_WEEK.salePercent}% now.`,
+      "WARN",
+    );
   }
   if (plan.phoneCutFrom !== null) {
     add(
@@ -210,16 +242,6 @@ function stopsAt(run: EngineRun, day: number): Stop[] {
   const { plan } = run;
   const stops: Stop[] = [];
   if (day === 1) stops.push({ kind: "MONTH_START", label: "Your month begins" });
-  for (const i of plan.incomes) {
-    if (i.day === day && (i.key === "salary" || i.gigId)) {
-      stops.push({ kind: "MONEY_IN", label: i.label });
-    }
-  }
-  for (const g of plan.gigs) {
-    if (g.deliveredDay === day) {
-      stops.push({ kind: "WORK_DELIVERED", label: `${GIGS[g.gigId].title} delivered` });
-    }
-  }
   for (const o of offersOn(day, plan)) {
     const opens = o.gigId === "RUSH" ? plan.rushOpens : o.gigId === "MENU" ? plan.menuOpens : 1;
     if (opens === day && day > 1) stops.push({ kind: "NEW_OFFER", label: `New: ${o.title}` });
@@ -257,7 +279,8 @@ function outcomeOf(run: EngineRun): Outcome {
   return {
     cashMinor,
     goalMinor: GOAL_CASH,
-    goalMet: cashMinor >= GOAL_CASH && unpaidMinor === 0 && referenceIntact,
+    goalMet:
+      cashMinor >= GOAL_CASH && unpaidMinor === 0 && referenceIntact && plan.goodwill.friend >= 1,
     unpaidMinor,
     stillOwedToYouMinor,
     referenceIntact,
@@ -266,15 +289,36 @@ function outcomeOf(run: EngineRun): Outcome {
   };
 }
 
-function subsetSums(values: readonly number[]): Set<number> {
-  let sums = new Set<number>();
-  for (const v of values) {
-    const next = new Set(sums);
-    next.add(v);
-    for (const s of sums) next.add(s + v);
-    sums = next;
+function readPin(before: EngineRun, guessMinor: number): PinReading {
+  const forecast = forecastFrom(before);
+  const low = forecast.reduce((m, f) => (f.knownCashMinor < m.knownCashMinor ? f : m));
+  const gapMinor = guessMinor - low.knownCashMinor;
+  const pending = before.plan.gigs
+    .filter((g) => g.soldOn === null && g.payDay > before.day)
+    .map((g) => ({ label: GIGS[g.gigId].title, minor: g.payMinor }));
+  const bills = before.plan.bills
+    .filter((b) => b.revealDay <= before.day)
+    .map((b) => b.amountMinor);
+  let promisedLabels: string[] = [];
+  for (let mask = 1; mask < 1 << pending.length && gapMinor > 0; mask++) {
+    const picked = pending.filter((_, i) => mask & (1 << i));
+    if (picked.reduce((sum, p) => sum + p.minor, 0) === gapMinor) {
+      promisedLabels = picked.map((p) => p.label);
+      break;
+    }
   }
-  return sums;
+  let signature: ForesightSignature = "OTHER";
+  if (Math.abs(gapMinor) <= 500) signature = "MATCHED";
+  else if (promisedLabels.length > 0) signature = "COUNTED_PROMISED_MONEY";
+  else if (gapMinor > 0 && bills.includes(gapMinor)) signature = "OFF_BY_A_BILL";
+  return {
+    guessMinor,
+    knowableLowMinor: low.knownCashMinor,
+    lowDay: low.day,
+    gapMinor,
+    signature,
+    promisedLabels,
+  };
 }
 
 function foresightOf(seed: string, actions: readonly Action[]): Foresight[] {
@@ -282,23 +326,13 @@ function foresightOf(seed: string, actions: readonly Action[]): Foresight[] {
   actions.forEach((a, i) => {
     if (a.kind !== "PREDICT") return;
     const before = runMonth({ seed, actions: actions.slice(0, i), untilDay: a.day });
-    const knowable = Math.min(...forecastFrom(before).map((f) => f.knownCashMinor));
-    const gapMinor = a.lowMinor - knowable;
-    const pending = before.plan.gigs
-      .filter((g) => g.soldOn === null && g.payDay > a.day)
-      .map((g) => g.payMinor);
-    const bills = before.plan.bills.filter((b) => b.revealDay <= a.day).map((b) => b.amountMinor);
-    let signature: ForesightSignature = "OTHER";
-    if (Math.abs(gapMinor) <= 500) signature = "MATCHED";
-    else if (gapMinor > 0 && subsetSums(pending).has(gapMinor)) {
-      signature = "COUNTED_PROMISED_MONEY";
-    } else if (gapMinor > 0 && bills.includes(gapMinor)) signature = "OFF_BY_A_BILL";
+    const pin = readPin(before, a.lowMinor);
     out.push({
       day: a.day,
       predictedLowMinor: a.lowMinor,
-      knowableLowMinor: knowable,
-      gapMinor,
-      signature,
+      knowableLowMinor: pin.knowableLowMinor,
+      gapMinor: pin.gapMinor,
+      signature: pin.signature,
       reason: a.reason,
     });
   });
@@ -311,6 +345,7 @@ export interface ViewRequest {
   readonly atDay?: number;
   readonly fromDay?: number;
   readonly watchBelowMinor?: number;
+  readonly pinMinor?: number;
 }
 
 /** One player-visible moment of one branch. Nothing undrawn leaves this function. */
@@ -322,12 +357,15 @@ export function monthView(request: ViewRequest): MonthView {
   const head = run.day;
   const forecast = forecastFrom(run);
   const lowest = forecast.reduce((m, f) => (f.knownCashMinor < m.knownCashMinor ? f : m));
-  const engineRefusals: Refusal[] = run.rejected.map((r) => ({
-    actionIndex: r.actionIndex,
-    code: r.code,
-    message:
-      r.code === "INSUFFICIENT_FUNDS" ? "You do not have enough cash for that today." : r.message,
-  }));
+  const planRefused = new Set(run.plan.refusals.map((r) => r.actionIndex));
+  const engineRefusals: Refusal[] = run.rejected
+    .filter((r) => !planRefused.has(r.actionIndex))
+    .map((r) => ({
+      actionIndex: r.actionIndex,
+      code: r.code,
+      message:
+        r.code === "INSUFFICIENT_FUNDS" ? "You do not have enough cash for that today." : r.message,
+    }));
   const isEnd = head >= LAST_DAY && run.awaitingBills.length === 0;
   const stops: Stop[] = [...stopsAt(run, head)];
   if (run.awaitingBills.length > 0) {
@@ -364,7 +402,7 @@ export function monthView(request: ViewRequest): MonthView {
         amountMinor: g.payMinor,
         // The band narrows only with days that have passed, never with the draw.
         earliestDay: Math.max(g.earliestPay, head + 1),
-        latestDay: g.latestPay,
+        latestDay: Math.max(g.latestPay, head + 1),
         delivered: g.deliveredDay <= head,
       })),
     offers: offersOn(head, run.plan),
@@ -377,11 +415,24 @@ export function monthView(request: ViewRequest): MonthView {
     movements: movementsOf(run.state.events, head),
     foresight: foresightOf(seed, actions),
     outcome: isEnd ? outcomeOf(run) : null,
-    receipt: {
-      stateHash: run.state.headHash,
-      events: run.state.events.length,
-      commands: run.commandCount,
+    pinReading: request.pinMinor === undefined ? null : readPin(run, request.pinMinor),
+    terms: {
+      friendMaxMinor:
+        run.plan.slowWeek && head >= SLOW_WEEK.friendFromDay
+          ? SLOW_WEEK.friendMaxMinor
+          : FRIEND.maxMinor,
+      invoiceSalePercent:
+        run.plan.slowWeek && head >= SLOW_WEEK.saleFromDay
+          ? SLOW_WEEK.salePercent
+          : INVOICE_SALE_PERCENT,
     },
+    receipt: isEnd
+      ? {
+          stateHash: run.state.headHash,
+          events: run.state.events.length,
+          commands: run.commandCount,
+        }
+      : null,
   };
 }
 
@@ -397,7 +448,7 @@ export interface StressResult {
 }
 
 /** The same plan across other futures. Aggregates only: individual draws never leave. */
-export function stressTest(seed: string, actions: readonly Action[], months = 200): StressResult {
+export function stressTest(seed: string, actions: readonly Action[], months = 120): StressResult {
   const plan = actions.filter(isPlanAction);
   const ends: number[] = [];
   let goalMet = 0;

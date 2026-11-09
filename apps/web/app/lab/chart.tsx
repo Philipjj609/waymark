@@ -1,7 +1,8 @@
 "use client";
 
 import type { MonthView } from "@fle/month-lab";
-import { GOAL_CASH, LAST_DAY } from "@fle/month-lab/scenario";
+import { FREE_DAYS, GOAL_CASH, LAST_DAY } from "@fle/month-lab/scenario";
+import type { PointerEvent } from "react";
 
 export interface ChartBranch {
   readonly id: string;
@@ -17,11 +18,14 @@ const RIGHT = 24;
 const TOP = 18;
 const BOTTOM = 34;
 
-const euros = (minor: number) => `€${(minor - (minor % 100)) / 100}`;
+const euros = (minor: number) => {
+  const whole = (Math.abs(minor) - (Math.abs(minor) % 100)) / 100;
+  return `${minor < 0 ? "-" : ""}€${whole.toLocaleString("en-US")}`;
+};
 
 /**
- * The month as a chart of safe water. Depth is cash: above the zero line you are afloat, below it
- * you are aground. The course line is what has actually happened, from the ledger.
+ * The month as a chart of safe water: above the zero line you are afloat, below it you are out of
+ * money. The solid course is what actually happened, from the ledger.
  */
 export function MonthChart(props: {
   readonly view: MonthView;
@@ -29,8 +33,12 @@ export function MonthChart(props: {
   readonly activeId: string;
   readonly fogged: boolean;
   readonly pinMinor: number | null;
+  /** Set while a job is in hand: free days become places to put it. */
+  readonly dropDays: readonly number[];
+  readonly onPin: (minor: number) => void;
+  readonly nothingDecided: boolean;
 }) {
-  const { view, branches, activeId, fogged, pinMinor } = props;
+  const { view, branches, activeId, fogged, pinMinor, dropDays, onPin, nothingDecided } = props;
   const values = [
     GOAL_CASH,
     0,
@@ -48,21 +56,31 @@ export function MonthChart(props: {
       .join(" ");
 
   const active = branches.find((b) => b.id === activeId);
-  const forecastPath = path(view.forecast.map((f) => ({ day: f.day, value: f.knownCashMinor })));
   const headX = x(view.head);
   const zeroY = y(0);
-  const shoalY = y(20_000);
-  const midY = y(60_000);
   const openBills = view.bills.filter((b) => b.state !== "SETTLED");
-  const lastCash = view.cashMinor;
   const low = view.lowestKnown;
+  const columnWidth = (W - LEFT - RIGHT) / (LAST_DAY - 1);
+
+  const pinFromPointer = (e: PointerEvent<SVGSVGElement>) => {
+    if (!fogged) return;
+    const box = e.currentTarget.getBoundingClientRect();
+    const svgY = ((e.clientY - box.top) * H) / box.height;
+    const minor = Math.round(max - ((svgY - TOP) * (max - min)) / (H - TOP - BOTTOM));
+    onPin(minor - (minor % 1000));
+  };
 
   return (
     <svg
       className="chart"
+      data-fogged={fogged || undefined}
       viewBox={`0 0 ${W} ${H}`}
       role="img"
-      aria-label={`Cash over the month. Day ${view.head}, cash ${euros(lastCash)}. Lowest known cash ${fogged ? "hidden until you make your estimate" : `${euros(low.cashMinor)} on day ${low.day}`}.`}
+      aria-label={`Cash over the month. Day ${view.head}, cash ${euros(view.cashMinor)}. Lowest known cash ${fogged ? "hidden until you guess" : `${euros(low.cashMinor)} on day ${low.day}`}.`}
+      onPointerDown={pinFromPointer}
+      onPointerMove={(e) => {
+        if (e.buttons === 1) pinFromPointer(e);
+      }}
     >
       <defs>
         <pattern
@@ -84,29 +102,15 @@ export function MonthChart(props: {
         x={LEFT}
         y={TOP}
         width={W - LEFT - RIGHT}
-        height={Math.max(midY - TOP, 0)}
-        className="depth-deep"
-      />
-      <rect
-        x={LEFT}
-        y={midY}
-        width={W - LEFT - RIGHT}
-        height={Math.max(shoalY - midY, 0)}
-        className="depth-mid"
-      />
-      <rect
-        x={LEFT}
-        y={shoalY}
-        width={W - LEFT - RIGHT}
-        height={Math.max(zeroY - shoalY, 0)}
-        className="depth-shoal"
+        height={Math.max(zeroY - TOP, 0)}
+        className="water"
       />
       <rect
         x={LEFT}
         y={zeroY}
         width={W - LEFT - RIGHT}
         height={H - BOTTOM - zeroY}
-        className="depth-aground"
+        className="aground"
       />
       <line x1={LEFT} x2={W - RIGHT} y1={zeroY} y2={zeroY} className="zero-line" />
       <text x={LEFT - 8} y={zeroY + 4} textAnchor="end" className="axis-label">
@@ -116,13 +120,25 @@ export function MonthChart(props: {
         out of money
       </text>
 
+      {FREE_DAYS.map((d) => (
+        <rect
+          key={d}
+          x={x(d) - columnWidth / 2}
+          y={TOP}
+          width={columnWidth}
+          height={H - TOP - BOTTOM}
+          className="free-column"
+          data-drop={dropDays.includes(d) || undefined}
+          data-day={d}
+        />
+      ))}
+
       {[1, 8, 15, 22, 30].map((d) => (
         <text key={d} x={x(d)} y={H - 12} textAnchor="middle" className="axis-label">
           day {d}
         </text>
       ))}
 
-      <line x1={x(LAST_DAY)} x2={x(LAST_DAY)} y1={TOP} y2={H - BOTTOM} className="goal-post" />
       <line
         x1={x(LAST_DAY) - 54}
         x2={x(LAST_DAY)}
@@ -157,7 +173,7 @@ export function MonthChart(props: {
             y={TOP + 19 + i * 22}
             className="promise-label"
           >
-            {e.label}: {euros(e.amountMinor)} promised, not yet money
+            {e.label}: {euros(e.amountMinor)} promised
           </text>
         </g>
       ))}
@@ -167,8 +183,11 @@ export function MonthChart(props: {
         return (
           <g key={b.key} className="rock">
             <path
-              d={`M${x(day) - 7} ${zeroY + 13} L${x(day)} ${zeroY + 1} L${x(day) + 7} ${zeroY + 13} Z`}
+              d={`M${x(day) - 8} ${zeroY - 1} L${x(day)} ${zeroY - 15} L${x(day) + 8} ${zeroY - 1} Z`}
             />
+            <text x={x(day)} y={zeroY - 19} textAnchor="middle" className="rock-label">
+              {euros(b.amountMinor)}
+            </text>
             <title>
               {b.label}: {euros(b.amountMinor)}, due day {b.dueDay}
             </title>
@@ -187,7 +206,22 @@ export function MonthChart(props: {
           />
         ))}
 
-      {!fogged && <path d={forecastPath} className="forecast-line" />}
+      {!fogged && (
+        <path
+          d={path(view.forecast.map((f) => ({ day: f.day, value: f.knownCashMinor })))}
+          className="forecast-line"
+        />
+      )}
+      {!fogged && nothingDecided && (
+        <text
+          x={x(LAST_DAY) - 8}
+          y={y(view.forecast.at(-1)?.knownCashMinor ?? 0) + 22}
+          textAnchor="end"
+          className="water-label"
+        >
+          if you do nothing
+        </text>
+      )}
       {fogged && view.head < LAST_DAY && (
         <rect
           x={headX}
@@ -212,13 +246,13 @@ export function MonthChart(props: {
         <g className="pin">
           <line x1={headX} x2={x(LAST_DAY)} y1={y(pinMinor)} y2={y(pinMinor)} />
           <text x={x(LAST_DAY) - 8} y={y(pinMinor) - 6} textAnchor="end">
-            your estimate {euros(pinMinor)}
+            your guess {euros(pinMinor)}
           </text>
         </g>
       )}
 
       <line x1={headX} x2={headX} y1={TOP} y2={H - BOTTOM} className="today-line" />
-      <circle cx={headX} cy={y(lastCash)} r={7} className="boat" />
+      <circle cx={headX} cy={y(view.cashMinor)} r={7} className="boat" />
       {!fogged && low.cashMinor < 0 && (
         <text x={x(low.day)} y={y(low.cashMinor) + 18} textAnchor="middle" className="short-label">
           {euros(-low.cashMinor)} short on day {low.day}

@@ -6,6 +6,7 @@ export {
   type RunRequest,
   RunRequestSchema,
 } from "./actions.js";
+export { type IntentModel, type IntentResult, readIntent } from "./intent.js";
 export type { OfferView, Refusal } from "./plan.js";
 export * as scenario from "./scenario.js";
 export {
@@ -14,6 +15,7 @@ export {
   type Movement,
   monthView,
   type Outcome,
+  type PinReading,
   type StressResult,
   stressTest,
 } from "./view.js";

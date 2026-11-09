@@ -3,10 +3,10 @@
  * of money. Temporary and scoped to .lab; no decision on U1–U9, the palette or the brand.
  */
 .lab {
-  --chart-deep: #a9d6e4;
-  --chart-mid: #c7e6ee;
-  --chart-shoal: #e4f4f6;
-  --chart-land: #e8d9a6;
+  --chart-mid: #cfe8ef;
+  --aground: #f3c9bd;
+  --free: #ffffff;
+  --drop: #ffd166;
   --chart-ink: #10324a;
   --chart-muted: #456376;
   --chart-course: #b0177c;
@@ -107,17 +107,33 @@
   width: 100%;
 }
 
-.depth-deep {
-  fill: var(--chart-deep);
-}
-.depth-mid {
+.water {
   fill: var(--chart-mid);
 }
-.depth-shoal {
-  fill: var(--chart-shoal);
+
+.aground {
+  fill: var(--aground);
 }
-.depth-aground {
-  fill: var(--chart-land);
+
+.free-column {
+  fill: var(--free);
+  opacity: 0.55;
+}
+
+.free-column[data-drop] {
+  cursor: copy;
+  fill: var(--drop);
+  opacity: 0.85;
+}
+
+.rock-label {
+  fill: var(--buoy-red);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.chart[data-fogged] {
+  cursor: crosshair;
 }
 
 .zero-line {
@@ -258,7 +274,7 @@
   cursor: pointer;
   font: inherit;
   font-size: 0.8rem;
-  min-height: 34px;
+  min-height: 44px;
   padding: 0;
   width: 100%;
 }
@@ -269,7 +285,14 @@
 }
 
 .lab-strip button[data-free] {
-  background: var(--chart-land);
+  background: var(--page);
+  border: 1px dashed var(--chart-muted);
+}
+
+.lab-strip button[data-drop] {
+  background: var(--drop);
+  border-style: solid;
+  cursor: copy;
 }
 
 .lab-strip button[data-work] {
@@ -469,9 +492,173 @@
   background: var(--buoy-green);
 }
 
+.lab-tray {
+  margin: 12px 0;
+}
+
+.lab-tokens {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr));
+}
+
+.lab-token {
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  font-size: 0.9rem;
+  padding: 10px;
+}
+
+.lab-token[data-held] {
+  border-color: var(--chart-course);
+  box-shadow: 0 0 0 2px var(--chart-course);
+}
+
+.lab-token > button:first-child {
+  cursor: grab;
+  display: block;
+  text-align: left;
+  touch-action: none;
+  width: 100%;
+}
+
+.lab-token > button:first-child span {
+  display: block;
+  font-size: 0.85rem;
+}
+
+.lab-token > button:first-child[aria-pressed="true"] {
+  background: var(--chart-course);
+}
+
+.lab-token p {
+  color: var(--chart-muted);
+  font-size: 0.85rem;
+  margin: 6px 0;
+}
+
+.lab-token label {
+  display: block;
+  font-size: 0.85rem;
+}
+
+.lab-token strong + button {
+  display: block;
+  margin-top: 6px;
+  width: 100%;
+}
+
+.lab-ghost {
+  background: var(--chart-course);
+  color: #ffffff;
+  font-weight: 650;
+  padding: 6px 12px;
+  pointer-events: none;
+  position: fixed;
+  z-index: 10;
+}
+
+.lab-notice {
+  color: var(--buoy-red);
+  font-weight: 600;
+  margin-top: 8px;
+}
+
+.lab-legend {
+  color: var(--chart-muted);
+  font-size: 0.82rem;
+  margin: 8px 0 0;
+  max-width: none;
+}
+
+.lab-legend span {
+  margin-left: 14px;
+}
+
+.lab-legend span:first-child {
+  margin-left: 0;
+}
+
+.key-rock {
+  color: var(--buoy-red);
+}
+
+.key-promise,
+.key-free {
+  display: inline-block;
+  height: 12px;
+  margin-right: 4px;
+  vertical-align: -1px;
+  width: 16px;
+}
+
+.key-promise {
+  background: repeating-linear-gradient(45deg, var(--buoy-green) 0 2px, transparent 2px 5px);
+}
+
+.key-free {
+  border: 1px dashed var(--chart-muted);
+}
+
+.key-work {
+  color: var(--chart-ink);
+}
+
+.lab-idea form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lab-idea form label {
+  flex-basis: 100%;
+  font-size: 0.85rem;
+}
+
+.lab-idea input {
+  flex: 1;
+  font: inherit;
+  min-height: 40px;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.lab .lab-example {
+  border-style: dashed;
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.lab-intent {
+  background: #f7ecf4;
+  margin-top: 8px;
+  padding: 10px;
+}
+
+.lab-voices {
+  list-style: none;
+  padding: 0;
+}
+
+.lab-voices li {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  margin-bottom: 6px;
+}
+
+.lab-voices span {
+  color: var(--chart-muted);
+  font-family: var(--sans);
+  font-size: 0.9rem;
+}
+
 @media (max-width: 640px) {
   .lab-strip {
-    grid-template-columns: repeat(10, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .rock-label {
+    display: none;
   }
 
   .promise-label {
