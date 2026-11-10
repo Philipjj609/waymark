@@ -106,6 +106,33 @@ export const providerEvents = pgTable("provider_events", {
   receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** Durable, purpose-specific payment outbox. No provider HTTP call runs in this transaction. */
+export const checkoutWork = pgTable("checkout_work", {
+  operationId: text("operation_id").primaryKey(),
+  phase: text("phase").notNull(),
+  action: text("action").notNull(),
+  approveUrl: text("approve_url"),
+  leaseToken: text("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  attempts: integer("attempts").notNull().default(0),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Verified API facts survive a crash between readback and economic commit. */
+export const checkoutFacts = pgTable(
+  "checkout_facts",
+  {
+    eventType: text("event_type").notNull(),
+    eventId: text("event_id").notNull(),
+    operationId: text("operation_id").notNull(),
+    payload: jsonb("payload").notNull(),
+    applied: integer("applied").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.eventType, t.eventId] })],
+);
+
 export const outbox = pgTable(
   "outbox",
   {

@@ -1,4 +1,4 @@
-import { connectPostgres, migrate, PgWorldStore } from "@fle/persistence";
+import { connectPostgres, type Db, migrate, PgWorldStore } from "@fle/persistence";
 import { InMemoryWorldStore, type WorldStore } from "@fle/server";
 
 /**
@@ -15,6 +15,8 @@ import { InMemoryWorldStore, type WorldStore } from "@fle/server";
 const holder = globalThis as typeof globalThis & {
   __waymarkWorldStore?: WorldStore;
   __waymarkClose?: () => Promise<void>;
+  __waymarkPaymentDb?: () => Promise<Db>;
+  __waymarkStopCheckout?: () => Promise<void>;
 };
 
 export function getStore(): WorldStore {
@@ -24,10 +26,19 @@ export function getStore(): WorldStore {
 
 /** Test hook: close and drop the process store so the next request builds a fresh one (a restart). */
 export async function resetStoreForTests(): Promise<void> {
+  await holder.__waymarkStopCheckout?.();
   const close = holder.__waymarkClose;
   holder.__waymarkWorldStore = undefined;
   holder.__waymarkClose = undefined;
+  holder.__waymarkPaymentDb = undefined;
+  holder.__waymarkStopCheckout = undefined;
   await close?.();
+}
+
+/** Same pool/migration barrier as ordinary world commands; never a second financial store. */
+export async function getPaymentDatabase(): Promise<Db | null> {
+  getStore();
+  return holder.__waymarkPaymentDb ? holder.__waymarkPaymentDb() : null;
 }
 
 function createStore(kind: string): WorldStore {
@@ -53,7 +64,14 @@ function lazyPostgres(url: string): WorldStore {
     });
     return ready;
   };
+  holder.__waymarkPaymentDb = async () => {
+    await store();
+    return db;
+  };
   return {
+    get supportsCheckout() {
+      return process.env.WAYMARK_PAYPAL === "1" ? (true as const) : undefined;
+    },
     create: async (input) => (await store()).create(input),
     load: async (worldId, owner) => (await store()).load(worldId, owner),
     commit: async (input) => (await store()).commit(input),
