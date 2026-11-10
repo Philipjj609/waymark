@@ -11,18 +11,18 @@ with explicit `RUN_PAYPAL_SANDBOX_E2E=1` and an isolated local PostgreSQL databa
 Production `next build` / `next start`; published Sandbox test-card path, not buyer login/approval.
 Result: **1 passed (11.1s)**. No Live calls, deployment, webhook registration or Render changes.
 
-| Evidence | Value |
-| --- | --- |
-| World | `wld_f555adc6cea6e2d435ea4194e7c31e55` |
-| Operation | `pop_3c9b3af03ddf43c9296ca0dddb9a3cb6` |
-| Sandbox order | `2B723134DD542113H` |
-| GET-verified completed capture | `86W31933M27156612` |
-| Mapped Sandbox test amount | 3000 minor units, EUR |
-| Fictional obligation | `obl_phone_d8` (test fixture only) |
-| Replayed head hash | `4350a8e73722c0b2e17cd9a0739c9baa2b6cbeb11221f96496b9a49094310297` |
-| Persisted commands | 5 |
-| Settlement events for the bill | 1 |
-| Unbalanced persisted journals | 0 |
+| Evidence                       | Value                                                              |
+| ------------------------------ | ------------------------------------------------------------------ |
+| World                          | `wld_f555adc6cea6e2d435ea4194e7c31e55`                             |
+| Operation                      | `pop_3c9b3af03ddf43c9296ca0dddb9a3cb6`                             |
+| Sandbox order                  | `2B723134DD542113H`                                                |
+| GET-verified completed capture | `86W31933M27156612`                                                |
+| Mapped Sandbox test amount     | 3000 minor units, EUR                                              |
+| Fictional obligation           | `obl_phone_d8` (test fixture only)                                 |
+| Replayed head hash             | `4350a8e73722c0b2e17cd9a0739c9baa2b6cbeb11221f96496b9a49094310297` |
+| Persisted commands             | 5                                                                  |
+| Settlement events for the bill | 1                                                                  |
+| Unbalanced persisted journals  | 0                                                                  |
 
 The browser started checkout through the real page and authenticated API. The server reserved
 fictional funds and persisted its job before provider I/O. A server GET verified the completed
@@ -40,19 +40,20 @@ Traces, video and cookie exports are disabled. No secrets appear in this evidenc
 
 ## Regression evidence
 
-- `pnpm verify`, with isolated `TEST_DATABASE_URL`: **39 files passed; 574 passed, 1 skipped**;
+- `pnpm verify`, with isolated `TEST_DATABASE_URL`: **39 files passed; 584 passed, 1 skipped**;
   lint/typecheck passed; generated contract schemas current.
-- Checkout integration tests: **16 passed**, covering both PGlite and PostgreSQL, ownership,
+- Checkout integration tests: **26 passed**, covering both PGlite and PostgreSQL, ownership,
   server command IDs, approval without settlement, capture/cancel exclusion, lost response and
-  restart, initial GET outage, expired capture lease and unknown refund totals.
+  restart, initial GET outage, expired capture lease, unknown refund totals, stale reads after an
+  uncertain capture, crashes on either side of economic commit, atomic rollback and queued intent.
 - HTTP tests: **4 passed**, covering CSRF/ownership, read-only status, historical-operation
   cancellation and strict/capped request bodies.
 - `pnpm --filter @fle/web build`: passed, including checkout and return routes.
 
 ## Remaining limits
 
-- Shared lockfile importer update awaits coordination ACK on #112; a frozen install/CI has not
-  yet been claimed for this branch. Local verification used the linked workspace dependencies.
+- `pnpm install --frozen-lockfile` passed after adding only the server importer workspace link.
+  The first draft CI failed on the then-missing importer; replacement CI is required.
 - Review found initial-read recovery, stale capture-state recovery and historical-operation
   cancellation issues. Fixes and regression tests are present; final-head independent review pending.
 - Run needs its own authoritative persisted head, reserve/commit adapter and deduplication;

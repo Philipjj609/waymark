@@ -94,6 +94,7 @@ export class PgCheckoutQueue implements CheckoutQueue {
         .for("update");
       if (
         !work ||
+        (action === "RECONCILE" && work.action === "CAPTURE") ||
         (action === "CAPTURE" &&
           (work.phase !== "IN_FLIGHT" || work.action === "CREATE" || !record.paypalOrderId))
       )

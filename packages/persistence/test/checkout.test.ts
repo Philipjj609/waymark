@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
-import type { ProviderOperationId } from "@fle/contracts";
+import type { AuthorizedCommand, ProviderOperationId } from "@fle/contracts";
 import { PayPalSandboxClient, SandboxCheckout } from "@fle/payments";
 import {
   CheckoutService,
@@ -9,7 +9,7 @@ import {
   type SessionHash,
   submitPlayerCommand,
 } from "@fle/server";
-import { PERSON, PHONE, replay } from "@fle/simulation";
+import { execute, PERSON, PHONE, replay } from "@fle/simulation";
 import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import pg from "pg";
@@ -43,6 +43,7 @@ class Provider {
   reads = 0;
   loseCapture = false;
   failReads = 0;
+  staleReads = 0;
   captureBarrier: (() => Promise<void>) | null = null;
   fetch: typeof fetch = async (url, init) => {
     const path = new URL(String(url)).pathname;
@@ -89,6 +90,13 @@ class Provider {
     if (this.failReads > 0) {
       this.failReads--;
       throw new TypeError("read unavailable");
+    }
+    if (this.staleReads > 0) {
+      this.staleReads--;
+      const stale = structuredClone(order);
+      stale.status = "APPROVED";
+      for (const unit of stale.purchase_units) delete unit.payments;
+      return response(200, stale);
     }
     return response(200, order);
   };
@@ -361,6 +369,116 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
           };
         await t.service.request(OWNER, t.world, t.op, "RECONCILE");
         expect((await t.queue.read(t.op))?.phase).toBe("RECONCILING");
+        await assertPaid(t);
+      });
+
+      it("a stale empty GET cannot restore eligibility after an uncertain capture", async () => {
+        const t = await setup();
+        await t.service.run(t.op, true);
+        const record = await t.operations.get(t.op);
+        const order = t.provider.orders.get(record?.paypalOrderId ?? "");
+        if (!order) throw new Error("fixture order missing");
+        order.status = "APPROVED";
+        t.provider.loseCapture = true;
+        t.provider.staleReads = 1;
+        await t.service.request(OWNER, t.world, t.op, "CAPTURE");
+        expect((await t.queue.read(t.op))?.phase).toBe("RECONCILING");
+        expect((await t.service.request(OWNER, t.world, t.op, "CAPTURE"))?.accepted).toBe(false);
+        expect((await t.player("REQUEST_CHECKOUT_CANCEL", { obligationId: PHONE })).ok).toBe(false);
+        await t.service.request(OWNER, t.world, t.op, "RECONCILE");
+        await assertPaid(t);
+        expect(t.provider.captures).toBe(1);
+      });
+
+      it.each(["before economic commit", "after economic commit"])(
+        "durable fact survives a crash %s",
+        async (point) => {
+          const t = await setup();
+          await t.service.run(t.op, true);
+          const record = await t.operations.get(t.op);
+          const order = t.provider.orders.get(record?.paypalOrderId ?? "");
+          if (!order) throw new Error("fixture order missing");
+          order.status = "APPROVED";
+          const commit = t.worlds.commit.bind(t.worlds);
+          const fault =
+            point === "before economic commit"
+              ? vi.spyOn(t.worlds, "commit").mockImplementation(async (input) => {
+                  if (input.command.kind === "APPLY_VERIFIED_PROVIDER_EVENT")
+                    throw new Error("process crash");
+                  return commit(input);
+                })
+              : vi.spyOn(t.queue, "applied").mockRejectedValue(new Error("process crash"));
+          await t.service.request(OWNER, t.world, t.op, "CAPTURE");
+          expect(await t.queue.facts(t.op)).toHaveLength(1);
+          fault.mockRestore();
+          const restarted = new CheckoutService(
+            new PgWorldStore(db),
+            new PgCheckoutQueue(db),
+            new SandboxCheckout(t.client, new PgOperationStore(db)),
+            t.client,
+            "http://localhost:3000",
+          );
+          await restarted.request(OWNER, t.world, t.op, "RECONCILE");
+          expect(await t.queue.facts(t.op)).toHaveLength(0);
+          expect(t.provider.captures).toBe(1);
+          await assertPaid(t);
+        },
+      );
+
+      it("rolls reservation, commands, provider operation and job back together", async () => {
+        const worlds = new PgWorldStore(db);
+        const created = await createGuestWorld(worlds, OWNER);
+        await submitPlayerCommand(worlds, OWNER, {
+          schemaVersion: "sim.command.v1",
+          commandId: randomUUID(),
+          worldId: created.worldId,
+          expectedWorldVersion: created.snapshot.version,
+          kind: "ADVANCE_TIME",
+          payload: { targetDay: 8 },
+        });
+        const state = await worlds.load(created.worldId, OWNER);
+        if (!state) throw new Error("fixture world missing");
+        const command = {
+          schemaVersion: "sim.command.v1",
+          commandId: randomUUID(),
+          worldId: created.worldId,
+          expectedWorldVersion: state.version,
+          correlationId: null,
+          actorId: state.playerActorId,
+          origin: "PLAYER",
+          kind: "START_PROVIDER_CHECKOUT",
+          payload: { obligationId: PHONE },
+        } as AuthorizedCommand;
+        const outcome = execute(state, command);
+        expect(outcome.result.status).toBe("ACCEPTED");
+        await expect(
+          worlds.commit({
+            worldId: state.worldId,
+            owner: OWNER,
+            expectedVersion: state.version,
+            expectedRecorded: Object.keys(state.results).length,
+            command,
+            outcome,
+            outbox: [{ kind: null as unknown as string, payload: {} }],
+          }),
+        ).rejects.toThrow();
+        expect((await worlds.load(state.worldId, OWNER))?.headHash).toBe(state.headHash);
+        const operation = outcome.state.reservations[PHONE]?.operationId;
+        expect(operation && (await new PgOperationStore(db).get(operation))).toBeNull();
+        expect(operation && (await new PgCheckoutQueue(db).read(operation))).toBeNull();
+      });
+
+      it("reconciliation cannot erase a queued capture intent", async () => {
+        const t = await setup();
+        await t.service.run(t.op, true);
+        const record = await t.operations.get(t.op);
+        const order = t.provider.orders.get(record?.paypalOrderId ?? "");
+        if (!order) throw new Error("fixture order missing");
+        order.status = "APPROVED";
+        expect(await t.queue.request(OWNER, t.world, t.op, "CAPTURE")).toBe(true);
+        expect(await t.queue.request(OWNER, t.world, t.op, "RECONCILE")).toBe(false);
+        expect((await t.queue.read(t.op))?.action).toBe("CAPTURE");
+        await t.service.run(t.op, true);
         await assertPaid(t);
       });
     },
