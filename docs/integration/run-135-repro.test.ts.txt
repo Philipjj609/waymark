@@ -1,0 +1,246 @@
+/**
+ * #112: paying a Run bill through PayPal Sandbox in one server call, with PayPal's published Sandbox
+ * test card (no buyer sign-in). A fake PayPal client; nothing leaves the machine.
+ */
+import {
+  formatPayPalAmount,
+  InMemoryOperationStore,
+  type ObservedOrder,
+  type PayPalResult,
+  type PayPalSandboxClient,
+  SANDBOX_TEST_CARD,
+  SandboxCheckout,
+} from "@fle/payments";
+import { type Command, type RunView, YOU } from "@fle/run";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { POST as postPayPal } from "../app/api/run/paypal/route";
+import { POST as postRun } from "../app/api/run/route";
+import { resetRateLimits } from "../lib/rate-limit";
+import {
+  type PayPalReceipt,
+  paypalSandboxConfigured,
+  setPayPalForTests,
+  unreconciledPayments,
+  verifiedSettlements,
+} from "../lib/run-paypal";
+import { applyToSave, resetRunCache, type SaveToken, signSave, stateOf } from "../lib/run-save";
+
+const ORIGIN = "http://localhost:3000";
+const ENV_KEYS = [
+  "APP_ORIGINS",
+  "WAYMARK_RUN",
+  "RUN_SECRET",
+  "PAYPAL_ENV",
+  "PAYPAL_CLIENT_ID",
+  "PAYPAL_CLIENT_SECRET",
+  "PAYPAL_API_BASE",
+] as const;
+const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+const env = process.env as Record<string, string | undefined>;
+
+function configure() {
+  env.APP_ORIGINS = ORIGIN;
+  env.WAYMARK_RUN = "1";
+  delete env.RUN_SECRET;
+  env.PAYPAL_ENV = "sandbox";
+  env.PAYPAL_CLIENT_ID = "test-sandbox-id";
+  env.PAYPAL_CLIENT_SECRET = "test-sandbox-secret";
+  delete env.PAYPAL_API_BASE;
+}
+beforeAll(configure);
+afterAll(() => {
+  for (const k of ENV_KEYS) {
+    if (saved[k] === undefined) delete env[k];
+    else env[k] = saved[k];
+  }
+});
+
+// -- a fake PayPal Orders v2, behaving like the real Sandbox with the test card ---------------------
+
+/**
+ * COMPLETED_AT_CREATE: what the real Sandbox did on 10 Nov 2026 (order 9A84822712263045A): a
+ * test-card order comes back COMPLETED from create, and capture answers ALREADY_CAPTURED.
+ * The others are failure modes the server must survive without settling anything.
+ */
+type Behaviour = "COMPLETED_AT_CREATE" | "DECLINED_AT_CREATE" | "PENDING" | "NEEDS_APPROVAL";
+class FakeClient {
+  orders = new Map<string, { order: ObservedOrder; amount: string; currency: string }>();
+  created = 0;
+  captureCalls = 0;
+  usedTestCard: unknown[] = [];
+  behaviour: Behaviour = "COMPLETED_AT_CREATE";
+  /** Report this amount instead of the order's (a mismatch). */
+  capturedAmount: string | null = null;
+
+  async createOrder(i: {
+    amount: { amountMinor: number; currency: "EUR" };
+    referenceId: string;
+    requestId: string;
+    sandboxTestCard?: string;
+  }): Promise<PayPalResult<ObservedOrder>> {
+    const known = this.orders.get(i.requestId);
+    if (known) return { kind: "OK", value: known.order, replayed: true, debugId: null };
+    this.usedTestCard.push(i.sandboxTestCard);
+    if (this.behaviour === "DECLINED_AT_CREATE") {
+      return { kind: "DECLINED", issue: "INSTRUMENT_DECLINED", order: null, debugId: null };
+    }
+    this.created++;
+    const f = formatPayPalAmount(i.amount);
+    const id = `ORDER${this.created}`;
+    const capture = (status: "COMPLETED" | "PENDING") => ({
+      captureId: `CAP${this.created}`,
+      status,
+      amountValue: this.capturedAmount ?? f.value,
+      currencyCode: f.currency_code,
+      reason: null,
+    });
+    const order: ObservedOrder =
+      this.behaviour === "NEEDS_APPROVAL"
+        ? {
+            orderId: id,
+            status: "PAYER_ACTION_REQUIRED",
+            referenceId: i.referenceId,
+            customId: i.referenceId,
+            amountValue: f.value,
+            currencyCode: f.currency_code,
+            captures: [],
+            approveUrl: `https://www.sandbox.paypal.com/checkoutnow?token=${id}`,
+          }
+        : {
+            orderId: id,
+            status: this.behaviour === "PENDING" ? "APPROVED" : "COMPLETED",
+            referenceId: i.referenceId,
+            customId: i.referenceId,
+            amountValue: f.value,
+            currencyCode: f.currency_code,
+            captures: [capture(this.behaviour === "PENDING" ? "PENDING" : "COMPLETED")],
+            approveUrl: null,
+          };
+    this.orders.set(i.requestId, { order, amount: f.value, currency: f.currency_code });
+    return { kind: "OK", value: order, replayed: false, debugId: null };
+  }
+  #byOrderId(id: string) {
+    return [...this.orders.values()].find((o) => o.order.orderId === id);
+  }
+  async getOrder(id: string): Promise<PayPalResult<ObservedOrder>> {
+    const o = this.#byOrderId(id);
+    if (!o) return { kind: "REJECTED", httpStatus: 404, name: null, issue: null, debugId: null };
+    return { kind: "OK", value: o.order, replayed: false, debugId: null };
+  }
+  async captureOrder(id: string): Promise<PayPalResult<ObservedOrder>> {
+    this.captureCalls++;
+    const o = this.#byOrderId(id);
+    if (!o) return { kind: "REJECTED", httpStatus: 404, name: null, issue: null, debugId: null };
+    if (o.order.status === "PAYER_ACTION_REQUIRED") return { kind: "NOT_APPROVED", debugId: null };
+    if (o.order.status === "APPROVED") return { kind: "PENDING", order: o.order, debugId: null };
+    return { kind: "ALREADY_CAPTURED", debugId: null };
+  }
+}
+
+let fake: FakeClient;
+beforeEach(() => {
+  configure();
+  resetRateLimits();
+  resetRunCache();
+  fake = new FakeClient();
+  const store = new InMemoryOperationStore();
+  setPayPalForTests({
+    checkout: new SandboxCheckout(fake as unknown as PayPalSandboxClient, store),
+    store,
+  });
+});
+
+// -- helpers --------------------------------------------------------------------------------------
+
+const ADVANCE: Command = { kind: "ADVANCE", mode: "NEXT_STOP" };
+let runCount = 0;
+const freshSave = (): SaveToken =>
+  signSave(`run_${(0xa000 + ++runCount).toString(16).padStart(16, "0")}`, "first-flat", []);
+
+/** Plays forward until a bill in your pocket is due AND your fictional cash covers it. */
+function withPayableBill(): { save: SaveToken; billId: string; amountMinor: number } {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    let save = freshSave();
+    for (let i = 0; i < 60; i++) {
+      const state = stateOf(save);
+      const cash = state.balances[YOU]?.["ASSET:Cash"] ?? 0;
+      const bill = state.bills.find(
+        (b) =>
+          b.pocket === YOU &&
+          (b.status === "DUE" || b.status === "LATE") &&
+          b.amountMinor <= cash &&
+          b.amountMinor > 0,
+      );
+      if (bill) return { save, billId: bill.id, amountMinor: bill.amountMinor };
+      const next = applyToSave(save, ADVANCE);
+      if (!next.ok) break;
+      save = next.save;
+    }
+  }
+  throw new Error("no payable bill found while playing forward");
+}
+
+const req = (path: string, body: unknown) =>
+  new Request(`${ORIGIN}${path}`, {
+    method: "POST",
+    headers: { origin: ORIGIN, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+const pay = (save: SaveToken, billId: string, extra: Record<string, unknown> = {}) =>
+  postPayPal(req("/api/run/paypal", { action: "pay", save, billId, ...extra }));
+
+interface Paid {
+  status: string;
+  save: SaveToken;
+  view: RunView;
+  already: boolean;
+  receipt: PayPalReceipt | null;
+}
+interface Refused {
+  status: string;
+  message: string;
+}
+
+
+/** Isolated #135 audit reproductions. Assertions express desired safety, not current behavior. */
+describe("integration135 payment safety reproductions at725a212", () => {
+  it("same old save in concurrent pay requests creates at most one provider order", async () => {
+    const {save,billId}=withPayableBill();
+    const responses=await Promise.all([pay(save,billId),pay(save,billId)]);
+    const bodies=await Promise.all(responses.map(r=>r.json()));
+    console.log("REPRO concurrent-old-save",JSON.stringify({http:responses.map(r=>r.status),statuses:bodies.map(x=>x.status),providerOrders:fake.created,captureCalls:fake.captureCalls,settlements:verifiedSettlements(save.runId).length}));
+    expect(fake.created,"a stale queued request must not create another captured order").toBe(1);
+    expect(verifiedSettlements(save.runId)).toHaveLength(1);
+  });
+
+  it("uncertain capture and failed verification reuses the existing order on retry", async () => {
+    const {save,billId}=withPayableBill();
+    const originalGet=fake.getOrder.bind(fake);
+    const originalCapture=fake.captureOrder.bind(fake);
+    let unavailable=true;
+    fake.getOrder=async id=>unavailable ? {kind:"NOT_SENT",cause:"fixture read unavailable"} : originalGet(id);
+    fake.captureOrder=async id=>{
+      if(unavailable){ fake.captureCalls++; return {kind:"UNCERTAIN",cause:"NETWORK",attempts:1,httpStatus:null,debugId:null}; }
+      return originalCapture(id);
+    };
+    const first=await pay(save,billId); const firstBody=await first.json();
+    unavailable=false;
+    const second=await pay(save,billId); const secondBody=await second.json();
+    console.log("REPRO uncertain-capture-retry",JSON.stringify({firstHttp:first.status,firstStatus:firstBody.status,secondHttp:second.status,secondStatus:secondBody.status,providerOrders:fake.created,captureCalls:fake.captureCalls,settlements:verifiedSettlements(save.runId).length,providerCaptures:[...fake.orders.values()].flatMap(x=>x.order.captures.map(c=>c.captureId))}));
+    expect(fake.created,"an uncertain capture must reconcile the original order before another order").toBe(1);
+  });
+
+  it("simulated server-state reset rejects an old pre-payment save and preserves the existing capture", async () => {
+    const {save,billId}=withPayableBill();
+    const first=await pay(save,billId); const firstBody=await first.json();
+    expect(first.status).toBe(200);
+    const freshStore=new InMemoryOperationStore();
+    setPayPalForTests({checkout:new SandboxCheckout(fake as unknown as PayPalSandboxClient,freshStore),store:freshStore});
+    resetRunCache();
+    const viewed=await postRun(req("/api/run",{action:"view",save}));
+    const second=await pay(save,billId); const secondBody=await second.json();
+    console.log("REPRO simulated-server-state-reset",JSON.stringify({firstStatus:firstBody.status,oldSaveViewHttp:viewed.status,secondHttp:second.status,secondStatus:secondBody.status,providerOrders:fake.created,captureCalls:fake.captureCalls,settlementsAfterReset:verifiedSettlements(save.runId).length,providerCaptures:[...fake.orders.values()].flatMap(x=>x.order.captures.map(c=>c.captureId))}));
+    expect.soft(viewed.status,"a pre-payment signed save must not erase a captured payment after restart").toBe(409);
+    expect.soft(fake.created,"restoring server state must not manufacture a new provider request identity").toBe(1);
+  });
+});
