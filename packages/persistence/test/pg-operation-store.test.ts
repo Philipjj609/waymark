@@ -121,9 +121,7 @@ describe("PgOperationStore on PGlite (storage semantics, not cross-connection lo
     ).rejects.toThrow("binding is immutable");
     await expect(
       store.update(input.operationId, (c) => {
-        const { createStartedAt: _removed, ...rest } = c as OperationRecord & {
-          createStartedAt?: number;
-        };
+        const { createStartedAt: _removed, ...rest } = c;
         return rest;
       }),
     ).rejects.toThrow("binding is immutable");
