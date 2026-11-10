@@ -8,6 +8,13 @@ export {
   type CheckoutWork,
 } from "./checkout.js";
 export { InMemoryWorldStore, recorded } from "./memory-store.js";
+export type {
+  CheckoutTarget,
+  RunCheckoutGateway,
+  RunCheckoutRef,
+  RunPaymentState,
+  TargetReconciliation,
+} from "./checkout-target.js";
 export { newProviderCommandId, submitProviderCommand } from "./provider-command.js";
 export {
   createGuestWorld,
