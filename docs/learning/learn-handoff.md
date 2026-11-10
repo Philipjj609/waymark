@@ -4,22 +4,21 @@ This slice depends on **PR #96**, at `0b240ff`. Its authored curriculum remains 
 
 ## Available screens
 
-| Route | Purpose |
-| --- | --- |
-| `/learn` | Standalone entry; no Run or economic world required |
-| `/learn/modules/foundations` | Existing concepts in prerequisite order, with revisitable lessons |
-| `/learn/lessons/cash-balance` | Primary accepted vertical slice |
-| `/learn/lessons/{slug}` | All six existing draft units; unknown/unwritten lessons return 404 |
-| `/learn/map` | Curriculum graph plus conservative personal evidence overlay |
-| `/learn/notes` | Latest learner-written note per concept; links back to its editor |
-| `/api/learn` | Session-owned GET; strict CSRF-protected actions for initialization, visits, explanations, corrections, exercises and note revisions |
+| Route                         | Purpose                                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `/learn`                      | Standalone entry; no Run or economic world required                                                                                  |
+| `/learn/modules/foundations`  | Existing concepts in prerequisite order, with revisitable lessons                                                                    |
+| `/learn/lessons/cash-balance` | Primary accepted vertical slice                                                                                                      |
+| `/learn/lessons/{slug}`       | All six existing draft units; unknown/unwritten lessons return 404                                                                   |
+| `/learn/map`                  | Curriculum graph plus conservative personal evidence overlay                                                                         |
+| `/learn/notes`                | Latest learner-written note per concept; links back to its editor                                                                    |
+| `/api/learn`                  | Session-owned GET; strict CSRF-protected actions for initialization, visits, explanations, corrections, exercises and note revisions |
 
 Other lesson slugs: `obligation`, `receivable`, `invoice-vs-payment`, `liquidity`, `opportunity-cost`. Net worth remains a graph node without an authored lesson. Prerequisites guide navigation; no mastery gate prevents revisiting.
 
 ## Components and styling
 
 `packages/learning/src/study.ts` defines a small local Zod registry. `apps/web/app/learn/teaching-panels.tsx` contains the exhaustive renderer table:
-
 - Explanation: references an existing fact.
 - WorkedExample: uses existing parameter-derived lines.
 - Comparison: renders canonical concept summaries.
