@@ -9,6 +9,7 @@
     "./testing": "./src/testing/store-contract.ts"
   },
   "dependencies": {
+    "@fle/payments": "workspace:*",
     "@fle/contracts": "workspace:*",
     "@fle/simulation": "workspace:*"
   }

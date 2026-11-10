@@ -93,6 +93,17 @@ export async function submitPlayerCommand(
       error: { code: "INVALID_COMMAND", message: `invalid command at: ${where}` },
     };
   }
+  if (
+    parsed.data.commandId[14] === "8" ||
+    ((parsed.data.kind === "START_PROVIDER_CHECKOUT" ||
+      parsed.data.kind === "REQUEST_CHECKOUT_CANCEL") &&
+      !store.supportsCheckout)
+  )
+    return {
+      ok: false,
+      httpStatus: 400,
+      error: { code: "INVALID_COMMAND", message: "command requires the trusted checkout boundary" },
+    };
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const state = await store.load(parsed.data.worldId, owner);
     if (!state) return notFound;
