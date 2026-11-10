@@ -397,6 +397,7 @@ async function captureLocked(save: SaveToken, operationId: string): Promise<PayR
     amountMinor: event.amount.amountMinor,
     provider: "PAYPAL_SANDBOX",
     operationId,
+    captureId: event.providerEventId,
   });
   const s = shared();
   if (!applied.ok) {

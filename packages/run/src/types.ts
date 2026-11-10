@@ -79,6 +79,11 @@ export interface Bill {
   paidDay: number | null;
   /** Late fees already added to amountMinor. */
   feesMinor: Minor;
+  /**
+   * Operation id of an external (PayPal Sandbox) payment in flight for this bill, or null. While
+   * set, the bill cannot be paid from game cash or by autopay, so one bill is never paid twice.
+   */
+  reservedBy: string | null;
 }
 
 /**
@@ -291,6 +296,8 @@ export interface RunState {
   stops: Stop[];
   learning: LearningState;
   nextId: number;
+  /** Provider capture ids already settled into this run (dedup of external payment facts). */
+  externalCaptures: string[];
   ledger: Ledger;
   /** Natural-sign balances per pocket per account, kept in step with the ledger. */
   balances: Record<PocketId, Record<string, Minor>>;
@@ -528,6 +535,27 @@ export const SettleExternalSchema = z
     amountMinor: PositiveMinor,
     provider: z.literal("PAYPAL_SANDBOX"),
     operationId: z.string().regex(/^pop_[A-Za-z0-9_.:-]{1,120}$/),
+    /** The provider's own capture id: a capture fact settles at most one bill, once. */
+    captureId: z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/),
+  })
+  .strict();
+
+/**
+ * SERVER ONLY. Holds a due bill for one external payment before any money moves at PayPal, so
+ * game-cash payment and autopay skip it. Released if the payment fails or is cancelled.
+ */
+export const ReserveExternalSchema = z
+  .object({
+    kind: z.literal("RESERVE_EXTERNAL"),
+    billId: Id,
+    operationId: z.string().regex(/^pop_[A-Za-z0-9_.:-]{1,120}$/),
+  })
+  .strict();
+export const ReleaseExternalSchema = z
+  .object({
+    kind: z.literal("RELEASE_EXTERNAL"),
+    billId: Id,
+    operationId: z.string().regex(/^pop_[A-Za-z0-9_.:-]{1,120}$/),
   })
   .strict();
 
@@ -535,6 +563,8 @@ export const SettleExternalSchema = z
 export const LoggedCommandSchema = z.discriminatedUnion("kind", [
   ...PLAYER_COMMANDS,
   SettleExternalSchema,
+  ReserveExternalSchema,
+  ReleaseExternalSchema,
 ]);
 export type Command = z.infer<typeof LoggedCommandSchema>;
 export type CommandKind = Command["kind"];

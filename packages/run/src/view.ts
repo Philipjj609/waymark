@@ -182,7 +182,10 @@ function billViews(state: RunState, w: World): BillView[] {
         dueInDays: b.dueDay - state.day,
         status: b.status,
         autopay: b.autopay,
-        canPay: (b.status === "DUE" || b.status === "LATE") && w.cash(b.pocket) >= b.amountMinor,
+        canPay:
+          (b.status === "DUE" || b.status === "LATE") &&
+          !b.reservedBy &&
+          w.cash(b.pocket) >= b.amountMinor,
         graceLeftDays: graceLeft,
         note: billNote(w, b, state.day, graceLeft),
       };

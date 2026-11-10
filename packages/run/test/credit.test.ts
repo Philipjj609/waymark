@@ -490,3 +490,38 @@ describe("determinism and safety", () => {
     expect(s.day).toBeGreaterThanOrEqual(340);
   });
 });
+
+describe("invoices after a business closes", () => {
+  it("money a client pays after closing goes on to you", async () => {
+    const { startRun, apply } = await import("../src/index.js");
+    const { World } = await import("../src/world.js");
+    const { issueInvoice } = await import("../src/systems/invoices-core.js");
+    const { businessSystem } = await import("../src/systems/business.js");
+    let s = startRun("run_close", "seed-close", "side-studio");
+    const w = new World(s);
+    businessSystem.effects?.["business.start"]?.(
+      w,
+      { type: "SERVICE", name: "Studio", capitalMinor: 50_000 },
+      { pocket: "you", slots: {}, path: "t" },
+    );
+    const biz = s.businesses[0];
+    expect(biz).toBeDefined();
+    if (!biz) return;
+    const inv = issueInvoice(w, {
+      pocket: biz.id,
+      client: "Rosa",
+      label: "Menu design",
+      amountMinor: 30_000,
+      termsDays: 14,
+    });
+    inv.payDay = s.day + 20;
+    s = apply(s, { kind: "CLOSE_BUSINESS", businessId: biz.id }).state;
+    for (let i = 0; i < 10 && s.invoices.some((x) => x.status === "OPEN"); i++) {
+      s = apply(s, { kind: "ADVANCE", mode: "NEXT_STOP" }).state;
+    }
+    expect(s.invoices.find((x) => x.id === inv.id)?.status).toBe("PAID");
+    expect(s.balances[biz.id]?.["ASSET:Cash"] ?? 0).toBe(0);
+    const youGot = s.events.some((e) => e.kind === "INVOICE_PAID" && e.refs.invoiceId === inv.id);
+    expect(youGot).toBe(true);
+  });
+});

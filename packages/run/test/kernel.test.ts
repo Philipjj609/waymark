@@ -134,6 +134,7 @@ describe("run kernel", () => {
       amountMinor: rent.amountMinor,
       provider: "PAYPAL_SANDBOX",
       operationId: "pop_test_1",
+      captureId: "CAPTEST1",
     } as const;
     // Players cannot send it; a signed log can carry it.
     expect(CommandSchema.safeParse(settle).success).toBe(false);
@@ -168,6 +169,7 @@ describe("run kernel", () => {
       amountMinor: rent.amountMinor,
       provider: "PAYPAL_SANDBOX",
       operationId: "pop_test_2",
+      captureId: "CAPTEST2",
     });
     expect(r.refusal).toBeNull();
     const paid = r.events.find(
@@ -176,5 +178,62 @@ describe("run kernel", () => {
     expect(paid?.refs.operationId).toBe("pop_test_2");
     expect(r.state.bills.find((b) => b.id === rent.id)?.status).toBe("PAID");
     sumBalances(r.state);
+  });
+
+  it("a reserved bill cannot be paid from cash or autopay, and a capture settles only once", () => {
+    let s = startRun("run_res", "seed-res", "first-flat");
+    const rent = s.bills.find((b) => b.kind === "RENT" && b.status === "DUE");
+    expect(rent).toBeDefined();
+    if (!rent) return;
+    const op = "pop_run_res_1";
+    const reserve = { kind: "RESERVE_EXTERNAL", billId: rent.id, operationId: op } as const;
+    expect(CommandSchema.safeParse(reserve).success).toBe(false);
+    s = apply(s, reserve).state;
+    expect(apply(s, { kind: "PAY_BILL", billId: rent.id }).refusal?.code).toBe(
+      "PAYMENT_IN_PROGRESS",
+    );
+    expect(
+      apply(s, { kind: "RESERVE_EXTERNAL", billId: rent.id, operationId: "pop_other" }).refusal
+        ?.code,
+    ).toBe("RESERVED_ELSEWHERE");
+    const settle = {
+      kind: "SETTLE_EXTERNAL",
+      billId: rent.id,
+      amountMinor: rent.amountMinor,
+      provider: "PAYPAL_SANDBOX",
+      operationId: op,
+      captureId: "CAP_RES_1",
+    } as const;
+    expect(apply(s, { ...settle, operationId: "pop_other" }).refusal?.code).toBe(
+      "RESERVED_ELSEWHERE",
+    );
+    const paid = apply(s, settle);
+    expect(paid.refusal).toBeNull();
+    expect(paid.state.bills.find((b) => b.id === rent.id)?.reservedBy).toBeNull();
+    expect(paid.state.externalCaptures).toEqual(["CAP_RES_1"]);
+    // The same capture fact cannot settle another bill.
+    const other = paid.state.bills.find(
+      (b) => b.id !== rent.id && (b.status === "DUE" || b.status === "LATE"),
+    );
+    if (other) {
+      const again = apply(paid.state, {
+        ...settle,
+        billId: other.id,
+        amountMinor: other.amountMinor,
+      });
+      expect(again.refusal?.code).toBe("DUPLICATE_CAPTURE");
+    }
+  });
+
+  it("releasing a reservation lets the bill be paid normally again", () => {
+    let s = startRun("run_rel", "seed-rel", "first-flat");
+    const rent = s.bills.find((b) => b.kind === "RENT" && b.status === "DUE");
+    if (!rent) return;
+    s = apply(s, { kind: "RESERVE_EXTERNAL", billId: rent.id, operationId: "pop_r_1" }).state;
+    expect(
+      apply(s, { kind: "RELEASE_EXTERNAL", billId: rent.id, operationId: "pop_x" }).refusal?.code,
+    ).toBe("NOT_RESERVED");
+    s = apply(s, { kind: "RELEASE_EXTERNAL", billId: rent.id, operationId: "pop_r_1" }).state;
+    expect(apply(s, { kind: "PAY_BILL", billId: rent.id }).refusal).toBeNull();
   });
 });

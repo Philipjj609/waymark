@@ -105,6 +105,11 @@ function pay(w: World, inv: Invoice): void {
     ["ASSET:Receivables", "CREDIT", inv.amountMinor],
   ]);
   inv.status = "PAID";
+  // A closed business has no one to spend its cash: money a client pays late goes on to you.
+  const owner = w.s.businesses.find((b) => b.id === inv.pocket);
+  if (owner && owner.status === "CLOSED") {
+    w.transfer(inv.pocket, "you", inv.amountMinor, `${inv.label}: paid after closing`);
+  }
   const daysLate = Math.max(0, w.day - inv.dueDay);
   w.emit(
     "INVOICE_PAID",

@@ -270,6 +270,7 @@ describe("predictions", () => {
       autopay: false,
       paidDay: null,
       feesMinor: 0,
+      reservedBy: null,
     });
     const loan: Loan = {
       id: "loan_t",

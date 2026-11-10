@@ -77,6 +77,7 @@ export function startRun(runId: string, seed: string, scenarioId: string): RunSt
     stops: [],
     learning: { predictions: [], questions: [], answers: [], seen: {} },
     nextId: 1,
+    externalCaptures: [],
     ledger: Ledger.empty(),
     balances: {},
   };

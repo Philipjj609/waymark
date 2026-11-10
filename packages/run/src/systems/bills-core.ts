@@ -39,6 +39,7 @@ export function addBill(
     autopay: spec.autopay ?? false,
     paidDay: null,
     feesMinor: 0,
+    reservedBy: null,
   };
   w.s.bills.push(bill);
   if (bill.dueDay === w.day) accrue(w, bill);
@@ -53,7 +54,7 @@ function accrue(w: World, bill: Bill): void {
     ["LIABILITY:Bills", "CREDIT", bill.amountMinor],
   ]);
   bill.status = "DUE";
-  if (bill.autopay && payBill(w, bill)) {
+  if (bill.autopay && !bill.reservedBy && payBill(w, bill)) {
     return;
   }
   w.emit("BILL_DUE", w.t("core.bill.due", { label: bill.label, amount: euros(bill.amountMinor) }), {
@@ -149,7 +150,9 @@ export const billsCore: RunSystem = {
     }
     // Autopay retries every morning until cash allows.
     for (const bill of s.bills) {
-      if (bill.autopay && (bill.status === "DUE" || bill.status === "LATE")) payBill(w, bill);
+      if (bill.autopay && !bill.reservedBy && (bill.status === "DUE" || bill.status === "LATE")) {
+        payBill(w, bill);
+      }
     }
   },
   endDay(w) {
@@ -176,14 +179,48 @@ export const billsCore: RunSystem = {
       if (cmd.amountMinor !== bill.amountMinor) {
         return refuse("AMOUNT_MISMATCH", "The payment does not match the bill.");
       }
+      if (bill.reservedBy && bill.reservedBy !== cmd.operationId) {
+        return refuse("RESERVED_ELSEWHERE", "Another payment holds this bill.");
+      }
+      if (w.s.externalCaptures.includes(cmd.captureId)) {
+        return refuse("DUPLICATE_CAPTURE", "This payment was already counted.");
+      }
       if (!payBill(w, bill, { provider: cmd.provider, operationId: cmd.operationId })) {
         return refuse("NOT_ENOUGH_CASH", `You need ${euros(bill.amountMinor)} in that pocket.`);
       }
+      bill.reservedBy = null;
+      w.s.externalCaptures.push(cmd.captureId);
+      return undefined;
+    },
+    RESERVE_EXTERNAL(w, cmd) {
+      const bill = w.s.bills.find((b) => b.id === cmd.billId);
+      if (!bill) return refuse("UNKNOWN_BILL", "There is no such bill.");
+      if (bill.status !== "DUE" && bill.status !== "LATE") {
+        return refuse("NOT_PAYABLE", "This bill cannot be paid now.");
+      }
+      if (bill.reservedBy === cmd.operationId) return undefined;
+      if (bill.reservedBy) return refuse("RESERVED_ELSEWHERE", "Another payment holds this bill.");
+      bill.reservedBy = cmd.operationId;
+      return undefined;
+    },
+    RELEASE_EXTERNAL(w, cmd) {
+      const bill = w.s.bills.find((b) => b.id === cmd.billId);
+      if (!bill) return refuse("UNKNOWN_BILL", "There is no such bill.");
+      if (bill.reservedBy !== cmd.operationId) {
+        return refuse("NOT_RESERVED", "This payment does not hold the bill.");
+      }
+      bill.reservedBy = null;
       return undefined;
     },
     PAY_BILL(w, cmd) {
       const bill = w.s.bills.find((b) => b.id === cmd.billId);
       if (!bill) return refuse("UNKNOWN_BILL", "There is no such bill.");
+      if (bill.reservedBy) {
+        return refuse(
+          "PAYMENT_IN_PROGRESS",
+          "A PayPal Sandbox payment for this bill is in progress.",
+        );
+      }
       if (bill.status === "UPCOMING") return refuse("NOT_DUE", "This bill is not due yet.");
       if (bill.status === "PAID") return refuse("ALREADY_PAID", "This bill is already paid.");
       if (bill.status === "DEFAULTED") return refuse("DEFAULTED", "This bill went to collection.");
