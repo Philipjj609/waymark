@@ -29,13 +29,15 @@ test("standalone Learn: module, reasoning, adaptive follow-up, example, exercise
     .fill("I meant cash only after the salary arrives.");
   await page.getByRole("button", { name: "Save my clarification" }).click();
   await expect(
-    page.getByText("I meant cash only after the salary arrives.", { exact: true }),
+    page.getByRole("blockquote").filter({ hasText: "I meant cash only after the salary arrives." }),
   ).toBeVisible();
   await page
     .getByLabel("Disagree or clarify this interpretation")
     .fill("I can still revise my explanation.");
   await page.getByRole("button", { name: "Save my clarification" }).click();
-  await expect(page.getByText("I can still revise my explanation.", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("blockquote").filter({ hasText: "I can still revise my explanation." }),
+  ).toBeVisible();
   await page.getByLabel("Cash before payment (fictional EUR)").first().fill("100.01");
   await page.getByLabel("Payment (fictional EUR)", { exact: true }).first().fill("30.02");
   await expect(page.getByRole("status").filter({ hasText: "69.99 EUR" })).toBeVisible();
