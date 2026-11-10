@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { Money, ProviderOperationId, VerifiedProviderEvent, WorldId } from "@fle/contracts";
 import {
   type OperationRecord,
@@ -9,8 +8,8 @@ import {
   type SandboxCheckout,
   verifyCapture,
 } from "@fle/payments";
-import { submitProviderCommand } from "./provider-command.js";
 import type { SessionHash, WorldStore } from "./store.js";
+import { WorldCheckoutTarget } from "./world-checkout-target.js";
 
 export type CheckoutPhase =
   | "IN_FLIGHT"
@@ -64,6 +63,8 @@ export interface CheckoutQueue {
 
 /** No gameplay/FP-30 identifiers. A future Run target must supply equally durable reserve/commit semantics. */
 export class CheckoutService {
+  private readonly target: WorldCheckoutTarget;
+
   constructor(
     private readonly worlds: WorldStore,
     private readonly queue: CheckoutQueue,
@@ -71,7 +72,9 @@ export class CheckoutService {
     private readonly client: PayPalSandboxClient,
     private readonly returnOrigin: string,
     private readonly testCard = false,
-  ) {}
+  ) {
+    this.target = new WorldCheckoutTarget(worlds);
+  }
 
   async status(owner: SessionHash, world: WorldId, operation: ProviderOperationId) {
     const work = await this.queue.authorized(owner, world, operation);
@@ -153,23 +156,7 @@ export class CheckoutService {
         phase = "RECONCILING";
         error ??= "ORDER_UNRESOLVED";
       } else {
-        const binding = await submitProviderCommand(this.worlds, lease.owner, rec.worldId, {
-          kind: "BIND_PROVIDER_ORDER",
-          payload: {
-            binding: {
-              provider: "PAYPAL_SANDBOX",
-              operationId: operation,
-              mapping: { worldId: rec.worldId, obligationId: rec.obligationId },
-              orderId: rec.paypalOrderId,
-              verification: {
-                method: "ORDER_CREATE_RESPONSE",
-                verifiedAt: new Date().toISOString(),
-                evidenceRef: `order:${rec.paypalOrderId}`,
-              },
-            },
-          },
-        });
-        if (binding.result.status !== "ACCEPTED") throw new Error("ORDER_BIND_REFUSED");
+        await this.target.bind(lease.owner, { ...rec, paypalOrderId: rec.paypalOrderId });
         if (
           lease.action === "CREATE" &&
           lease.phase !== "CANCELLING" &&
@@ -211,41 +198,14 @@ export class CheckoutService {
           if (verified.ok) await this.queue.remember(verified.event);
         }
         await this.applyFacts(lease);
-        const captures = order.captures.map((c) => ({
-          captureId: c.captureId,
-          status: c.status,
-          amount: parsePayPalAmount(c.amountValue ?? "", c.currencyCode ?? ""),
-          // Unknown refunded totals are deliberately absent: engine keeps attention (never zero).
-        }));
-        const reconciliation = await submitProviderCommand(this.worlds, lease.owner, rec.worldId, {
-          kind: "RECONCILE_PROVIDER_STATE",
-          payload: {
-            reconciliation: {
-              provider: "PAYPAL_SANDBOX",
-              reconciliationId: randomUUID(),
-              operationId: operation,
-              mapping: { worldId: rec.worldId, obligationId: rec.obligationId },
-              observed: { orderId: order.orderId, orderStatus: order.status, captures },
-              verification: {
-                method: "ORDER_LOOKUP",
-                verifiedAt,
-                evidenceRef: `order:${order.orderId}`,
-              },
-            },
-          },
-        });
-        const state = await this.worlds.load(rec.worldId, lease.owner);
-        const op = state?.operations[operation];
-        const open = state?.attention.some(
-          (a) => a.operationId === operation && a.resolvedBy === null,
+        const { terminal, open, confirmed } = await this.target.reconcile(
+          lease.owner,
+          rec,
+          order,
+          verifiedAt,
         );
-        const outcome = reconciliation.events.find((e) => e.eventType === "PROVIDER_RECONCILED")
-          ?.payload.outcome;
-        const confirmed =
-          outcome === "CONFIRMED" || outcome === "SETTLED" || outcome === "RELEASED";
         const latest = await this.queue.read(operation);
-        if (op?.status === "CAPTURED" || op?.status === "VOIDED")
-          phase = !open && confirmed ? "FINISHED" : "RECONCILING";
+        if (terminal) phase = !open && confirmed ? "FINISHED" : "RECONCILING";
         else if (open) phase = "RECONCILING";
         else if (
           lease.phase !== "CANCELLING" &&
@@ -278,11 +238,7 @@ export class CheckoutService {
 
   private async applyFacts(lease: CheckoutLease) {
     for (const event of await this.queue.facts(lease.operationId)) {
-      const out = await submitProviderCommand(this.worlds, lease.owner, event.mapping.worldId, {
-        kind: "APPLY_VERIFIED_PROVIDER_EVENT",
-        payload: { event },
-      });
-      if (out.result.status !== "ACCEPTED") throw new Error("FACT_REQUIRES_ATTENTION");
+      await this.target.applyFact(lease.owner, event);
       await this.queue.applied(event);
     }
   }

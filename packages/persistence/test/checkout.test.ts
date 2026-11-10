@@ -1,6 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
-import type { AuthorizedCommand, ProviderOperationId } from "@fle/contracts";
+import {
+  type AuthorizedCommand,
+  type ProviderOperationId,
+  VerifiedProviderEventSchema,
+} from "@fle/contracts";
 import { PayPalSandboxClient, SandboxCheckout } from "@fle/payments";
 import {
   CheckoutService,
@@ -242,6 +246,78 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
         await t.service.request(OWNER, t.world, t.op, "RECONCILE");
         expect(t.provider.captures).toBe(1);
         await assertPaid(t);
+      });
+
+      it("repeated verified observations preserve one applied fact across queue instances", async () => {
+        const t = await setup();
+        await t.service.run(t.op, true);
+        const record = await t.operations.get(t.op);
+        const order = t.provider.orders.get(record?.paypalOrderId ?? "");
+        if (!order) throw new Error("fixture order missing");
+        order.status = "APPROVED";
+        await t.service.request(OWNER, t.world, t.op, "CAPTURE");
+        const [stored] = await db
+          .select()
+          .from(schema.checkoutFacts)
+          .where(eq(schema.checkoutFacts.operationId, t.op));
+        const fact = VerifiedProviderEventSchema.parse(stored?.payload);
+        // Two fresh workers may observe the same capture at different times. Neither
+        // observation may reset the applied marker or create another economic effect.
+        await Promise.all(
+          [t.queue, new PgCheckoutQueue(db)].map((queue, index) =>
+            queue.remember({
+              ...fact,
+              verification: {
+                ...fact.verification,
+                verifiedAt: `2026-11-10T12:0${index}:00.000Z`,
+              },
+            }),
+          ),
+        );
+        const rows = await db
+          .select()
+          .from(schema.checkoutFacts)
+          .where(eq(schema.checkoutFacts.operationId, t.op));
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.applied).toBe(1);
+        expect(await new PgCheckoutQueue(db).facts(t.op)).toEqual([]);
+        await t.service.request(OWNER, t.world, t.op, "RECONCILE");
+        await assertPaid(t);
+        expect(t.provider.captures).toBe(1);
+      });
+
+      it("a capture fact cannot be rebound to another World's operation", async () => {
+        const paid = await setup();
+        const other = await setup();
+        await paid.service.run(paid.op, true);
+        const record = await paid.operations.get(paid.op);
+        const order = paid.provider.orders.get(record?.paypalOrderId ?? "");
+        if (!order) throw new Error("fixture order missing");
+        order.status = "APPROVED";
+        await paid.service.request(OWNER, paid.world, paid.op, "CAPTURE");
+        const [stored] = await db
+          .select()
+          .from(schema.checkoutFacts)
+          .where(eq(schema.checkoutFacts.operationId, paid.op));
+        const fact = VerifiedProviderEventSchema.parse(stored?.payload);
+        await expect(
+          new PgCheckoutQueue(db).remember({
+            ...fact,
+            operationId: other.op,
+            mapping: { worldId: other.world, obligationId: PHONE },
+          }),
+        ).rejects.toThrow("provider fact binding conflict");
+        expect(await other.queue.facts(other.op)).toEqual([]);
+        expect((await other.worlds.load(other.world, OWNER))?.obligations[PHONE]?.state).toBe(
+          "DUE",
+        );
+        const [unchanged] = await db
+          .select()
+          .from(schema.checkoutFacts)
+          .where(eq(schema.checkoutFacts.operationId, paid.op));
+        expect(unchanged?.payload).toEqual(stored?.payload);
+        expect(unchanged?.applied).toBe(1);
+        await assertPaid(paid);
       });
 
       it("foreign sessions cannot inspect or trigger provider operations; reserved server IDs cannot be preclaimed", async () => {
