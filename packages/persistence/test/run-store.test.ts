@@ -7,7 +7,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { connectPostgres } from "../src/connect.js";
 import { type Db, migrate } from "../src/migrate.js";
-import { PgRunStore } from "../src/pg-run-store.js";
+import { appendRunCommandsTx, loadRunTx, PgRunStore } from "../src/pg-run-store.js";
 import { InMemoryRunStore, type RunStore } from "../src/run-store.js";
 
 let n = 0;
@@ -134,6 +134,28 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
         const r = await afterRestart.load(id);
         expect(r?.version).toBe(2);
         expect(r?.commands).toEqual([cmd(1), cmd(2)]);
+      });
+
+      it("a caller's transaction makes the run append and its own writes one unit", async () => {
+        const id = runId();
+        const s = new PgRunStore(db);
+        await s.create(head(id));
+        // The caller's other write fails after the append: the append rolls back with it.
+        await expect(
+          db.transaction(async (tx) => {
+            const before = await loadRunTx(tx, id, { forUpdate: true });
+            expect(before?.version).toBe(0);
+            const r = await appendRunCommandsTx(tx, id, 0, [player(1)], "h1");
+            expect(r.ok).toBe(true);
+            throw new Error("payment row could not be written");
+          }),
+        ).rejects.toThrow(/payment row/);
+        expect((await s.load(id))?.version).toBe(0);
+        // And when the caller commits, both are there.
+        await db.transaction(async (tx) => {
+          await appendRunCommandsTx(tx, id, 0, [player(2)], "h1b");
+        });
+        expect((await s.load(id))?.commands).toEqual([cmd(2)]);
       });
 
       it("committed history cannot be edited or deleted, even directly in SQL", async () => {
