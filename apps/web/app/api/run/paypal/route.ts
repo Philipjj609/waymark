@@ -4,10 +4,9 @@ import { rejectUnsafeWrite } from "../../../../lib/csrf";
 import { errorResponse, guarded, json, worldNotFound } from "../../../../lib/http";
 import { clientIp, hit, type Limit } from "../../../../lib/rate-limit";
 import {
-  capturePayment,
+  payBillThroughSandbox,
   paypalSandboxConfigured,
   staleSaveResponse,
-  startPayment,
 } from "../../../../lib/run-paypal";
 import {
   knownScenario,
@@ -57,30 +56,22 @@ const SaveSchema = z
   })
   .strict();
 
-const BodySchema = z.discriminatedUnion("action", [
-  z
-    .object({
-      action: z.literal("start"),
-      save: SaveSchema,
-      billId: z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("capture"),
-      save: SaveSchema,
-      operationId: z.string().regex(/^pop_[A-Za-z0-9_.:-]{1,120}$/),
-    })
-    .strict(),
-]);
+const BodySchema = z
+  .object({
+    action: z.literal("pay"),
+    save: SaveSchema,
+    billId: z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/),
+  })
+  .strict();
 
 const tooMany = () =>
   errorResponse(429, "RATE_LIMITED", "too many requests", { "retry-after": "60" });
 
 /**
- * Pay a Run bill through PayPal Sandbox (#112). Test money only. "start" creates the Sandbox order;
- * "capture" captures it and settles the bill ONLY after the server has read back a COMPLETED
- * capture of the exact amount. Nothing the browser says can settle a bill.
+ * Pay a Run bill through PayPal Sandbox (#112). Test money only. One "pay" call creates the
+ * Sandbox order with PayPal's published test card, captures it and settles the bill ONLY after the
+ * server has read back a COMPLETED capture of the exact amount. Nothing the browser says can
+ * settle a bill.
  */
 export async function POST(req: Request): Promise<Response> {
   return guarded(async () => {
@@ -123,18 +114,10 @@ export async function POST(req: Request): Promise<Response> {
     const stale = staleSaveResponse(save);
     if (stale) return stale;
 
-    // The CSRF gate above already proved this Origin is on our allowlist.
-    const origin = req.headers.get("origin") as string;
-    if (body.action === "start") {
-      const r = await startPayment(save, body.billId, origin);
-      return r.ok
-        ? json({ operationId: r.operationId, approveUrl: r.approveUrl }, 200, setCookie)
-        : json({ status: r.status, message: r.message }, 422, setCookie);
-    }
-    const r = await capturePayment(save, body.operationId);
+    const r = await payBillThroughSandbox(save, body.billId);
     if (r.ok) {
       return json(
-        { status: "PAID", save: r.save, view: r.view, already: r.already },
+        { status: "PAID", save: r.save, view: r.view, already: r.already, receipt: r.receipt },
         200,
         setCookie,
       );

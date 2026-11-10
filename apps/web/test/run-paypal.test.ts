@@ -1,10 +1,14 @@
-/** #112: paying a Run bill through PayPal Sandbox. A fake PayPal client; nothing leaves the machine. */
+/**
+ * #112: paying a Run bill through PayPal Sandbox in one server call, with PayPal's published Sandbox
+ * test card (no buyer sign-in). A fake PayPal client; nothing leaves the machine.
+ */
 import {
   formatPayPalAmount,
   InMemoryOperationStore,
   type ObservedOrder,
   type PayPalResult,
   type PayPalSandboxClient,
+  SANDBOX_TEST_CARD,
   SandboxCheckout,
 } from "@fle/payments";
 import { type Command, type RunView, YOU } from "@fle/run";
@@ -13,6 +17,7 @@ import { POST as postPayPal } from "../app/api/run/paypal/route";
 import { POST as postRun } from "../app/api/run/route";
 import { resetRateLimits } from "../lib/rate-limit";
 import {
+  type PayPalReceipt,
   paypalSandboxConfigured,
   setPayPalForTests,
   unreconciledPayments,
@@ -50,14 +55,20 @@ afterAll(() => {
   }
 });
 
-// -- a fake PayPal Orders v2 ----------------------------------------------------------------------
+// -- a fake PayPal Orders v2, behaving like the real Sandbox with the test card ---------------------
 
-type Behaviour = "OK" | "NOT_APPROVED" | "DECLINED" | "PENDING";
+/**
+ * COMPLETED_AT_CREATE: what the real Sandbox did on 10 Nov 2026 (order 9A84822712263045A): a
+ * test-card order comes back COMPLETED from create, and capture answers ALREADY_CAPTURED.
+ * The others are failure modes the server must survive without settling anything.
+ */
+type Behaviour = "COMPLETED_AT_CREATE" | "DECLINED_AT_CREATE" | "PENDING" | "NEEDS_APPROVAL";
 class FakeClient {
   orders = new Map<string, { order: ObservedOrder; amount: string; currency: string }>();
   created = 0;
-  captured = 0;
-  behaviour: Behaviour = "OK";
+  captureCalls = 0;
+  usedTestCard: unknown[] = [];
+  behaviour: Behaviour = "COMPLETED_AT_CREATE";
   /** Report this amount instead of the order's (a mismatch). */
   capturedAmount: string | null = null;
 
@@ -65,21 +76,46 @@ class FakeClient {
     amount: { amountMinor: number; currency: "EUR" };
     referenceId: string;
     requestId: string;
+    sandboxTestCard?: string;
   }): Promise<PayPalResult<ObservedOrder>> {
     const known = this.orders.get(i.requestId);
     if (known) return { kind: "OK", value: known.order, replayed: true, debugId: null };
+    this.usedTestCard.push(i.sandboxTestCard);
+    if (this.behaviour === "DECLINED_AT_CREATE") {
+      return { kind: "DECLINED", issue: "INSTRUMENT_DECLINED", order: null, debugId: null };
+    }
     this.created++;
     const f = formatPayPalAmount(i.amount);
-    const order: ObservedOrder = {
-      orderId: `ORDER${this.created}`,
-      status: "PAYER_ACTION_REQUIRED",
-      referenceId: i.referenceId,
-      customId: i.referenceId,
-      amountValue: f.value,
+    const id = `ORDER${this.created}`;
+    const capture = (status: "COMPLETED" | "PENDING") => ({
+      captureId: `CAP${this.created}`,
+      status,
+      amountValue: this.capturedAmount ?? f.value,
       currencyCode: f.currency_code,
-      captures: [],
-      approveUrl: `https://www.sandbox.paypal.com/checkoutnow?token=ORDER${this.created}`,
-    };
+      reason: null,
+    });
+    const order: ObservedOrder =
+      this.behaviour === "NEEDS_APPROVAL"
+        ? {
+            orderId: id,
+            status: "PAYER_ACTION_REQUIRED",
+            referenceId: i.referenceId,
+            customId: i.referenceId,
+            amountValue: f.value,
+            currencyCode: f.currency_code,
+            captures: [],
+            approveUrl: `https://www.sandbox.paypal.com/checkoutnow?token=${id}`,
+          }
+        : {
+            orderId: id,
+            status: this.behaviour === "PENDING" ? "APPROVED" : "COMPLETED",
+            referenceId: i.referenceId,
+            customId: i.referenceId,
+            amountValue: f.value,
+            currencyCode: f.currency_code,
+            captures: [capture(this.behaviour === "PENDING" ? "PENDING" : "COMPLETED")],
+            approveUrl: null,
+          };
     this.orders.set(i.requestId, { order, amount: f.value, currency: f.currency_code });
     return { kind: "OK", value: order, replayed: false, debugId: null };
   }
@@ -92,31 +128,12 @@ class FakeClient {
     return { kind: "OK", value: o.order, replayed: false, debugId: null };
   }
   async captureOrder(id: string): Promise<PayPalResult<ObservedOrder>> {
-    this.captured++;
+    this.captureCalls++;
     const o = this.#byOrderId(id);
     if (!o) return { kind: "REJECTED", httpStatus: 404, name: null, issue: null, debugId: null };
-    if (this.behaviour === "NOT_APPROVED") return { kind: "NOT_APPROVED", debugId: null };
-    if (this.behaviour === "DECLINED") {
-      return { kind: "DECLINED", issue: "INSTRUMENT_DECLINED", order: null, debugId: null };
-    }
-    const pending = this.behaviour === "PENDING";
-    const done: ObservedOrder = {
-      ...o.order,
-      status: pending ? "APPROVED" : "COMPLETED",
-      captures: [
-        {
-          captureId: "CAP1",
-          status: pending ? "PENDING" : "COMPLETED",
-          amountValue: this.capturedAmount ?? o.amount,
-          currencyCode: o.currency,
-          reason: null,
-        },
-      ],
-    };
-    o.order = done;
-    return pending
-      ? { kind: "PENDING", order: done, debugId: null }
-      : { kind: "OK", value: done, replayed: false, debugId: null };
+    if (o.order.status === "PAYER_ACTION_REQUIRED") return { kind: "NOT_APPROVED", debugId: null };
+    if (o.order.status === "APPROVED") return { kind: "PENDING", order: o.order, debugId: null };
+    return { kind: "ALREADY_CAPTURED", debugId: null };
   }
 }
 
@@ -169,27 +186,19 @@ const req = (path: string, body: unknown) =>
     headers: { origin: ORIGIN, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-const pay = (body: unknown) => postPayPal(req("/api/run/paypal", body));
+const pay = (save: SaveToken, billId: string, extra: Record<string, unknown> = {}) =>
+  postPayPal(req("/api/run/paypal", { action: "pay", save, billId, ...extra }));
 
-interface Started {
-  operationId: string;
-  approveUrl: string;
-}
 interface Paid {
   status: string;
   save: SaveToken;
   view: RunView;
   already: boolean;
+  receipt: PayPalReceipt | null;
 }
 interface Refused {
   status: string;
   message: string;
-}
-
-async function startOp(save: SaveToken, billId: string): Promise<Started> {
-  const res = await pay({ action: "start", save, billId });
-  expect(res.status).toBe(200);
-  return (await res.json()) as Started;
 }
 
 // -- tests ----------------------------------------------------------------------------------------
@@ -216,96 +225,70 @@ describe("configuration", () => {
   it("answers 404 when the Run is off and 503 when PayPal is not set up", async () => {
     const { save, billId } = withPayableBill();
     env.PAYPAL_CLIENT_ID = "";
-    expect((await pay({ action: "start", save, billId })).status).toBe(503);
+    expect((await pay(save, billId)).status).toBe(503);
     env.WAYMARK_RUN = "0";
-    expect((await pay({ action: "start", save, billId })).status).toBe(404);
+    expect((await pay(save, billId)).status).toBe(404);
   });
 });
 
-describe("start", () => {
-  it("creates one Sandbox order per operation and returns the approval link", async () => {
-    const { save, billId, amountMinor } = withPayableBill();
-    const a = await startOp(save, billId);
-    expect(a.operationId).toBe(`pop_${save.runId}_${billId}_1`);
-    expect(a.approveUrl).toContain("sandbox.paypal.com");
-    expect(fake.created).toBe(1);
-    // A second click reuses the open attempt instead of creating a second order.
-    const b = await startOp(save, billId);
-    expect(b.operationId).toBe(a.operationId);
-    expect(fake.created).toBe(1);
-    const order = [...fake.orders.values()][0];
-    expect(order?.amount).toBe(formatPayPalAmount({ amountMinor, currency: "EUR" }).value);
-  });
-
-  it("refuses a bill that does not exist, or that cash cannot cover", async () => {
-    const { save } = withPayableBill();
-    const missing = await pay({ action: "start", save, billId: "nope" });
-    expect(missing.status).toBe(422);
-    expect(((await missing.json()) as Refused).status).toBe("UNKNOWN_BILL");
-    // At the very start rent is due but the opening cash cannot cover it.
-    const poor = freshSave();
-    const state = stateOf(poor);
-    const rent = state.bills.find((b) => b.status === "DUE" && b.pocket === YOU);
-    expect(rent).toBeDefined();
-    if (rent && rent.amountMinor > (state.balances[YOU]?.["ASSET:Cash"] ?? 0)) {
-      const r = await pay({ action: "start", save: poor, billId: rent.id });
-      expect(((await r.json()) as Refused).status).toBe("NOT_ENOUGH_CASH");
-    }
-    expect(fake.created).toBe(0);
-  });
-
-  it("rejects unknown fields and bad saves", async () => {
-    const { save, billId } = withPayableBill();
-    expect((await pay({ action: "start", save, billId, extra: 1 })).status).toBe(400);
-    expect((await pay({ action: "start", save: { ...save, sig: "x" }, billId })).status).toBe(403);
-  });
-});
-
-describe("capture", () => {
-  it("settles the bill only after a verified COMPLETED capture, and signs a new save", async () => {
+describe("paying a bill", () => {
+  it("pays with the published test card, verifies with PayPal, settles and returns a receipt", async () => {
     const { save, billId, amountMinor } = withPayableBill();
     const cashBefore = stateOf(save).balances[YOU]?.["ASSET:Cash"] ?? 0;
-    const { operationId } = await startOp(save, billId);
-    const res = await pay({ action: "capture", save, operationId });
+    const res = await pay(save, billId);
     expect(res.status).toBe(200);
     const body = (await res.json()) as Paid;
     expect(body.status).toBe("PAID");
+    // No buyer sign-in: the server used PayPal's published Sandbox test card, and only that.
+    expect(fake.usedTestCard).toEqual([SANDBOX_TEST_CARD]);
+    expect(fake.created).toBe(1);
+
+    const operationId = `pop_${save.runId}_${billId}_1`;
     expect(body.save.log.length).toBe(save.log.length + 1);
-    const after = stateOf(body.save);
-    expect(after.bills.find((b) => b.id === billId)?.status).toBe("PAID");
-    expect(after.balances[YOU]?.["ASSET:Cash"]).toBe(cashBefore - amountMinor);
     expect(body.save.log.at(-1)).toMatchObject({
       kind: "SETTLE_EXTERNAL",
       billId,
+      amountMinor,
       provider: "PAYPAL_SANDBOX",
       operationId,
     });
+    const after = stateOf(body.save);
+    expect(after.bills.find((b) => b.id === billId)?.status).toBe("PAID");
+    expect(after.balances[YOU]?.["ASSET:Cash"]).toBe(cashBefore - amountMinor);
     expect(verifiedSettlements(save.runId)).toEqual([
       { operationId, billId, logIndex: save.log.length },
     ]);
+
+    expect(body.receipt).toMatchObject({
+      operationId,
+      orderId: "ORDER1",
+      captureId: "CAP1",
+      status: "COMPLETED",
+      amountMinor,
+      currency: "EUR",
+      evidence: "paypal:order:ORDER1:capture:CAP1",
+    });
   });
 
-  it("a second capture of the same payment does not pay twice", async () => {
+  it("a second click does not pay twice", async () => {
     const { save, billId } = withPayableBill();
-    const { operationId } = await startOp(save, billId);
-    const first = (await (await pay({ action: "capture", save, operationId })).json()) as Paid;
-    const again = await pay({ action: "capture", save: first.save, operationId });
-    expect(again.status).toBe(200);
-    const body = (await again.json()) as Paid;
-    expect(body.already).toBe(true);
-    expect(body.save.log.length).toBe(first.save.log.length);
-    expect(fake.captured).toBe(1);
+    const first = (await (await pay(save, billId)).json()) as Paid;
+    // The same save again: the payment is already verified, so nothing new is created or paid.
+    const again = await pay(first.save, billId);
+    expect(again.status).toBe(422);
+    expect(((await again.json()) as Refused).status).toBe("NOT_PAYABLE");
+    expect(fake.created).toBe(1);
+    expect(verifiedSettlements(save.runId)).toHaveLength(1);
   });
 
   it.each([
-    ["NOT_APPROVED", "NOT_APPROVED"],
-    ["DECLINED", "DECLINED"],
+    ["DECLINED_AT_CREATE", "FAILED"],
     ["PENDING", "PENDING"],
+    ["NEEDS_APPROVAL", "NOT_APPROVED"],
   ] as const)("%s settles nothing", async (behaviour, status) => {
     const { save, billId } = withPayableBill();
-    const { operationId } = await startOp(save, billId);
     fake.behaviour = behaviour;
-    const res = await pay({ action: "capture", save, operationId });
+    const res = await pay(save, billId);
     expect(res.status).toBe(422);
     expect(((await res.json()) as Refused).status).toBe(status);
     expect(verifiedSettlements(save.runId)).toEqual([]);
@@ -314,51 +297,59 @@ describe("capture", () => {
 
   it("an amount that differs from the bill settles nothing", async () => {
     const { save, billId } = withPayableBill();
-    const { operationId } = await startOp(save, billId);
     fake.capturedAmount = "0.01";
-    const res = await pay({ action: "capture", save, operationId });
+    const res = await pay(save, billId);
     expect(((await res.json()) as Refused).status).toBe("MISMATCH");
     expect(verifiedSettlements(save.runId)).toEqual([]);
     expect(unreconciledPayments(save.runId)).toEqual([]);
   });
 
-  it("an operation from another run, or an unknown one, is not recognised", async () => {
-    const a = withPayableBill();
-    const b = withPayableBill();
-    const { operationId } = await startOp(a.save, a.billId);
-    const wrongRun = await pay({ action: "capture", save: b.save, operationId });
-    expect(((await wrongRun.json()) as Refused).status).toBe("UNKNOWN_OPERATION");
-    const unknown = await pay({
-      action: "capture",
-      save: a.save,
-      operationId: `pop_${a.save.runId}_${a.billId}_9`,
-    });
-    expect(((await unknown.json()) as Refused).status).toBe("UNKNOWN_OPERATION");
-    expect(fake.captured).toBe(0);
+  it("refuses a bill that does not exist, or that cash cannot cover, before calling PayPal", async () => {
+    const { save } = withPayableBill();
+    const missing = await pay(save, "nope");
+    expect(missing.status).toBe(422);
+    expect(((await missing.json()) as Refused).status).toBe("UNKNOWN_BILL");
+    // At the very start rent is due but the opening cash cannot cover it.
+    const poor = freshSave();
+    const state = stateOf(poor);
+    const rent = state.bills.find((b) => b.status === "DUE" && b.pocket === YOU);
+    expect(rent).toBeDefined();
+    if (rent && rent.amountMinor > (state.balances[YOU]?.["ASSET:Cash"] ?? 0)) {
+      const r = await pay(poor, rent.id);
+      expect(((await r.json()) as Refused).status).toBe("NOT_ENOUGH_CASH");
+    }
+    expect(fake.created).toBe(0);
   });
 
-  it("a bill already paid in the game is not captured", async () => {
+  it("a bill already paid in the game is not sent to PayPal", async () => {
     const { save, billId } = withPayableBill();
-    const { operationId } = await startOp(save, billId);
     const inGame = applyToSave(save, { kind: "PAY_BILL", billId });
     expect(inGame.ok).toBe(true);
     if (!inGame.ok) return;
-    const res = await pay({ action: "capture", save: inGame.save, operationId });
+    const res = await pay(inGame.save, billId);
     expect(((await res.json()) as Refused).status).toBe("NOT_PAYABLE");
-    expect(fake.captured).toBe(0);
+    expect(fake.created).toBe(0);
+  });
+
+  it("rejects unknown fields, old actions and bad saves", async () => {
+    const { save, billId } = withPayableBill();
+    expect((await pay(save, billId, { extra: 1 })).status).toBe(400);
+    expect(
+      (await postPayPal(req("/api/run/paypal", { action: "start", save, billId }))).status,
+    ).toBe(400);
+    expect((await pay({ ...save, sig: "x" }, billId)).status).toBe(403);
   });
 });
 
 describe("verified payments cannot be undone", () => {
   it("refuses an older save with 409 after a verified payment", async () => {
     const { save, billId } = withPayableBill();
-    const { operationId } = await startOp(save, billId);
-    const paid = (await (await pay({ action: "capture", save, operationId })).json()) as Paid;
+    const paid = (await (await pay(save, billId)).json()) as Paid;
 
     const old = await postRun(req("/api/run", { action: "view", save }));
     expect(old.status).toBe(409);
     expect(await old.text()).toContain("STORE_CONFLICT");
-    expect((await pay({ action: "start", save, billId })).status).toBe(409);
+    expect((await pay(save, billId)).status).toBe(409);
 
     const current = await postRun(req("/api/run", { action: "view", save: paid.save }));
     expect(current.status).toBe(200);

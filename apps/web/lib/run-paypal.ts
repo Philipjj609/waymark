@@ -13,6 +13,7 @@ import {
   type PayPalResult,
   PayPalSandboxClient,
   type ProviderOperationStore,
+  SANDBOX_TEST_CARD,
   SandboxCheckout,
 } from "@fle/payments";
 import { type RunView, runView, YOU } from "@fle/run";
@@ -25,9 +26,14 @@ import { applyToSave, runEnabled, type SaveToken, stateOf } from "./run-save";
  *
  * The Run's money is fictional; PayPal Sandbox is only the rail that moves a labelled test payment.
  * A bill settles only when THIS SERVER captured the order, read it back from PayPal, and saw a
- * COMPLETED capture whose amount equals the bill (SandboxCheckout.verify). An approval, a redirect
- * or a postMessage from the return page settles nothing. The settlement enters the run as the
- * server-only SETTLE_EXTERNAL command, which a player cannot send through POST /api/run.
+ * COMPLETED capture whose amount equals the bill (SandboxCheckout.verify). The settlement enters the
+ * run as the server-only SETTLE_EXTERNAL command, which a player cannot send through POST /api/run.
+ *
+ * No buyer sign-in (owner decision, 10 Nov 2026): the server pays with PayPal's PUBLISHED Sandbox
+ * test card, so players and judges need no PayPal account and approve nothing. The card number is
+ * PayPal's public test number held by the client; a player never types or sees a card number, and
+ * the client refuses any other number and any non-Sandbox host. Every step is still a real Sandbox
+ * API call (create, capture, read back), and the receipt shows PayPal's own ids.
  *
  * Amount rule: @fle/payments defines no mapping of fictional money, so the bill amount is sent
  * 1:1 in EUR (the Run's currency) and the operation record keeps it as `expected`.
@@ -109,6 +115,8 @@ function checkout(): SandboxCheckout {
       clientId: process.env.PAYPAL_CLIENT_ID ?? "",
       clientSecret: process.env.PAYPAL_CLIENT_SECRET ?? "",
       allowedReturnOrigins: allowedOrigins(),
+      // See the header: the server, not the player, uses PayPal's published Sandbox test card.
+      allowSandboxTestCard: true,
     });
     s.checkout = new SandboxCheckout(client, store());
   }
@@ -182,15 +190,28 @@ interface Failure {
   readonly status: PayPalFailure;
   readonly message: string;
 }
-export type StartResult =
-  | { readonly ok: true; readonly operationId: string; readonly approveUrl: string }
-  | Failure;
-export type CaptureResult =
+/** What PayPal Sandbox confirmed, read back by the server. Shown to the player as a receipt. */
+export interface PayPalReceipt {
+  readonly operationId: string;
+  readonly orderId: string;
+  readonly captureId: string;
+  readonly status: "COMPLETED";
+  readonly amountMinor: number;
+  readonly currency: typeof CURRENCY;
+  readonly billLabel: string;
+  /** e.g. "paypal:order:<id>:capture:<id>" */
+  readonly evidence: string;
+  readonly verifiedAt: string;
+}
+
+type StartResult = { readonly ok: true; readonly operationId: string } | Failure;
+export type PayResult =
   | {
       readonly ok: true;
       readonly save: SaveToken;
       readonly view: RunView;
       readonly already: boolean;
+      readonly receipt: PayPalReceipt | null;
     }
   | Failure;
 
@@ -232,13 +253,22 @@ function explainFailure(r: PayPalResult<unknown>): string {
     : "PayPal Sandbox could not start this payment. Nothing was paid.";
 }
 
-// -- start --------------------------------------------------------------------------------------
+// -- pay ----------------------------------------------------------------------------------------
 
-export async function startPayment(
-  save: SaveToken,
-  billId: string,
-  origin: string,
-): Promise<StartResult> {
+/**
+ * Pay one due bill through PayPal Sandbox in a single server call: create the order with the
+ * published test card, capture it, read it back from PayPal, verify it, then settle the bill.
+ * Serialised per run, so a double click cannot pay twice.
+ */
+export function payBillThroughSandbox(save: SaveToken, billId: string): Promise<PayResult> {
+  return exclusive(save.runId, async () => {
+    const started = await createOrder(save, billId);
+    if (!started.ok) return started;
+    return captureLocked(save, started.operationId);
+  });
+}
+
+async function createOrder(save: SaveToken, billId: string): Promise<StartResult> {
   const ok = payable(save, billId);
   if (!ok.ok) return ok;
   const amount = { amountMinor: ok.bill.amountMinor, currency: CURRENCY };
@@ -256,27 +286,18 @@ export async function startPayment(
     n += 1;
   }
   const operationId = operationIdOf(save.runId, billId, n);
-  const back = `${origin}/run/paypal/return?op=${encodeURIComponent(operationId)}`;
   const result = await checkout().start({
     operationId,
     worldId: worldIdOf(save.runId),
     obligationId: obligationIdOf(billId),
     amount,
-    returnUrl: back,
-    cancelUrl: `${back}&cancelled=1`,
+    sandboxTestCard: SANDBOX_TEST_CARD,
   });
   if (result.kind !== "OK") return fail("FAILED", explainFailure(result));
-  if (!result.value.approveUrl) {
-    return fail("FAILED", "PayPal did not give a link to approve the payment. Try again.");
-  }
-  return { ok: true, operationId, approveUrl: result.value.approveUrl };
+  return { ok: true, operationId };
 }
 
-// -- capture ------------------------------------------------------------------------------------
-
-export function capturePayment(save: SaveToken, operationId: string): Promise<CaptureResult> {
-  return exclusive(save.runId, () => captureLocked(save, operationId));
-}
+// -- capture and verify -------------------------------------------------------------------------
 
 const MISMATCH_REASONS = new Set([
   "AMOUNT_MISMATCH",
@@ -286,7 +307,7 @@ const MISMATCH_REASONS = new Set([
   "OPERATION_MISMATCH",
 ]);
 
-async function captureLocked(save: SaveToken, operationId: string): Promise<CaptureResult> {
+async function captureLocked(save: SaveToken, operationId: string): Promise<PayResult> {
   const idParse = ProviderOperationIdSchema.safeParse(operationId);
   const unknown = fail("UNKNOWN_OPERATION", "This payment is not recognised.");
   if (!idParse.success) return unknown;
@@ -310,7 +331,7 @@ async function captureLocked(save: SaveToken, operationId: string): Promise<Capt
         "This payment was already confirmed. Continue from your latest save.",
       );
     }
-    return { ok: true, save, view: runView(stateOf(save)), already: true };
+    return { ok: true, save, view: runView(stateOf(save)), already: true, receipt: null };
   }
 
   // Before any money moves: the bill is still payable, covered, and the amount is unchanged.
@@ -390,5 +411,21 @@ async function captureLocked(save: SaveToken, operationId: string): Promise<Capt
     ...verifiedSettlements(save.runId),
     { operationId, billId, logIndex: save.log.length },
   ]);
-  return { ok: true, save: applied.save, view: runView(applied.state), already: false };
+  return {
+    ok: true,
+    save: applied.save,
+    view: runView(applied.state),
+    already: false,
+    receipt: {
+      operationId,
+      orderId: event.orderId,
+      captureId: event.providerEventId,
+      status: "COMPLETED",
+      amountMinor: event.amount.amountMinor,
+      currency: CURRENCY,
+      billLabel: ok.bill.label,
+      evidence: event.verification.evidenceRef,
+      verifiedAt: event.verification.verifiedAt,
+    },
+  };
 }

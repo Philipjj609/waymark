@@ -1463,3 +1463,45 @@ dialog.run-sheet::backdrop {
     scroll-behavior: auto !important;
   }
 }
+
+/* PayPal Sandbox receipt: a till slip, so a verified payment reads as a real document. */
+.run-receipt {
+  border: 1px dashed var(--rule-strong);
+  background: var(--color-surface, var(--paper));
+  padding: 16px 18px;
+  margin-block: 12px;
+  display: grid;
+  gap: 10px;
+  max-width: 44rem;
+}
+.run-receipt-head h3 {
+  margin: 0;
+}
+.run-receipt-head p {
+  margin: 4px 0 0;
+}
+.run-receipt-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.run-receipt-steps li {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  gap: 6px;
+  align-items: start;
+}
+.run-receipt-tick {
+  color: var(--green);
+  font-weight: 700;
+}
+.run-receipt-detail {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.run-receipt-evidence {
+  overflow-wrap: anywhere;
+  margin: 0;
+}

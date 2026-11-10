@@ -1,230 +1,154 @@
 "use client";
 
 import type { BillView, RunView } from "@fle/run";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import type { PayPalReceipt } from "../../lib/run-paypal";
 import type { SaveToken } from "../../lib/run-save";
+import { euros } from "./format";
+
+export type { PayPalReceipt };
 
 export interface PayWithPayPalProps {
   readonly save: SaveToken;
   readonly bill: BillView;
-  /** Called with the new save and view once the server has verified the Sandbox payment. */
-  readonly onSettled: (next: { save: SaveToken; view: RunView }) => void;
-}
-
-type Phase =
-  | { kind: "idle" }
-  | { kind: "starting" }
-  | { kind: "waiting"; operationId: string; approveUrl: string; popupBlocked: boolean }
-  | { kind: "capturing"; operationId: string }
-  | { kind: "paid" }
-  | { kind: "not-approved"; operationId: string; approveUrl: string }
-  | { kind: "failed"; message: string };
-
-interface Refusal {
-  readonly status: string;
-  readonly message: string;
-}
-interface Paid {
-  readonly save: SaveToken;
-  readonly view: RunView;
+  /** Called with the new save, view and PayPal's receipt once the server verified the payment. */
+  readonly onSettled: (next: {
+    save: SaveToken;
+    view: RunView;
+    receipt: PayPalReceipt | null;
+  }) => void;
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
-/** Same-origin JSON POST to the PayPal route; the CSRF gate accepts exactly this shape. */
-async function post(body: unknown): Promise<{ status: number; json: unknown }> {
-  const res = await fetch("/api/run/paypal", {
-    method: "POST",
-    credentials: "same-origin",
-    cache: "no-store",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  let json: unknown = null;
-  try {
-    json = await res.json();
-  } catch {
-    json = null;
-  }
-  return { status: res.status, json };
-}
-
-const refusalOf = (json: unknown): Refusal | null =>
-  isObject(json) && typeof json.status === "string" && typeof json.message === "string"
-    ? { status: json.status, message: json.message }
-    : null;
-
-/** Answers of the capture step that mean "nothing was paid, you can still go and approve". */
-const asPaid = (json: unknown): Paid | null =>
-  isObject(json) && json.status === "PAID" && isObject(json.save) && isObject(json.view)
-    ? { save: json.save as unknown as SaveToken, view: json.view as unknown as RunView }
-    : null;
-
-const POPUP = "width=520,height=720";
-
 /**
- * "Pay with PayPal Sandbox" for one due bill. The money in the game is fictional and PayPal Sandbox
- * is a test rail: nothing real moves. The browser only OPENS the approval and ASKS the server to
- * capture; the bill is settled by the server alone, after it has read a completed capture of the
- * exact amount back from PayPal. A message from the return window is a nudge to ask, never proof.
+ * "Pay with PayPal Sandbox" for one due bill. One click asks the server to pay; the server creates
+ * a Sandbox order with PayPal's published test card, captures it, reads it back and verifies it
+ * before the bill counts as paid. Nobody signs in to PayPal and nothing real moves. The browser
+ * only asks; it can never settle a bill itself.
  */
 export function PayWithPayPal({ save, bill, onSettled }: PayWithPayPalProps) {
-  const [phase, setPhase] = useState<Phase>({ kind: "idle" });
-  // Capture with the save as it is NOW, not as it was when the button was clicked.
-  const latest = useRef({ save, onSettled });
-  latest.current = { save, onSettled };
-  const busy = useRef(false);
+  const [phase, setPhase] = useState<"idle" | "paying" | "failed">("idle");
+  const [message, setMessage] = useState("");
 
-  const capture = useCallback(async (operationId: string, approveUrl: string) => {
-    if (busy.current) return;
-    busy.current = true;
-    setPhase({ kind: "capturing", operationId });
+  async function pay() {
+    if (phase === "paying") return;
+    setPhase("paying");
+    setMessage("");
     try {
-      const { status, json } = await post({
-        action: "capture",
-        save: latest.current.save,
-        operationId,
+      const res = await fetch("/api/run/paypal", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "pay", save, billId: bill.id }),
       });
-      const paid = status === 200 ? asPaid(json) : null;
-      if (paid) {
-        setPhase({ kind: "paid" });
-        latest.current.onSettled(paid);
-        return;
-      }
-      const refusal = refusalOf(json);
-      if (refusal?.status === "NOT_APPROVED") {
-        setPhase({ kind: "not-approved", operationId, approveUrl });
-      } else {
-        setPhase({
-          kind: "failed",
-          message:
-            status === 409 && !refusal
-              ? "Your run has moved on. Reload the page and open your latest save."
-              : (refusal?.message ?? "Something went wrong. Nothing was paid."),
-        });
-      }
-    } catch {
-      setPhase({
-        kind: "failed",
-        message: "Could not reach the game. Nothing was paid; check your connection and try again.",
-      });
-    } finally {
-      busy.current = false;
-    }
-  }, []);
-
-  // The return window tells us the buyer came back; we then ask the server to check with PayPal.
-  const waitingFor = phase.kind === "waiting" ? phase : null;
-  useEffect(() => {
-    if (!waitingFor) return;
-    const { operationId, approveUrl } = waitingFor;
-    const onMessage = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin) return;
-      const d: unknown = e.data;
-      if (!isObject(d) || d.type !== "waymark-paypal" || d.op !== operationId) return;
-      if (d.status === "cancelled") {
-        setPhase({ kind: "not-approved", operationId, approveUrl });
-        return;
-      }
-      void capture(operationId, approveUrl);
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [waitingFor, capture]);
-
-  async function start() {
-    setPhase({ kind: "starting" });
-    try {
-      const { json } = await post({ action: "start", save: latest.current.save, billId: bill.id });
+      const json: unknown = await res.json().catch(() => null);
       if (
+        res.ok &&
         isObject(json) &&
-        typeof json.operationId === "string" &&
-        typeof json.approveUrl === "string"
+        json.status === "PAID" &&
+        isObject(json.save) &&
+        isObject(json.view)
       ) {
-        const popup = window.open(json.approveUrl, "waymark-paypal", POPUP);
-        setPhase({
-          kind: "waiting",
-          operationId: json.operationId,
-          approveUrl: json.approveUrl,
-          popupBlocked: !popup,
+        setPhase("idle");
+        onSettled({
+          save: json.save as unknown as SaveToken,
+          view: json.view as unknown as RunView,
+          receipt: isObject(json.receipt) ? (json.receipt as unknown as PayPalReceipt) : null,
         });
         return;
       }
-      setPhase({
-        kind: "failed",
-        message: refusalOf(json)?.message ?? "PayPal Sandbox is not available right now.",
-      });
+      const said = isObject(json) && typeof json.message === "string" ? json.message : null;
+      const nested =
+        isObject(json) && isObject(json.error) && typeof json.error.message === "string";
+      setMessage(
+        said ??
+          (nested
+            ? "PayPal Sandbox could not take this payment. Nothing was paid."
+            : "Something went wrong. Nothing was paid."),
+      );
+      setPhase("failed");
     } catch {
-      setPhase({
-        kind: "failed",
-        message: "Could not reach the game. Nothing was paid; check your connection and try again.",
-      });
+      setMessage("The game server could not be reached. Nothing was paid.");
+      setPhase("failed");
     }
   }
 
-  const working = phase.kind === "starting" || phase.kind === "capturing";
   return (
-    <div className="run-paypal" data-testid="paypal-pay" data-phase={phase.kind}>
-      {phase.kind !== "paid" ? (
-        <button
-          type="button"
-          className="btn"
-          disabled={working || phase.kind === "waiting"}
-          data-testid="paypal-pay-button"
-          onClick={() => void start()}
-        >
-          Pay with PayPal Sandbox (test money)
-        </button>
-      ) : null}
-      <p className="small muted" role="status" aria-live="polite">
-        {phase.kind === "idle" ? "Test money in a PayPal Sandbox. No real payment is made." : null}
-        {phase.kind === "starting" ? "Opening PayPal Sandbox..." : null}
-        {phase.kind === "waiting"
-          ? "Waiting for your approval in the PayPal Sandbox window. Use a Sandbox buyer account."
-          : null}
-        {phase.kind === "capturing" ? "Checking the payment with PayPal Sandbox..." : null}
-        {phase.kind === "paid"
-          ? "Paid and verified with PayPal Sandbox (test money). Your bill is settled."
-          : null}
-        {phase.kind === "not-approved"
-          ? "PayPal Sandbox has not seen your approval, so nothing was paid."
-          : null}
-        {phase.kind === "failed" ? phase.message : null}
-      </p>
-      {phase.kind === "waiting" ? (
-        <p className="small">
-          {phase.popupBlocked ? (
-            <>
-              Your browser blocked the window.{" "}
-              <a href={phase.approveUrl} target="_blank" rel="noreferrer">
-                Open PayPal Sandbox
-              </a>
-              , approve, then{" "}
-            </>
-          ) : null}
-          <button
-            type="button"
-            className="btn btn-quiet"
-            onClick={() => void capture(phase.operationId, phase.approveUrl)}
-          >
-            I have approved it
-          </button>
-        </p>
-      ) : null}
-      {phase.kind === "not-approved" ? (
-        <p className="small">
-          <a href={phase.approveUrl} target="_blank" rel="noreferrer">
-            Open PayPal Sandbox again
-          </a>{" "}
-          <button
-            type="button"
-            className="btn btn-quiet"
-            onClick={() => void capture(phase.operationId, phase.approveUrl)}
-          >
-            Check again
-          </button>
+    <div className="run-paypal" data-testid={`paypal-${bill.id}`}>
+      <button
+        type="button"
+        className="btn"
+        onClick={pay}
+        disabled={phase === "paying"}
+        aria-busy={phase === "paying"}
+      >
+        {phase === "paying"
+          ? "Paying through PayPal Sandbox…"
+          : "Pay with PayPal Sandbox (test money)"}
+      </button>
+      {phase === "failed" ? (
+        <p className="small" role="alert">
+          {message}
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The receipt after a verified Sandbox payment: each step is a real PayPal Sandbox API call the
+ * server made, with PayPal's own ids, so the player can see what "verified" means.
+ */
+export function PayPalReceiptCard({
+  receipt,
+  onClose,
+}: {
+  receipt: PayPalReceipt;
+  onClose: () => void;
+}) {
+  const amount = euros(receipt.amountMinor);
+  const steps = [
+    { label: "Order created on PayPal Sandbox", detail: `Order ${receipt.orderId}, ${amount}` },
+    { label: "Paid with PayPal's Sandbox test card", detail: "No sign-in and no real money" },
+    { label: "Money captured", detail: `Capture ${receipt.captureId}` },
+    {
+      label: "Read back from PayPal by the game server",
+      detail: `Status ${receipt.status}, amount ${amount}`,
+    },
+    {
+      label: `${receipt.billLabel} marked as paid`,
+      detail: "Only after the amount matched exactly",
+    },
+  ];
+  return (
+    <section
+      className="run-receipt"
+      aria-label="PayPal Sandbox receipt"
+      data-testid="paypal-receipt"
+    >
+      <header className="run-receipt-head">
+        <h3>PayPal Sandbox receipt</h3>
+        <p className="small">Test money in PayPal&apos;s Sandbox. Nothing real moved.</p>
+      </header>
+      <ol className="run-receipt-steps">
+        {steps.map((s) => (
+          <li key={s.label}>
+            <span className="run-receipt-tick" aria-hidden="true">
+              ✓
+            </span>
+            <span>
+              <strong>{s.label}</strong>
+              <span className="small muted run-receipt-detail">{s.detail}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+      <p className="small muted run-receipt-evidence">Evidence: {receipt.evidence}</p>
+      <button type="button" className="btn btn-quiet" onClick={onClose}>
+        Close receipt
+      </button>
+    </section>
   );
 }

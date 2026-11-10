@@ -1,7 +1,7 @@
 import type { BillView, CardView, InvoiceView, RunView } from "@fle/run";
 import type { SaveToken } from "../../lib/run-save";
 import { daysLeftText, euros, inDaysText, plural } from "./format";
-import { PayWithPayPal } from "./pay-with-paypal";
+import { type PayPalReceipt, PayWithPayPal } from "./pay-with-paypal";
 import { type Act, pocketName } from "./ui";
 
 const KIND_WORDS: Record<CardView["kind"], string> = {
@@ -103,7 +103,11 @@ export interface PayPalSlot {
   /** True when the server has PayPal Sandbox configured (page prop paypalSandbox). */
   readonly enabled: boolean;
   readonly save: SaveToken;
-  readonly onSettled: (next: { save: SaveToken; view: RunView }) => void;
+  readonly onSettled: (next: {
+    save: SaveToken;
+    view: RunView;
+    receipt: PayPalReceipt | null;
+  }) => void;
 }
 
 export function Bills({ view, act, paypal }: { view: RunView; act: Act; paypal: PayPalSlot }) {

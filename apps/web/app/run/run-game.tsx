@@ -11,6 +11,7 @@ import { Bills, Inbox, Invoices } from "./inbox";
 import { Asks, MonthCloseSheet, Notes, YearReviewPage } from "./learning-panels";
 import { MoneyStrip } from "./money-strip";
 import { NeedsYou, type Pane } from "./needs-you";
+import { type PayPalReceipt, PayPalReceiptCard } from "./pay-with-paypal";
 import { type ScenarioSummary, StartScreen } from "./start-screen";
 import { loadRuns, type StoredRun, sortRuns, writeRuns } from "./storage";
 import { Feed, Timeline } from "./timeline";
@@ -396,8 +397,9 @@ function Desk({
   onDismissMonth: () => void;
   onOpenMonth: () => void;
   onOpenYear: () => void;
-  onSettled: (next: { save: SaveToken; view: RunView }) => void;
+  onSettled: (next: { save: SaveToken; view: RunView; receipt: PayPalReceipt | null }) => void;
 }) {
+  const [receipt, setReceipt] = useState<PayPalReceipt | null>(null);
   const [pane, setPane] = useState<Pane>("week");
   const [toolsOpen, setToolsOpen] = useState(false);
   const [goTo, setGoTo] = useState<{ id: string; n: number } | null>(null);
@@ -452,6 +454,8 @@ function Desk({
         </div>
       </section>
 
+      {receipt ? <PayPalReceiptCard receipt={receipt} onClose={() => setReceipt(null)} /> : null}
+
       {refusal ? (
         <p className="run-refusal" role="alert" data-testid="refusal">
           {refusal}
@@ -478,7 +482,18 @@ function Desk({
               onOpenYear={onOpenYear}
             />
             <Inbox view={view} act={act} />
-            <Bills view={view} act={act} paypal={{ enabled: paypalSandbox, save, onSettled }} />
+            <Bills
+              view={view}
+              act={act}
+              paypal={{
+                enabled: paypalSandbox,
+                save,
+                onSettled: (next) => {
+                  setReceipt(next.receipt);
+                  onSettled(next);
+                },
+              }}
+            />
             <Invoices view={view} act={act} />
             <Asks view={view} act={act} hideQuestions={monthSheetOpen} />
           </div>
