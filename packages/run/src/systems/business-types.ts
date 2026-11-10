@@ -156,7 +156,7 @@ export const SERVICE_DEFAULTS: Record<string, LeverValue> = {
 export const UNIT_COST_MINOR: Minor = 400;
 export const BULK_UNITS = 100;
 export const BULK_DISCOUNT_PCT = 10;
-export const STALL_FEE_MINOR: Minor = 6_000;
+export const STALL_FEE_MINOR: Minor = 5_000;
 export const SPOIL_PCT = 3;
 /** Units a week at 50% markup, 4 days open, no marketing, reputation 50, in hundredths. */
 /** Tuned by the R9 sweep: at 70 the stall could not cover rent whatever the levers. */

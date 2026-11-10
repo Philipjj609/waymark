@@ -195,7 +195,7 @@ export const SCENARIOS: readonly ScenarioDef[] = [
     cashMinor: 30_000,
     hoursBudget: 60,
     recurring: livingCosts({
-      rentMinor: 55_000,
+      rentMinor: 50_000,
       foodMinor: 30_000,
       phoneMinor: 2_500,
       travelMinor: 4_000,

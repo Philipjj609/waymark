@@ -157,7 +157,7 @@ export function AdvisorPanel({ save, view, onCommand }: AdvisorPanelProps) {
   return (
     <section className="run-panel advisor" aria-labelledby={`${fieldId}-h`} data-testid="advisor">
       <style>{ADVISOR_CSS}</style>
-      <h2 id={`${fieldId}-h`} className="run-h">
+      <h2 id={`${fieldId}-h`} className="run-sr">
         Advisor
       </h2>
       <fieldset className="advisor-tabs">

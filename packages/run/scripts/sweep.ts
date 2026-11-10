@@ -186,7 +186,15 @@ export function nextCommand(strategy: StrategyId, s: RunState, tried: Set<string
         out.push({ kind: "TRANSFER", from: YOU, to: b.id, amountMinor: cost - cashOf(s, b.id) });
     }
     if (strategy === "hustler") {
-      const want: Record<string, number | string> = { marketing: "LOW" };
+      // Advertising only buys customers a business has room for: when it is already turning people
+      // away (hours or stock are the limit) it is money thrown away, so a sensible hustler stops.
+      const full = s.events.some(
+        (e) =>
+          (e.kind === "BUSINESS_TURNED_AWAY" || e.kind === "BUSINESS_SOLD_OUT") &&
+          e.refs.businessId === b.id &&
+          e.day > s.day - 28,
+      );
+      const want: Record<string, number | string> = { marketing: full ? "OFF" : "LOW" };
       if (b.type === "STOCK") want.daysOpen = s.person.jobId ? 3 : 5;
       for (const [lever, value] of Object.entries(want))
         if (b.levers[lever] !== value)
@@ -327,6 +335,8 @@ export function sweepCell(
 function main(): void {
   const seeds = Number(process.argv[2] ?? 40);
   const years = Number(process.argv[3] ?? 2);
+  // Optional 3rd argument: comma-separated scenario ids, to tune one scenario quickly.
+  const only = process.argv[4]?.split(",");
   allCards();
   const cols = [
     "scenario",
@@ -343,7 +353,7 @@ function main(): void {
   ];
   const rows: string[][] = [cols];
   const errors: string[] = [];
-  for (const sc of SCENARIOS)
+  for (const sc of SCENARIOS.filter((x) => !only || only.includes(x.id)))
     for (const st of STRATEGIES) {
       const r = sweepCell(sc.id, st, seeds, years);
       if (r.firstError) errors.push(`${sc.id}/${st}: ${r.firstError}`);

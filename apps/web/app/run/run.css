@@ -304,12 +304,6 @@ body:has(.run) {
   padding: 6px 12px;
   font-size: 0.875rem;
 }
-.run[data-busy="true"] .btn,
-.run[data-busy="true"] .run-segment,
-.run[data-busy="true"] .run-switch {
-  cursor: progress;
-}
-
 .run .chip {
   display: inline-block;
   padding: 1px 10px;
@@ -1297,6 +1291,10 @@ dialog.run-sheet::backdrop {
   max-width: 44rem;
   padding: 8px 0 24px;
 }
+.run-year-change {
+  margin: 16px 0 4px;
+  font-weight: 600;
+}
 .run-year-story p {
   max-width: 62ch;
   font-family: var(--serif);
@@ -1458,8 +1456,11 @@ dialog.run-sheet::backdrop {
   .run *,
   .run *::before,
   .run *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must beat every component rule */
     animation: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must beat every component rule */
     transition: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must beat every component rule */
     scroll-behavior: auto !important;
   }
 }
@@ -1504,4 +1505,12 @@ dialog.run-sheet::backdrop {
 .run-receipt-evidence {
   overflow-wrap: anywhere;
   margin: 0;
+}
+
+/* Last on purpose: its selectors are more specific than the base rules above, so keeping them
+   at the end means no later, weaker rule appears to sit under them. */
+.run[data-busy="true"] .btn,
+.run[data-busy="true"] .run-segment,
+.run[data-busy="true"] .run-switch {
+  cursor: progress;
 }

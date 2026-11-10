@@ -74,13 +74,28 @@ describe("balance sweep (4 seeds, 1 year)", () => {
   it("taking every side job is a trade-off: a hustler ends ahead of careful, but not by far (#121)", () => {
     // Worn-out weeks cost a doctor's bill and lost shifts. Before that cost existed a hustler ended
     // about 2x a careful player in first-flat and fresh-start; the bound below is the tuned gap.
+    // The hustler bot now stops buying marketing once a business is already turning customers
+    // away (that spend was wasted and hid the hustler's real edge), so the 1-year gap is about
+    // 1.66x in first-flat; the bound moved from 1.6 to 1.75 for that, not because the game changed.
     for (const sc of ["first-flat", "fresh-start"]) {
       const careful = median(play(sc, "careful").worth);
       const hustler = median(play(sc, "hustler").worth);
       expect(hustler, sc).toBeGreaterThan(careful);
-      expect(hustler / careful, sc).toBeLessThan(1.6);
+      expect(hustler / careful, sc).toBeLessThan(1.75);
     }
   });
+
+  it("a well-run stall ends two years ahead of where it started (R9 sweep)", () => {
+    // Before tuning, careful and hustler ended near EUR 4.1k from a EUR 5.3k start: the stall could
+    // not pay its own way. Rent EUR 500 and a EUR 50 pitch fee fixed that; stock still ties up cash.
+    const start = 30_000 + 500_000;
+    for (const strategy of ["careful", "hustler"] as const) {
+      const worth = SEEDS.map((seed) =>
+        netWorth(playRun("the-stall", seed, strategy, 1 + 2 * DAYS_PER_YEAR).state),
+      );
+      expect(median(worth), strategy).toBeGreaterThan(start);
+    }
+  }, 60_000);
 
   it("no single strategy is the best in every scenario", () => {
     const best = SCENARIOS.map((sc) => {

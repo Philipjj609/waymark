@@ -8,6 +8,10 @@ import { expect, type Page, type Response, test } from "@playwright/test";
 
 const RUNS_KEY = "waymark.run.saves.v2";
 const LEGACY_KEY = "waymark.run.save.v1";
+/** Screenshots for the UX council (a scratch folder outside the repo). */
+const SHOTS =
+  process.env.RUN_SHOTS_DIR ??
+  "C:/Users/phili/AppData/Local/Temp/claude/40b59aff0cbb7ac9/65115155-930f-4990-af83-832317a808ee/scratchpad/council/shots";
 
 const isRunPost = (r: Response) =>
   r.request().method() === "POST" && new URL(r.url()).pathname === "/api/run";
@@ -305,5 +309,106 @@ test.describe("the Run", () => {
     await page.getByTestId("remove-run").click();
     await expect(page.getByTestId("saved-run")).toHaveCount(0);
     await expect(page.getByTestId("start-screen")).toBeVisible();
+  });
+
+  test("the end of year 1 shows the year review: story, net worth, and the transfer question", async ({
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(120_000);
+    const origin = baseURL as string;
+    const post = (data: unknown) =>
+      page.request.post("/api/run", {
+        headers: { origin, "content-type": "application/json" },
+        data,
+      });
+    type Reply = {
+      view: {
+        learning: { yearReview: { year: number } | null };
+        bills: { id: string; status: string }[];
+      };
+      save: unknown;
+    };
+
+    // Start through the API, as the app does, then play a careful year quickly: pay what is due,
+    // let a week pass, until the year review exists. Same Origin the app sends.
+    await page.goto("/run");
+    const started = await post({ action: "start", scenarioId: "first-flat" });
+    expect(started.status()).toBe(200);
+    let reply = (await started.json()) as Reply;
+    for (let i = 0; i < 80 && !reply.view.learning.yearReview; i++) {
+      for (const bill of reply.view.bills.filter((b) => b.status === "DUE")) {
+        const paid = await post({
+          action: "command",
+          save: reply.save,
+          command: { kind: "PAY_BILL", billId: bill.id },
+        });
+        if (paid.status() === 200) reply = (await paid.json()) as Reply;
+      }
+      const res = await post({
+        action: "command",
+        save: reply.save,
+        command: { kind: "ADVANCE", mode: "WEEK" },
+      });
+      expect([200, 422]).toContain(res.status());
+      reply = (await res.json()) as Reply;
+    }
+    expect(reply.view.learning.yearReview, "a year of weeks reaches the review").not.toBeNull();
+
+    // Put that save where the app keeps saves, then open it from the start screen.
+    await page.evaluate(
+      ([key, save]) => {
+        localStorage.setItem(
+          key,
+          JSON.stringify([
+            {
+              id: (save as { runId: string }).runId,
+              name: "Year one",
+              scenarioId: "first-flat",
+              save,
+              calendarLabel: "Year 1",
+              updatedAt: Date.now(),
+            },
+          ]),
+        );
+      },
+      [RUNS_KEY, reply.save] as const,
+    );
+    await page.reload();
+    await clickAndWaitForRun(page, () => page.getByTestId("continue-run").click());
+
+    const review = page.getByTestId("year-review");
+    await expect(review).toBeVisible();
+    await expect(review).toContainText("Year 1, looking back");
+    await expect(review).toContainText("Net worth at the start");
+    await expect(review).toContainText("Net worth at the end");
+    await expect(review.locator(".run-year-story p").first()).not.toBeEmpty();
+    await expect(review.getByTestId("year-change")).toContainText("Your net worth");
+    // Months the player never guessed are not listed as "You guessed nothing".
+    await expect(review).not.toContainText("You guessed nothing");
+    const question = review.getByTestId("question");
+    await expect(question).toContainText("Sam has");
+    for (const [name, size] of [
+      ["desktop", { width: 1280, height: 900 }],
+      ["phone", { width: 390, height: 844 }],
+    ] as const) {
+      await page.setViewportSize(size);
+      expect(
+        await noHorizontalScroll(page),
+        `${name} has no horizontal scroll`,
+      ).toBeLessThanOrEqual(0);
+      await page.screenshot({
+        path: `${SHOTS}/year-review-${name}.png`,
+        fullPage: true,
+      });
+    }
+
+    // Answering works, and the desk comes back.
+    const answered = await clickAndWaitForRun(page, () =>
+      question.getByRole("button").first().click(),
+    );
+    expect([200, 422]).toContain(answered.status());
+    await page.getByTestId("year-dismiss").click();
+    await expect(page.getByTestId("desk")).toBeVisible();
   });
 });

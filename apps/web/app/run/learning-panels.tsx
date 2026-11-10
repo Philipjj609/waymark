@@ -231,6 +231,8 @@ export function YearReviewPage({
   questions: readonly Question[];
   onDismiss: () => void;
 }) {
+  // Only guesses the player actually made: "You guessed nothing" six times is noise, not a lesson.
+  const guessed = review.predictions.filter((p) => p.valueMinor !== null);
   return (
     <section
       className="run-year"
@@ -252,6 +254,11 @@ export function YearReviewPage({
           <dd className="figure">{euros(review.netWorthEndMinor)}</dd>
         </div>
       </dl>
+      <p className="run-year-change" data-testid="year-change">
+        {review.netWorthEndMinor >= review.netWorthStartMinor
+          ? `Your net worth rose by ${euros(review.netWorthEndMinor - review.netWorthStartMinor)} over the year.`
+          : `Your net worth fell by ${euros(review.netWorthStartMinor - review.netWorthEndMinor)} over the year.`}
+      </p>
       <div className="run-year-story">
         {review.story.map((s) => (
           <p key={s}>{s}</p>
@@ -272,12 +279,14 @@ export function YearReviewPage({
           </ul>
         </>
       ) : null}
-      {review.predictions.length > 0 ? (
+      {guessed.length > 0 ? (
         <>
           <h3 className="run-h-sub">Your guesses, next to what happened</h3>
           <ul className="run-quiet">
-            {review.predictions.map((p) => (
-              <li key={p.prompt} className="small">
+            {guessed.map((p, i) => (
+              // A prompt repeats every month, so the position is part of the identity.
+              // biome-ignore lint/suspicious/noArrayIndexKey: the list is static for a review
+              <li key={`${i}-${p.prompt}`} className="small">
                 {p.prompt} You guessed{" "}
                 <span className="figure">
                   {p.valueMinor === null ? "nothing" : euros(p.valueMinor)}
