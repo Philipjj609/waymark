@@ -8,5 +8,6 @@ export * from "./fake.js";
 export * from "./fallback.js";
 export * from "./nebius.js";
 export * from "./placeholders.js";
+export * from "./study-tutor.js";
 export * from "./types.js";
 export * from "./validate.js";

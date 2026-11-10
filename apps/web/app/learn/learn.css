@@ -1,0 +1,139 @@
+.learn-shell {
+  --learn-accent: var(--accent, #24624c);
+  max-width: 68rem;
+  margin: auto;
+  padding: 1.5rem;
+  color: var(--text, #1b2824);
+  font:
+    1rem / 1.6 system-ui,
+    sans-serif;
+}
+.learn-shell header,
+.learn-shell nav,
+.learn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+}
+.learn-shell header {
+  justify-content: space-between;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #9aa9a2;
+}
+.learn-brand {
+  font-weight: 700;
+}
+.learn-shell a {
+  color: var(--learn-accent);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+.learn-shell h1 {
+  line-height: 1.2;
+  margin-top: 2rem;
+}
+.learn-shell h2 {
+  margin-top: 1.5rem;
+}
+.learn-shell button,
+.learn-shell input,
+.learn-shell textarea,
+.learn-shell select {
+  font: inherit;
+}
+.learn-shell button {
+  padding: 0.55rem 0.9rem;
+  border: 1px solid var(--learn-accent);
+  border-radius: 0.35rem;
+  cursor: pointer;
+  background: #fff;
+  color: #173c30;
+}
+.learn-shell button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.learn-shell :focus-visible {
+  outline: 3px solid #165bca;
+  outline-offset: 3px;
+}
+.learn-shell textarea {
+  display: block;
+  width: 100%;
+  min-height: 7rem;
+  padding: 0.7rem;
+  box-sizing: border-box;
+}
+.learn-shell input,
+.learn-shell select {
+  max-width: 100%;
+  padding: 0.4rem;
+}
+.learn-shell fieldset {
+  border: 1px solid #a4b4ab;
+  margin: 1rem 0;
+}
+.learn-shell label {
+  display: block;
+  margin: 0.5rem 0;
+}
+.learn-card,
+.learn-panel {
+  border: 1px solid #a4b4ab;
+  border-radius: 0.6rem;
+  padding: 1.2rem;
+  margin: 1rem 0;
+  background: #fff;
+  overflow-wrap: anywhere;
+}
+.learn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: 1rem;
+}
+.learn-draft {
+  background: #fff4d6;
+  border-left: 0.3rem solid #8b6100;
+  padding: 0.6rem 1rem;
+}
+.learn-meta {
+  font-size: 0.85rem;
+  color: #405b50;
+}
+.learn-shell blockquote {
+  border-left: 0.3rem solid #789588;
+  margin: 1rem 0;
+  padding-left: 1rem;
+  white-space: pre-wrap;
+}
+.learn-shell table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.learn-shell td,
+.learn-shell th {
+  border-bottom: 1px solid #b8c7bf;
+  padding: 0.5rem;
+  text-align: left;
+}
+.learn-shell svg {
+  width: 100%;
+  max-height: 22rem;
+}
+.learn-map-node {
+  fill: #edf5ef;
+  stroke: #356750;
+}
+.learn-error {
+  color: #8b1d23;
+}
+@media (max-width: 40rem) {
+  .learn-shell {
+    padding: 1rem;
+  }
+  .learn-shell header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

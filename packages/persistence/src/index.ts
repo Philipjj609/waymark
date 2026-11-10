@@ -10,6 +10,7 @@ export {
   type SqlExecutor,
 } from "./pg-run-store.js";
 export { type OutboxJob, type PgCommitInput, PgWorldStore } from "./pg-store.js";
+export { PgStudyStore } from "./pg-study.js";
 export {
   type AppendResult,
   InMemoryRunStore,
