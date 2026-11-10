@@ -9,6 +9,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { WorldState } from "../src/index.js";
 import {
+  boundOrderId,
   cmd,
   createRng,
   execute,
@@ -21,6 +22,17 @@ import {
 } from "../src/index.js";
 
 const cash = (s: WorldState) => s.ledger.balance(PERSON, "ASSET:Cash", "EUR").amountMinor;
+/** The bill's most recently started sandbox operation (#12 review: captures must name one). */
+const lastOp = (s: WorldState, o: ObligationId) =>
+  (Object.values(s.operations)
+    .filter((r) => r.obligationId === o)
+    .at(-1)?.operationId ?? "pop_never_started") as ProviderOperationId;
+/** Day 8 with the phone bill's sandbox checkout started, so captures name a real operation. */
+const phoneInFlight = () =>
+  run(fp30(), [
+    [cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }],
+    [cmd(2), { kind: "START_PROVIDER_CHECKOUT", payload: { obligationId: PHONE } }],
+  ]);
 
 describe("liquidity puzzle: equipment before rent", () => {
   it("buying €300 equipment makes the €550 rent unaffordable on day 10, with a recovery path", () => {
@@ -105,7 +117,8 @@ function providerEvent(
     schemaVersion: "provider.event.v1",
     provider: "PAYPAL_SANDBOX",
     providerEventId: id,
-    operationId: "pop_test_1" as ProviderOperationId,
+    operationId: lastOp(w, obligationId),
+    orderId: boundOrderId(w, lastOp(w, obligationId)),
     eventType: "CAPTURE_COMPLETED",
     amount: { amountMinor, currency: "EUR" },
     mapping: { worldId: w.worldId, obligationId },
@@ -131,7 +144,7 @@ function providerCommand(
 
 describe("verified PayPal sandbox settlement (interface E)", () => {
   it("settles the mapped obligation exactly once, even if the event is redelivered (T02)", () => {
-    let w = run(fp30(), [[cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }]]);
+    let w = phoneInFlight();
     const ev = providerEvent(w, PHONE, 3000);
     w = execute(w, providerCommand(w, 10, ev)).state;
     expect(w.obligations[PHONE]?.state).toBe("SETTLED");
@@ -144,7 +157,7 @@ describe("verified PayPal sandbox settlement (interface E)", () => {
   });
 
   it("the same capture arriving via order lookup and via webhook has one effect", () => {
-    let w = run(fp30(), [[cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }]]);
+    let w = phoneInFlight();
     const viaLookup = providerEvent(w, PHONE, 3000, "CAPTURE-XYZ");
     const viaWebhook: VerifiedProviderEvent = {
       ...viaLookup,
@@ -161,18 +174,21 @@ describe("verified PayPal sandbox settlement (interface E)", () => {
     expect(w.ledger.size).toBe(second.state.ledger.size);
   });
 
-  it("rejects a captured amount that differs from the obligation", () => {
-    const w = run(fp30(), [[cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }]]);
+  it("never settles a captured amount that differs from the obligation (recorded, 0.3.0)", () => {
+    const w = phoneInFlight();
     const out = execute(w, providerCommand(w, 10, providerEvent(w, PHONE, 2999)));
-    expect(out.result.error?.code).toBe("PROVIDER_AMOUNT_MISMATCH");
+    expect(out.state.attention.map((a) => a.reason)).toEqual(["CAPTURE_AMOUNT_MISMATCH"]);
+    expect(out.state.obligations[PHONE]?.state).toBe("DUE");
+    expect(out.state.ledger.size).toBe(w.ledger.size);
   });
 
   it("a denied capture never settles (T22)", () => {
-    const w = run(fp30(), [[cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }]]);
+    const w = phoneInFlight();
     const denied = { ...providerEvent(w, PHONE, 3000), eventType: "CAPTURE_DENIED" as const };
     const out = execute(w, providerCommand(w, 10, denied));
-    expect(out.result.error?.code).toBe("PROVIDER_EVENT_NOT_SETTLING");
+    expect(out.events.map((e) => e.eventType)).toEqual(["PROVIDER_CHECKOUT_STATUS_CHANGED"]);
     expect(out.state.obligations[PHONE]?.state).toBe("DUE");
+    expect(out.state.ledger.size).toBe(w.ledger.size);
   });
 });
 
