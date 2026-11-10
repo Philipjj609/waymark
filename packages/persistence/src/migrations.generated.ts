@@ -13,4 +13,8 @@ export const MIGRATIONS: ReadonlyArray<{ readonly name: string; readonly sql: st
     name: "0002_checkout_work.sql",
     sql: 'CREATE TABLE "checkout_work" (\n "operation_id" text PRIMARY KEY REFERENCES "provider_operations" ("operation_id"),\n "phase" text NOT NULL CHECK ("phase" IN (\'IN_FLIGHT\',\'CAPTURING\',\'CANCELLING\',\'RECONCILING\',\'FINISHED\',\'ATTENTION\')),\n "action" text NOT NULL CHECK ("action" IN (\'CREATE\',\'CAPTURE\',\'RECONCILE\')),\n "approve_url" text,\n "lease_token" text,\n "lease_until" timestamptz,\n "attempts" integer NOT NULL DEFAULT 0,\n "next_attempt_at" timestamptz NOT NULL DEFAULT now(),\n "last_error" text,\n "created_at" timestamptz NOT NULL DEFAULT now()\n);\n--> statement-breakpoint\nCREATE INDEX "checkout_work_due_idx" ON "checkout_work" ("next_attempt_at");\n--> statement-breakpoint\nCREATE TABLE "checkout_facts" (\n "event_type" text NOT NULL,\n "event_id" text NOT NULL,\n "operation_id" text NOT NULL REFERENCES "provider_operations" ("operation_id"),\n "payload" jsonb NOT NULL,\n "applied" integer NOT NULL DEFAULT 0 CHECK ("applied" IN (0,1)),\n PRIMARY KEY ("event_type","event_id")\n);\n',
   },
+  {
+    name: "0003_personal_learning.sql",
+    sql: "-- Session-scoped personal learning; no economic world is fabricated for standalone study.\nCREATE TABLE personal_learning (\n  owner_session_hash text PRIMARY KEY CHECK (length(owner_session_hash) = 64),\n  version integer NOT NULL CHECK (version >= 1),\n  records jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(records) = 'array'),\n  updated_at timestamptz NOT NULL DEFAULT now()\n);\n",
+  },
 ];

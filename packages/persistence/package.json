@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@fle/contracts": "workspace:*",
+    "@fle/learning": "workspace:*",
     "@fle/payments": "workspace:*",
     "@fle/server": "workspace:*",
     "@fle/simulation": "workspace:*",
