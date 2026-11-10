@@ -120,6 +120,7 @@ export function runView(state: RunState): RunView {
         cashMinor: w.cash(b.id),
         reputation: b.reputation,
         ...businessPanel(fresh(), b),
+        forecast: [],
         month: monthFigures(state, b.id),
       }),
     ),
@@ -136,6 +137,7 @@ export function runView(state: RunState): RunView {
       })),
     borrowing: borrowingOptions(fresh()),
     learning: learningView(fresh()),
+    goal: null,
   };
 }
 

@@ -67,6 +67,12 @@ export interface RunView {
     readonly terms: string;
   }[];
   readonly learning: LearningView;
+  /** The aim of this starting point and how far along the run is (null when there is none). */
+  readonly goal: {
+    readonly text: string;
+    readonly progress: string;
+    readonly done: boolean;
+  } | null;
 }
 
 export interface PocketView {
@@ -182,6 +188,8 @@ export interface BusinessView {
   /** Figures from the last full week, in plain words for the panel. */
   readonly lastWeek: readonly { readonly label: string; readonly value: string }[];
   /** This month so far, from the business's books. */
+  /** Plain lines on what the current settings would bring in an average week (no luck). */
+  readonly forecast: readonly string[];
   readonly month: {
     readonly salesMinor: Minor;
     readonly costsMinor: Minor;
