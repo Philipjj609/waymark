@@ -24,7 +24,7 @@ test.describe("safety rules in the running app", () => {
       // The stranger gets a real session of its own first (so a 404 below means isolation, not
       // "no cookie"), and can read its own world.
       const strangerPage = await stranger.newPage();
-      await strangerPage.goto("/");
+      await strangerPage.goto("/today");
       const [own] = await Promise.all([
         strangerPage.waitForResponse(
           (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/worlds",

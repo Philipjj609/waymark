@@ -24,7 +24,7 @@ export function captureCommands(page: Page): CommandEnvelope[] {
 }
 
 export async function startWorld(page: Page): Promise<string> {
-  await page.goto("/");
+  await page.goto("/today");
   const [created] = await Promise.all([
     page.waitForResponse(
       (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/worlds",

@@ -1,11 +1,16 @@
+/*
+ * Learn, on the shared Waymark tokens (globals.css, ui/ui.css) (#143). Visual composition only:
+ * Learn's logic, data flow and provenance wording live in the TSX and are untouched.
+ */
 .learn-shell {
-  --learn-accent: var(--accent, #24624c);
+  --learn-accent: var(--color-accent);
   max-width: 68rem;
   margin: auto;
-  padding: 1.5rem;
-  color: var(--text, #1b2824);
+  padding: 1rem 1.5rem 3rem;
+  color: var(--color-ink);
   font:
-    1rem / 1.6 system-ui,
+    1rem / 1.6 var(--font-body),
+    system-ui,
     sans-serif;
 }
 .learn-shell header,
@@ -13,49 +18,72 @@
 .learn-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 0.25rem 1rem;
   align-items: center;
 }
 .learn-shell header {
   justify-content: space-between;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid #9aa9a2;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-line);
 }
 .learn-brand {
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-weight: 750;
 }
 .learn-shell a {
-  color: var(--learn-accent);
+  color: var(--color-accent-text);
   text-decoration: underline;
   text-underline-offset: 0.2em;
 }
+.learn-shell nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
 .learn-shell h1 {
-  line-height: 1.2;
-  margin-top: 2rem;
+  max-width: 24ch;
+  margin: 1.75rem 0 0.75rem;
+  font-size: clamp(1.9rem, 4.5vw, 3rem);
+  font-weight: 750;
+  line-height: 1.08;
+  letter-spacing: -0.03em;
 }
 .learn-shell h2 {
   margin-top: 1.5rem;
+  font-size: 1.3rem;
+  line-height: 1.25;
+}
+.learn-shell p,
+.learn-shell li {
+  max-width: 70ch;
 }
 .learn-shell button,
 .learn-shell input,
 .learn-shell textarea,
 .learn-shell select {
   font: inherit;
+  color: inherit;
 }
 .learn-shell button {
-  padding: 0.55rem 0.9rem;
-  border: 1px solid var(--learn-accent);
-  border-radius: 0.35rem;
+  min-height: 44px;
+  padding: 0.55rem 1rem;
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  background: #fff;
-  color: #173c30;
+  background: var(--color-surface);
+  font-weight: 600;
+}
+.learn-shell button[type="submit"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
 }
 .learn-shell button:disabled {
   opacity: 0.6;
   cursor: wait;
 }
 .learn-shell :focus-visible {
-  outline: 3px solid #165bca;
+  outline: 3px solid var(--color-focus);
   outline-offset: 3px;
 }
 .learn-shell textarea {
@@ -64,28 +92,71 @@
   min-height: 7rem;
   padding: 0.7rem;
   box-sizing: border-box;
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
 }
 .learn-shell input,
 .learn-shell select {
   max-width: 100%;
-  padding: 0.4rem;
+  min-height: 44px;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
 }
 .learn-shell fieldset {
-  border: 1px solid #a4b4ab;
+  border: 1px solid var(--color-line);
   margin: 1rem 0;
 }
 .learn-shell label {
   display: block;
   margin: 0.5rem 0;
+  font-weight: 600;
 }
 .learn-card,
 .learn-panel {
-  border: 1px solid #a4b4ab;
-  border-radius: 0.6rem;
-  padding: 1.2rem;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  padding: 1.2rem 1.3rem;
   margin: 1rem 0;
-  background: #fff;
+  background: var(--color-surface);
+  box-shadow: var(--shadow);
   overflow-wrap: anywhere;
+}
+.learn-card > h2:first-child,
+.learn-panel > h3:first-child {
+  margin-top: 0;
+}
+.learn-first {
+  border-left: 6px solid var(--color-accent);
+}
+.learn-shell a.learn-cta,
+.learn-shell a.learn-practise-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0.5rem 1.1rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  font-weight: 650;
+  text-decoration: none;
+}
+.learn-practise {
+  margin: 2rem 0 1rem;
+  padding: 1.2rem 1.3rem;
+  border: 1px dashed var(--color-accent);
+  border-radius: var(--radius);
+  background: var(--color-accent-soft);
+}
+.learn-practise h2 {
+  margin-top: 0;
+}
+/* The AI tutor answer sits in the same frame as the Run advisor: accent edge, labelled wording. */
+.learn-tutor {
+  border-color: var(--color-accent);
+  border-left-width: 6px;
 }
 .learn-grid {
   display: grid;
@@ -93,16 +164,26 @@
   gap: 1rem;
 }
 .learn-draft {
-  background: #fff4d6;
-  border-left: 0.3rem solid #8b6100;
+  margin: 0.5rem 0;
   padding: 0.6rem 1rem;
+  border-left: 0.3rem solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-soft);
+  color: var(--color-ink);
 }
 .learn-meta {
   font-size: 0.85rem;
-  color: #405b50;
+  color: var(--color-ink-muted);
+}
+.learn-tutor .learn-meta {
+  display: inline-block;
+  padding: 0.1rem 0.6rem;
+  border: 1px solid var(--color-line);
+  border-radius: 999px;
+  background: var(--color-surface-2);
 }
 .learn-shell blockquote {
-  border-left: 0.3rem solid #789588;
+  border-left: 0.3rem solid var(--color-accent);
   margin: 1rem 0;
   padding-left: 1rem;
   white-space: pre-wrap;
@@ -113,7 +194,7 @@
 }
 .learn-shell td,
 .learn-shell th {
-  border-bottom: 1px solid #b8c7bf;
+  border-bottom: 1px solid var(--color-line);
   padding: 0.5rem;
   text-align: left;
 }
@@ -121,16 +202,28 @@
   width: 100%;
   max-height: 22rem;
 }
+.learn-shell svg text {
+  fill: var(--color-ink);
+}
+.learn-map-edge {
+  stroke: var(--color-control-border);
+}
 .learn-map-node {
-  fill: #edf5ef;
-  stroke: #356750;
+  fill: var(--color-accent-soft);
+  stroke: var(--color-accent);
 }
 .learn-error {
-  color: #8b1d23;
+  color: var(--color-danger);
+}
+.learn-shell details > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
 }
 @media (max-width: 40rem) {
   .learn-shell {
-    padding: 1rem;
+    padding: 0.5rem 1rem 2rem;
   }
   .learn-shell header {
     align-items: flex-start;

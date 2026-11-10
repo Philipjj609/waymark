@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PersonalStudyView } from "../../lib/study-http";
 import type { StudyLessonView } from "../../lib/study-view";
+import { AiThinking } from "../ui/ai-block";
 import { NumericalExample, TeachingPanel } from "./teaching-panels";
 
 type Mode = "home" | "module" | "lesson" | "map" | "notes";
@@ -31,7 +32,16 @@ async function requestStudy(action?: StudyAction | { action: "INIT" }): Promise<
   }
   return response.json();
 }
-export function StudyScreen({ mode, lesson }: { mode: Mode; lesson?: StudyLessonView }) {
+export function StudyScreen({
+  mode,
+  lesson,
+  practiseHref = null,
+}: {
+  mode: Mode;
+  lesson?: StudyLessonView;
+  /** Presentation only: where "Practise this in a Run" goes (null when the Run is off). */
+  practiseHref?: string | null;
+}) {
   const [view, setView] = useState<PersonalStudyView | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -155,6 +165,16 @@ export function StudyScreen({ mode, lesson }: { mode: Mode; lesson?: StudyLesson
             Start with an idea, explain how you see it, then try it with numbers. Your tutor asks
             about your reasoning; it does not assign a permanent level.
           </p>
+          <section className="learn-card learn-first" aria-labelledby="first-lesson-h">
+            <h2 id="first-lesson-h">Your first lesson</h2>
+            <p>
+              Start with what you can spend today. It takes about ten minutes: read the idea,
+              explain it in your own words, then try the numbers.
+            </p>
+            <Link className="learn-cta" href="/learn/lessons/cash-balance">
+              Start with cash balance
+            </Link>
+          </section>
           <section className="learn-card">
             <h2>Money foundations</h2>
             <p>Cash, obligations, receivables, invoices, liquidity and opportunity cost.</p>
@@ -265,7 +285,7 @@ export function StudyScreen({ mode, lesson }: { mode: Mode; lesson?: StudyLesson
                 (r) => r.kind === "CORRECTION" && r.payload.targetId === record.id,
               );
               return (
-                <article key={record.id} className="learn-card">
+                <article key={record.id} className="learn-card learn-tutor">
                   <h2>Your reasoning and next step</h2>
                   <blockquote>{String(record.payload.text)}</blockquote>
                   {reply ? (
@@ -453,13 +473,29 @@ export function StudyScreen({ mode, lesson }: { mode: Mode; lesson?: StudyLesson
               </details>
             ))}
           </section>
+          {practiseHref ? (
+            <section className="learn-practise" aria-labelledby="practise-h">
+              <h2 id="practise-h">Try it with a life to run</h2>
+              <p>
+                You have met the idea with numbers. Now meet it in a practice money life, where it
+                shows up in bills, cash and choices. The money is made up.
+              </p>
+              <Link
+                className="learn-practise-link"
+                href={practiseHref}
+                data-testid="practise-in-run"
+              >
+                Practise this in a Run
+              </Link>
+            </section>
+          ) : null}
           <p>
             <Link href="/learn/map">See my knowledge map</Link> ·{" "}
             <Link href="/learn/modules/foundations">Return to the module</Link>
           </p>
         </>
       )}
-      {busy && <p role="status">Saving and preparing your next step…</p>}
+      {busy && <AiThinking live text="Saving and preparing your next step…" />}
     </>
   );
 }
@@ -499,7 +535,7 @@ function KnowledgeMap({ map, visual }: { map: PersonalStudyView["map"]; visual: 
                   y1={a.y}
                   x2={b.x}
                   y2={b.y}
-                  stroke="#789588"
+                  className="learn-map-edge"
                 />
               );
             })}

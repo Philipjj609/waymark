@@ -1,4 +1,5 @@
 import type { RunView } from "@fle/run";
+import { PracticeTag } from "../ui/money-amount";
 import { CashChange, type CashChip, PayPalChip } from "./extras";
 import { euros } from "./format";
 import type { StoredReceipt } from "./storage";
@@ -36,6 +37,7 @@ export function MoneyStrip({
           <span className="run-cash-figure figure" data-testid="cash-you">
             {euros(you.cashMinor)}
           </span>
+          <PracticeTag />
           {chip ? <CashChange chip={chip} testId="cash-change" /> : null}
         </p>
       ) : null}
