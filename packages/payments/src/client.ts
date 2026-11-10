@@ -19,7 +19,7 @@ import {
  * Provider behaviour this code relies on was observed in the Sandbox, not assumed
  * (docs/payments/sandbox-evidence.md):
  * - same PayPal-Request-Id + same body -> the ORIGINAL order/capture again (HTTP 200, no second
- *   charge), so retrying a POST with the same id is safe;
+ *   charge) within PayPal's bounded retention window;
  * - same PayPal-Request-Id + DIFFERENT body -> PayPal silently returns the ORIGINAL order, so every
  *   create response is compared with what was asked (`CONFLICT` otherwise);
  * - unapproved capture -> 422 ORDER_NOT_APPROVED; second capture -> 422 ORDER_ALREADY_CAPTURED;
@@ -128,7 +128,9 @@ export type PayPalResult<T> =
         | "RATE_LIMITED"
         | "MALFORMED_RESPONSE"
         | "UNCLEAR_AFTER_RETRY"
-        | "IN_PROGRESS";
+        | "IN_PROGRESS"
+        | "CREATE_RETRY_WINDOW_EXPIRED"
+        | "ORDER_MAPPING_CONFLICT";
       readonly attempts: number;
       readonly httpStatus: number | null;
       readonly debugId: string | null;
