@@ -2,6 +2,8 @@ import type {
   AccountCode,
   ActorId,
   AssetId,
+  AttentionReason,
+  AttentionRecord,
   BlockingDecision,
   CommandResult,
   CurrencyCode,
@@ -13,6 +15,9 @@ import type {
   Money,
   Obligation,
   ObligationId,
+  ProviderOperationId,
+  ReconciliationRecord,
+  ReservationStatus,
   ScheduleId,
   WorldDay,
   WorldId,
@@ -44,6 +49,60 @@ export interface IncomeRule {
   readonly label: string;
   /** True when the amount is already net of fictional withholding (no second deduction, T15). */
   readonly isNet: boolean;
+}
+
+/**
+ * Fictional cash earmarked for an in-flight PayPal SANDBOX checkout (ADR-0008 step 1). Not an
+ * expense and never a journal: it only lowers the entity's available cash, so nothing else can
+ * spend the money the verified capture will settle with. One active operation per obligation.
+ */
+export interface Reservation {
+  readonly obligationId: ObligationId;
+  readonly operationId: ProviderOperationId;
+  readonly entityId: EntityId;
+  readonly amount: Money;
+  readonly sinceDay: WorldDay;
+  /**
+   * Truthful checkout status (0.3.0). Every status keeps the earmark: only a verified capture
+   * (settles) or a verified void (releases) ends a reservation, and neither applies
+   * automatically once it is NEEDS_ATTENTION (ADR-0008: a human resolves it).
+   */
+  readonly status: ReservationStatus;
+  /** Non-null exactly when status is NEEDS_ATTENTION. */
+  readonly attentionReason: AttentionReason | null;
+  /** The player asked to cancel. Survives later status changes (review L1); never resets. */
+  readonly cancelRequested: boolean;
+  /**
+   * Capture ids of PENDING/DENIED facts applied to this checkout. A reconciliation whose read-back
+   * order lacks one of them contradicts a verified fact and changes nothing (owner decision 2).
+   */
+  readonly captureIdsSeen: readonly string[];
+  /**
+   * Final pass R4: what is known about each remembered capture (from facts or read-backs). The
+   * reservation status is derived from all of them, so one denial never hides another pending or
+   * live capture.
+   */
+  readonly captureStates: Readonly<Record<string, "PENDING" | "DENIED" | "LIVE">>;
+}
+
+/**
+ * Every sandbox checkout operation ever started in this world, append-only (never deleted). A
+ * verified capture or void must name an operation from here that was started for the very
+ * obligation it maps to; anything else is PROVIDER_OPERATION_MISMATCH (#12 review).
+ */
+export interface ProviderOperation {
+  readonly operationId: ProviderOperationId;
+  readonly obligationId: ObligationId;
+  readonly entityId: EntityId;
+  readonly amount: Money;
+  readonly startedDay: WorldDay;
+  readonly status: "ACTIVE" | "CAPTURED" | "VOIDED";
+  /** PayPal order id, bound by the server right after it created the order (BIND_PROVIDER_ORDER). */
+  readonly orderId: string | null;
+  /** The capture id that settled the obligation through this operation. */
+  readonly captureId: string | null;
+  /** Verified refunds of that capture so far (owner decision 1: external status only). */
+  readonly refunded: Money;
 }
 
 export type ScheduledWork =
@@ -80,6 +139,10 @@ export interface WorldState {
   readonly incomes: Readonly<Record<string, IncomeRule>>;
   readonly schedule: readonly ScheduledItem[];
   readonly blocking: readonly BlockingDecision[];
+  /** obligationId → its active sandbox checkout reservation (the in-flight lock, ADR-0008). */
+  readonly reservations: Readonly<Record<string, Reservation>>;
+  /** operationId → the checkout it belongs to; append-only registry (status changes only). */
+  readonly operations: Readonly<Record<string, ProviderOperation>>;
   readonly ledger: Ledger;
   readonly events: readonly DomainEvent[];
   readonly headHash: string;
@@ -87,7 +150,23 @@ export interface WorldState {
   readonly results: Readonly<Record<string, CommandResult>>;
   /** commandId → sha256 of the command's intent (kind, payload, origin, actor). Detects key reuse. */
   readonly fingerprints: Readonly<Record<string, string>>;
-  /** Provider event ids already applied (one verified provider event → at most one effect). */
+  /**
+   * Verified provider facts recorded for a human (ADR-0008 NEEDS_ATTENTION), append-only. A
+   * record posts no journal and moves no cash.
+   */
+  readonly attention: readonly AttentionRecord[];
+  /** Every server reconciliation attempt and its outcome, append-only (owner decision 2). */
+  readonly reconciliations: ReadonlyArray<
+    ReconciliationRecord & {
+      /** sha256 of the reconciliation without its verification metadata (final review M3). */
+      readonly fingerprint: string;
+    }
+  >;
+  /**
+   * Provider fact keys already applied (one verified provider event → at most one effect). A
+   * key starts with its event type: `<eventType>:fact:<id>` for an applied fact and
+   * `<eventType>:attention:<id>` for a recorded one (review L4: no collisions across types).
+   */
   readonly appliedProviderEvents: readonly string[];
   readonly counters: {
     readonly journal: number;

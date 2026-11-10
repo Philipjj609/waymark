@@ -12,6 +12,7 @@ export { replay } from "./replay.js";
 export { createRng, type Rng } from "./rng.js";
 export type * from "./state.js";
 export {
+  availableCash,
   createWorld,
   snapshot,
   validateWorldConfig,

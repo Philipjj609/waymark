@@ -1,7 +1,7 @@
 {
   "$id": "https://schemas.finance-learning-economy.invalid/sim.snapshot.v1.json",
   "title": "sim.snapshot.v1",
-  "x-contracts-version": "0.1.0",
+  "x-contracts-version": "0.3.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -411,7 +411,9 @@
               "type": "string",
               "enum": [
                 "PAY_OBLIGATION",
-                "DEFER_OBLIGATION"
+                "DEFER_OBLIGATION",
+                "START_PROVIDER_CHECKOUT",
+                "REQUEST_CHECKOUT_CANCEL"
               ]
             }
           }
@@ -421,6 +423,524 @@
           "obligationId",
           "sinceDay",
           "options"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "reservations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "obligationId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^pop_[A-Za-z0-9_.:-]+$"
+          },
+          "entityId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^ent_[A-Za-z0-9_.:-]+$"
+          },
+          "amount": {
+            "type": "object",
+            "properties": {
+              "amountMinor": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "currency": {
+                "type": "string",
+                "enum": [
+                  "EUR",
+                  "USD",
+                  "GBP",
+                  "JPY"
+                ]
+              }
+            },
+            "required": [
+              "amountMinor",
+              "currency"
+            ],
+            "additionalProperties": false
+          },
+          "sinceDay": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "realm": {
+            "type": "string",
+            "const": "PAYPAL_SANDBOX"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "AWAITING_PAYER",
+              "CANCEL_REQUESTED",
+              "CAPTURE_PENDING",
+              "CAPTURE_DENIED",
+              "NEEDS_ATTENTION"
+            ]
+          },
+          "attentionReason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CAPTURE_AFTER_VOID",
+                  "CAPTURE_FOR_SETTLED_OBLIGATION",
+                  "CAPTURE_AMOUNT_MISMATCH",
+                  "VOID_AMOUNT_MISMATCH",
+                  "VOID_AFTER_CAPTURE",
+                  "VOID_WHILE_CAPTURE_PENDING",
+                  "CAPTURE_STATUS_AMOUNT_MISMATCH",
+                  "REFUND_BEFORE_CAPTURE",
+                  "REFUND_UNKNOWN_CAPTURE",
+                  "REFUND_EXCEEDS_CAPTURE",
+                  "STALE_OPERATION_STATUS",
+                  "VOID_WITH_UNAPPLIED_REFUND",
+                  "OUT_OF_ORDER_STATUS",
+                  "RECONCILIATION_LIVE_CAPTURE",
+                  "RESERVATION_NEEDS_ATTENTION"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancelRequested": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "obligationId",
+          "operationId",
+          "entityId",
+          "amount",
+          "sinceDay",
+          "realm",
+          "status",
+          "attentionReason",
+          "cancelRequested"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "attention": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "realm": {
+            "type": "string",
+            "const": "PAYPAL_SANDBOX"
+          },
+          "providerEventId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "CAPTURE_COMPLETED",
+              "CAPTURE_DENIED",
+              "CAPTURE_REFUNDED",
+              "ORDER_VOIDED",
+              "CAPTURE_PENDING",
+              "RECONCILIATION"
+            ]
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^pop_[A-Za-z0-9_.:-]+$"
+          },
+          "obligationId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "CAPTURE_AFTER_VOID",
+              "CAPTURE_FOR_SETTLED_OBLIGATION",
+              "CAPTURE_AMOUNT_MISMATCH",
+              "VOID_AMOUNT_MISMATCH",
+              "VOID_AFTER_CAPTURE",
+              "VOID_WHILE_CAPTURE_PENDING",
+              "CAPTURE_STATUS_AMOUNT_MISMATCH",
+              "REFUND_BEFORE_CAPTURE",
+              "REFUND_UNKNOWN_CAPTURE",
+              "REFUND_EXCEEDS_CAPTURE",
+              "STALE_OPERATION_STATUS",
+              "VOID_WITH_UNAPPLIED_REFUND",
+              "OUT_OF_ORDER_STATUS",
+              "RECONCILIATION_LIVE_CAPTURE",
+              "RESERVATION_NEEDS_ATTENTION"
+            ]
+          },
+          "amount": {
+            "type": "object",
+            "properties": {
+              "amountMinor": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "currency": {
+                "type": "string",
+                "enum": [
+                  "EUR",
+                  "USD",
+                  "GBP",
+                  "JPY"
+                ]
+              }
+            },
+            "required": [
+              "amountMinor",
+              "currency"
+            ],
+            "additionalProperties": false
+          },
+          "reservationOperationId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 128,
+                "pattern": "^pop_[A-Za-z0-9_.:-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "resolvedBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "refundedCaptureId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "realm",
+          "providerEventId",
+          "eventType",
+          "operationId",
+          "obligationId",
+          "reason",
+          "amount",
+          "reservationOperationId",
+          "day",
+          "blocking",
+          "resolvedBy",
+          "refundedCaptureId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "providerOperations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^pop_[A-Za-z0-9_.:-]+$"
+          },
+          "obligationId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+          },
+          "realm": {
+            "type": "string",
+            "const": "PAYPAL_SANDBOX"
+          },
+          "amount": {
+            "type": "object",
+            "properties": {
+              "amountMinor": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "currency": {
+                "type": "string",
+                "enum": [
+                  "EUR",
+                  "USD",
+                  "GBP",
+                  "JPY"
+                ]
+              }
+            },
+            "required": [
+              "amountMinor",
+              "currency"
+            ],
+            "additionalProperties": false
+          },
+          "startedDay": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "CAPTURED",
+              "VOIDED"
+            ]
+          },
+          "orderId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "captureId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "externalPayment": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "CAPTURED",
+              "PARTIALLY_REFUNDED",
+              "REFUNDED"
+            ]
+          },
+          "refundedAmount": {
+            "type": "object",
+            "properties": {
+              "amountMinor": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "currency": {
+                "type": "string",
+                "enum": [
+                  "EUR",
+                  "USD",
+                  "GBP",
+                  "JPY"
+                ]
+              }
+            },
+            "required": [
+              "amountMinor",
+              "currency"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "operationId",
+          "obligationId",
+          "realm",
+          "amount",
+          "startedDay",
+          "status",
+          "orderId",
+          "captureId",
+          "externalPayment",
+          "refundedAmount"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "reconciliations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "realm": {
+            "type": "string",
+            "const": "PAYPAL_SANDBOX"
+          },
+          "reconciliationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^pop_[A-Za-z0-9_.:-]+$"
+          },
+          "obligationId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+          },
+          "orderId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "orderStatus": {
+            "type": "string",
+            "enum": [
+              "CREATED",
+              "SAVED",
+              "APPROVED",
+              "PAYER_ACTION_REQUIRED",
+              "COMPLETED",
+              "VOIDED",
+              "EXPIRED"
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "SETTLED",
+              "RELEASED",
+              "CONFIRMED",
+              "RESOLVED_REFUNDED",
+              "KEPT_NOT_TERMINAL",
+              "KEPT_ORDER_UNBOUND",
+              "KEPT_CAPTURE_PENDING",
+              "KEPT_REFUNDED_CAPTURE",
+              "KEPT_MULTIPLE_CAPTURES",
+              "KEPT_AMOUNT_MISMATCH",
+              "KEPT_ORDER_MISMATCH",
+              "KEPT_INCONSISTENT_ORDER",
+              "KEPT_RECORDED_CAPTURE_MISSING",
+              "KEPT_DOUBLE_PAYMENT",
+              "KEPT_OTHER_CHECKOUT_ACTIVE",
+              "KEPT_INSUFFICIENT_FUNDS"
+            ]
+          },
+          "resolvedAttention": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          }
+        },
+        "required": [
+          "realm",
+          "reconciliationId",
+          "operationId",
+          "obligationId",
+          "orderId",
+          "orderStatus",
+          "outcome",
+          "resolvedAttention",
+          "day"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "availableCash": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "entityId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+            "pattern": "^ent_[A-Za-z0-9_.:-]+$"
+          },
+          "amount": {
+            "type": "object",
+            "properties": {
+              "amountMinor": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "currency": {
+                "type": "string",
+                "enum": [
+                  "EUR",
+                  "USD",
+                  "GBP",
+                  "JPY"
+                ]
+              }
+            },
+            "required": [
+              "amountMinor",
+              "currency"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "entityId",
+          "amount"
         ],
         "additionalProperties": false
       }
@@ -452,6 +972,11 @@
     "documents",
     "assets",
     "blockingDecisions",
+    "reservations",
+    "attention",
+    "providerOperations",
+    "reconciliations",
+    "availableCash",
     "playerActorId",
     "eventCount",
     "stateHash"
