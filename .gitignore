@@ -12,3 +12,7 @@ next-env.d.ts
 .vscode/*
 !.vscode/extensions.json
 .claude/settings.local.json
+# Playwright (#101)
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/blob-report/
