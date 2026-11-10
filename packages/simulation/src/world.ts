@@ -1,11 +1,13 @@
 import type {
   AccountCode,
   ActorId,
+  AttentionRecord,
   CurrencyCode,
   DayPhase,
   DocumentId,
   EntityId,
   EventId,
+  ExternalPaymentStatus,
   FinancialDocument,
   JournalId,
   Money,
@@ -26,7 +28,14 @@ import {
 } from "@fle/contracts";
 import { accountClass, deepFreeze, Ledger } from "@fle/domain";
 import { chainHash, compareCodeUnits, GENESIS_HASH } from "./canonical.js";
-import type { EntityState, IncomeRule, ScheduledItem, WorldState } from "./state.js";
+import type {
+  EntityState,
+  IncomeRule,
+  ProviderOperation,
+  Reservation,
+  ScheduledItem,
+  WorldState,
+} from "./state.js";
 
 export interface WorldConfig {
   readonly worldId: WorldId;
@@ -332,11 +341,15 @@ export function createWorld(config: WorldConfig): WorldState {
     incomes,
     schedule,
     blocking: [],
+    reservations: {},
+    operations: {},
     ledger,
     events,
     headHash,
     results: {},
     fingerprints: {},
+    attention: [],
+    reconciliations: [],
     appliedProviderEvents: [],
     counters: { journal: journalCounter, asset: 0, schedule: seq },
     limits: {
@@ -346,15 +359,60 @@ export function createWorld(config: WorldConfig): WorldState {
   };
 }
 
+/**
+ * Fictional cash an entity can still spend: ledger cash minus its sandbox-checkout reservations.
+ * Every spending path (pay, purchase, provider settlement) checks this, never raw cash, so a
+ * reservation can't be spent twice and never drives cash below zero (ADR-0008, T11).
+ */
+export function availableCash(state: WorldState, entityId: EntityId): Money {
+  const cash = state.ledger.balance(entityId, "ASSET:Cash", state.currency);
+  let reserved = 0;
+  for (const r of Object.values(state.reservations)) {
+    if (r.entityId === entityId) reserved += r.amount.amountMinor;
+  }
+  return { amountMinor: cash.amountMinor - reserved, currency: cash.currency };
+}
+
+/**
+ * A checkout may be cancelled only before a capture is pending and before anything needs a
+ * human; a second request is refused rather than silently repeated (ADR-0008 amendment).
+ */
+export function isCancellable(r: Reservation): boolean {
+  return !r.cancelRequested && (r.status === "AWAITING_PAYER" || r.status === "CAPTURE_DENIED");
+}
+
+/**
+ * Open capture-type attention records of one obligation (owner decision 3): while any exists, a
+ * previous sandbox transaction may have taken money, so the bill cannot be paid or checked out
+ * again until a server reconciliation resolves it.
+ */
+export function openBlockingAttention(
+  state: WorldState,
+  obligationId: ObligationId,
+): AttentionRecord[] {
+  return state.attention.filter(
+    (a) => a.obligationId === obligationId && a.blocking && a.resolvedBy === null,
+  );
+}
+
+/** External (PayPal sandbox) payment status of one operation, apart from the obligation's state. */
+export function externalPaymentOf(op: ProviderOperation): ExternalPaymentStatus {
+  if (op.captureId === null) return "NONE";
+  if (op.refunded.amountMinor === 0) return "CAPTURED";
+  return op.refunded.amountMinor < op.amount.amountMinor ? "PARTIALLY_REFUNDED" : "REFUNDED";
+}
+
 /** Read model for the UI (`sim.snapshot.v1`). Derived only from authoritative state. */
 export function snapshot(state: WorldState): WorldSnapshot {
-  const balances = Object.keys(state.entities)
-    .sort()
-    .flatMap((entityId) =>
-      state.ledger
-        .trialBalance(entityId as EntityId, state.currency)
-        .map((r) => ({ entityId: entityId as EntityId, account: r.account, balance: r.balance })),
-    );
+  const entityIds = Object.keys(state.entities).sort(compareCodeUnits) as EntityId[];
+  const reservations = Object.values(state.reservations).sort((a, b) =>
+    compareCodeUnits(a.obligationId, b.obligationId),
+  );
+  const balances = entityIds.flatMap((entityId) =>
+    state.ledger
+      .trialBalance(entityId, state.currency)
+      .map((r) => ({ entityId, account: r.account, balance: r.balance })),
+  );
   return {
     schemaVersion: "sim.snapshot.v1",
     worldId: state.worldId,
@@ -369,7 +427,52 @@ export function snapshot(state: WorldState): WorldSnapshot {
       compareCodeUnits(a.documentId, b.documentId),
     ),
     assets: [...state.assets],
-    blockingDecisions: [...state.blocking],
+    // While a sandbox checkout is in flight only DEFER (and, while the checkout can still be
+    // cancelled, REQUEST_CHECKOUT_CANCEL) is offered: paying again or starting a second checkout
+    // would be refused with PAYMENT_IN_FLIGHT (ADR-0008 "one payment path").
+    blockingDecisions: state.blocking.map((b) => {
+      const r = state.reservations[b.obligationId];
+      // Owner decision 3: an open capture-type record leaves only DEFER (recovery: reconciliation).
+      if (!r && openBlockingAttention(state, b.obligationId).length > 0)
+        return { ...b, options: b.options.filter((o) => o === "DEFER_OBLIGATION") };
+      if (!r) return { ...b, options: [...b.options] };
+      return {
+        ...b,
+        options: [
+          ...b.options.filter((o) => o === "DEFER_OBLIGATION"),
+          ...(isCancellable(r) ? (["REQUEST_CHECKOUT_CANCEL"] as const) : []),
+        ],
+      };
+    }),
+    reservations: reservations.map((r) => ({
+      obligationId: r.obligationId,
+      operationId: r.operationId,
+      entityId: r.entityId,
+      amount: r.amount,
+      sinceDay: r.sinceDay,
+      realm: "PAYPAL_SANDBOX" as const,
+      status: r.status,
+      attentionReason: r.attentionReason,
+      cancelRequested: r.cancelRequested,
+    })),
+    attention: state.attention.map((a) => ({ ...a })),
+    providerOperations: Object.values(state.operations).map((op) => ({
+      operationId: op.operationId,
+      obligationId: op.obligationId,
+      realm: "PAYPAL_SANDBOX" as const,
+      amount: op.amount,
+      startedDay: op.startedDay,
+      status: op.status,
+      orderId: op.orderId,
+      captureId: op.captureId,
+      externalPayment: externalPaymentOf(op),
+      refundedAmount: op.refunded,
+    })),
+    reconciliations: state.reconciliations.map(({ fingerprint: _f, ...x }) => ({ ...x })),
+    availableCash: entityIds.map((entityId) => ({
+      entityId,
+      amount: availableCash(state, entityId),
+    })),
     playerActorId: state.playerActorId,
     eventCount: state.events.length,
     stateHash: state.headHash,
