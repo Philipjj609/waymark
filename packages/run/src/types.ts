@@ -120,6 +120,10 @@ export interface Loan {
   readonly dueByDay: number | null;
   status: "ACTIVE" | "REPAID" | "DEFAULTED";
   missedPayments: number;
+  /** Next day a payment (at least `minimumMinor`) is due, or null when none is scheduled. */
+  nextPaymentDay: number | null;
+  /** Paid since the last payment day; reset when the period rolls. */
+  paidThisPeriodMinor: Minor;
 }
 
 export type BusinessType = "SERVICE" | "STOCK" | "SUBSCRIPTION" | "EQUIPMENT";
