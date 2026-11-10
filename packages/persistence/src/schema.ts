@@ -16,6 +16,13 @@ import {
  * Typed mirror of migrations/*.sql. The SQL files are the source of truth: CHECKs, foreign keys
  * and the constraint triggers live only there. A test asserts the tables and columns agree.
  */
+export const personalLearning = pgTable("personal_learning", {
+  ownerSessionHash: text("owner_session_hash").primaryKey(),
+  version: integer("version").notNull(),
+  records: jsonb("records").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const worlds = pgTable(
   "worlds",
   {

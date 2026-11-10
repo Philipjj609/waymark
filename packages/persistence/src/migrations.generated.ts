@@ -9,4 +9,8 @@ export const MIGRATIONS: ReadonlyArray<{ readonly name: string; readonly sql: st
     name: "0001_provider_operation_steps.sql",
     sql: '-- Keep the original create request id in request_id. Old rows have no trustworthy capture\n-- request id: leave them incomplete so the adapter refuses to retry rather than inventing one.\nALTER TABLE "provider_operations"\n  ADD COLUMN "capture_request_id" text UNIQUE,\n  ADD COLUMN "capture_state" text,\n  ADD COLUMN "last_result" text,\n  ADD COLUMN "create_started_at" bigint CHECK ("create_started_at" >= 0 AND "create_started_at" <= 9007199254740991);\n--> statement-breakpoint\nALTER TABLE "provider_operations" ADD CONSTRAINT "provider_operation_steps_valid" CHECK (\n  ("capture_request_id" IS NULL AND "capture_state" IS NULL)\n  OR (\n    "capture_request_id" IS NOT NULL AND "capture_state" IS NOT NULL\n    AND "status" IN (\'NOT_STARTED\', \'STARTED\', \'CONFIRMED\', \'PENDING\', \'CAPTURED_ELSEWHERE\', \'REFUSED\', \'UNCERTAIN\')\n    AND "capture_state" IN (\'NOT_STARTED\', \'STARTED\', \'CONFIRMED\', \'PENDING\', \'CAPTURED_ELSEWHERE\', \'REFUSED\', \'UNCERTAIN\')\n  )\n);\n',
   },
+  {
+    name: "0003_personal_learning.sql",
+    sql: "-- Session-scoped personal learning; no economic world is fabricated for standalone study.\nCREATE TABLE personal_learning (\n  owner_session_hash text PRIMARY KEY CHECK (length(owner_session_hash) = 64),\n  version integer NOT NULL CHECK (version >= 1),\n  records jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(records) = 'array'),\n  updated_at timestamptz NOT NULL DEFAULT now()\n);\n",
+  },
 ];

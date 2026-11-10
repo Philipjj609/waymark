@@ -26,6 +26,8 @@ export interface LearnerState {
   readonly rulesVersion: typeof LEARNER_RULES_VERSION;
   /** Append-only, deduplicated by (sourceRef, kind). */
   readonly observations: readonly Observation[];
+  /** Standalone exercises/reasoning share this reducer without inventing economic events. */
+  readonly learningEvidence?: readonly LearningEvidence[];
 }
 
 export function createLearnerState(learnerId: LearnerId): LearnerState {
@@ -37,6 +39,23 @@ export function recordObservation(state: LearnerState, obs: Observation): Learne
   if (state.observations.some((o) => o.sourceRef === obs.sourceRef && o.kind === obs.kind))
     return state;
   return { ...state, observations: [...state.observations, obs] };
+}
+
+export function recordLearningEvidence(state: LearnerState, input: LearningEvidence): LearnerState {
+  const evidence = LearningEvidenceSchema.parse(input);
+  if (evidence.learnerId !== state.learnerId) throw new Error("learner mismatch");
+  const rows = state.learningEvidence ?? [];
+  if (
+    rows.some(
+      (e) =>
+        e.sourceRef === evidence.sourceRef &&
+        e.conceptId === evidence.conceptId &&
+        e.competence === evidence.competence &&
+        e.basis === evidence.basis,
+    )
+  )
+    return state;
+  return { ...state, learningEvidence: [...rows, evidence] };
 }
 
 export type ConceptStatus =
@@ -60,8 +79,14 @@ export function conceptView(state: LearnerState, conceptId: ConceptId): ConceptV
   const touching = state.observations.filter((o) =>
     o.evidence.some((e) => e.conceptId === conceptId),
   );
-  const evidence = touching.flatMap((o) => o.evidence.filter((e) => e.conceptId === conceptId));
-  if (touching.length === 0)
+  const direct = (state.learningEvidence ?? []).filter((e) => e.conceptId === conceptId);
+  const evidence = [
+    ...touching.flatMap((o) => o.evidence.filter((e) => e.conceptId === conceptId)),
+    ...direct,
+  ];
+  const count = new Set([...touching.map((o) => o.sourceRef), ...direct.map((e) => e.sourceRef)])
+    .size;
+  if (count === 0)
     return {
       conceptId,
       status: "NO_EVIDENCE",
@@ -103,9 +128,9 @@ export function conceptView(state: LearnerState, conceptId: ConceptId): ConceptV
     conceptId,
     status: supports ? "SUPPORTED" : "INCONCLUSIVE",
     evidence,
-    observationCount: touching.length,
+    observationCount: count,
     derived: null,
-    uncertainty: touching.length === 1 ? ["SINGLE_OBSERVATION"] : [],
+    uncertainty: count === 1 ? ["SINGLE_OBSERVATION"] : [],
   };
 }
 
