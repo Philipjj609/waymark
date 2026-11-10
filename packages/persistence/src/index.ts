@@ -4,4 +4,5 @@ export { type Db, migrate } from "./migrate.js";
 export { createPgCheckout, PgCheckoutQueue } from "./pg-checkout.js";
 export { PgOperationStore } from "./pg-operation-store.js";
 export { type OutboxJob, type PgCommitInput, PgWorldStore } from "./pg-store.js";
+export { PgStudyStore } from "./pg-study.js";
 export * as schema from "./schema.js";
