@@ -75,6 +75,29 @@ Every Orders response carried a `PayPal-Debug-Id` header.
 - A `PENDING` capture (for example `PENDING_REVIEW`). The client reports `PENDING` and never `OK` (covered by a unit test only).
 - Refunds and reversals belong to #22. Webhook signature verification is recorded below.
 - How long PayPal keeps a `PayPal-Request-Id` (the retention period) has not been measured. The operation store keeps our ids for good, and reconciliation always uses GET.
+# Recovery verification — 10 November 2026 (#125)
+
+Run on the recovered client plus retry fix (`84502db`), using the existing bounded
+`sandbox-probe.ts --max-calls 30`: exit 0, **20/30 HTTP calls**. Sandbox only; no world,
+ledger, hosted database, webhook registration or human buyer login was involved.
+- Buyer-flow order `33P20352MR162790X` stayed CREATED; capture before approval returned
+  NOT_APPROVED; GET verification returned NOT_CAPTURED. Repeating start read the same order.
+- Reusing the create key with a changed amount returned the original order
+  `22684067J5167154S` and the client reported CONFLICT.
+- Published Sandbox test card created order `9TD47487GS028782K`, capture
+  `03W75328C6655630H`, COMPLETED for **12.34 EUR Sandbox test money**. A repeated start
+  read the same order/capture. Server GET verification produced the same verified capture ID.
+  Another capture call returned ALREADY_CAPTURED.
+- Mock instrument declines remained DECLINED; unknown order lookup returned 404
+  INVALID_RESOURCE_ID; a deliberately timed-out create stayed UNCERTAIN and an immediate
+  same-key retry returned order `0G421945LR5482847`.
+
+The duplicate-order regression uses a provider stand-in that forgets its request-ID cache;
+the live run did **not** wait six hours or claim to observe retention expiry. PayPal documents
+[six-hour default create-key retention](https://developer.paypal.com/sdk/orders/v2/orders-create/)
+and [retries only while the server retains the ID](https://developer.paypal.com/api/rest/reference/idempotency/).
+Known operations now resume by GET. Unknown creates stop retrying after five hours and require
+reconciliation. This is provider-layer evidence, **not** a complete browser/world checkout.
 
 ## Webhook signature verification (#22)
 

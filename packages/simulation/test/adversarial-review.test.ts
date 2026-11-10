@@ -17,6 +17,7 @@ import {
 import { consolidate, eur, Ledger, PostingError, reversedLines } from "@fle/domain";
 import { describe, expect, it } from "vitest";
 import {
+  boundOrderId,
   cmd,
   createWorld,
   execute,
@@ -33,6 +34,16 @@ import {
 const cash = (s: WorldState) => s.ledger.balance(PERSON, "ASSET:Cash", "EUR").amountMinor;
 const atPhoneDue = () =>
   run(fp30(), [[cmd(1), { kind: "ADVANCE_TIME", payload: { targetDay: 8 } }]]);
+/** Day 8 with the phone bill's sandbox checkout started, so captures name a real operation. */
+const phoneInFlight = () =>
+  run(atPhoneDue(), [
+    [cmd(2), { kind: "START_PROVIDER_CHECKOUT", payload: { obligationId: PHONE } }],
+  ]);
+/** The bill's most recently started sandbox operation (#12 review: captures must name one). */
+const lastOp = (s: WorldState, o: ObligationId) =>
+  (Object.values(s.operations)
+    .filter((r) => r.obligationId === o)
+    .at(-1)?.operationId ?? "pop_never_started") as ProviderOperationId;
 
 function capture(
   w: WorldState,
@@ -43,7 +54,8 @@ function capture(
     schemaVersion: "provider.event.v1",
     provider: "PAYPAL_SANDBOX",
     providerEventId: id,
-    operationId: "pop_1" as ProviderOperationId,
+    operationId: lastOp(w, PHONE),
+    orderId: boundOrderId(w, lastOp(w, PHONE)),
     eventType: type,
     amount: { amountMinor: 3000, currency: "EUR" },
     mapping: { worldId: w.worldId, obligationId: PHONE },
@@ -83,12 +95,18 @@ describe("M1 idempotency is bound to intent, not only the id", () => {
 });
 
 describe("M2 non-settling provider events are never silently accepted", () => {
-  it("refund after an applied capture is rejected visibly, not deduplicated away", () => {
-    let w = atPhoneDue();
+  it("refund after an applied capture is recorded as an auditable fact, not deduplicated away", () => {
+    let w = phoneInFlight();
     w = execute(w, asProvider(w, 10, capture(w, "CAPTURE_COMPLETED"))).state;
-    const out = execute(w, asProvider(w, 11, capture(w, "CAPTURE_REFUNDED")));
-    expect(out.result.status).toBe("REJECTED");
-    expect(out.result.error?.code).toBe("PROVIDER_EVENT_NOT_SETTLING");
+    expect(w.obligations[PHONE]?.state).toBe("SETTLED"); // the capture really applied
+    const journals = w.ledger.size;
+    const refund = { ...capture(w, "CAPTURE_REFUNDED", "REFUND-9"), refundedCaptureId: "CAP-9" };
+    const out = execute(w, asProvider(w, 11, refund));
+    expect(out.events.map((e) => e.eventType)).toEqual(["PROVIDER_REFUND_RECORDED"]);
+    expect(out.state.operations[lastOp(w, PHONE)]?.refunded.amountMinor).toBe(3000);
+    // Owner decision 1 (7 Nov): the fictional bill stays SETTLED; no compensating journal.
+    expect(out.state.obligations[PHONE]?.state).toBe("SETTLED");
+    expect(out.state.ledger.size).toBe(journals);
   });
 });
 
@@ -155,12 +173,16 @@ describe("M5 posted entries and events are deeply immutable", () => {
 });
 
 describe("M6 provider capture on a settled obligation reports the real reason", () => {
-  it("fictional pay first, then capture → OBLIGATION_NOT_PAYABLE (not AMOUNT_MISMATCH)", () => {
-    const w = run(atPhoneDue(), [
-      [cmd(2), { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } }],
-    ]);
+  it("fictional pay first, then capture → recorded as attention with the real reason", () => {
+    // The checkout was voided, then the bill was paid fictionally; its operation's capture is late.
+    let w = phoneInFlight();
+    w = execute(w, asProvider(w, 9, capture(w, "ORDER_VOIDED", "VOID-9"))).state;
+    w = run(w, [[cmd(3), { kind: "PAY_OBLIGATION", payload: { obligationId: PHONE } }]]);
     const out = execute(w, asProvider(w, 10, capture(w, "CAPTURE_COMPLETED")));
-    expect(out.result.error?.code).toBe("OBLIGATION_NOT_PAYABLE");
+    expect(out.result.status).toBe("ACCEPTED");
+    // 0.3.0: recorded for a human with the real reason, never a second debit.
+    expect(out.state.attention.map((a) => a.reason)).toEqual(["CAPTURE_FOR_SETTLED_OBLIGATION"]);
+    expect(out.state.ledger.size).toBe(w.ledger.size);
   });
 });
 
@@ -372,7 +394,7 @@ describe("second review round (N1–N6, M7 leftovers)", () => {
     expect(Object.isFrozen((c as { payload: { cost: object } }).payload.cost)).toBe(false);
   });
   it("N6 the same capture with a different verification method is a duplicate, not a conflict", () => {
-    let w = atPhoneDue();
+    let w = phoneInFlight();
     const ev = capture(w, "CAPTURE_COMPLETED");
     w = execute(w, asProvider(w, 10, ev)).state;
     const viaWebhook = {

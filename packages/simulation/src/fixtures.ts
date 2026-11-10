@@ -10,6 +10,7 @@ import type {
   WorldId,
 } from "@fle/contracts";
 import { eur } from "@fle/domain";
+import { sha256Hex } from "./canonical.js";
 import { execute } from "./engine.js";
 import type { WorldState } from "./state.js";
 import { createWorld, type WorldConfig } from "./world.js";
@@ -98,7 +99,82 @@ export function playerCommand(state: WorldState, id: CommandId, body: Body): Aut
   } as AuthorizedCommand;
 }
 
-/** Run a script of player commands, each against the then-current version. */
+/** Tests and demo: the order id the simulated server binds to an operation. */
+export function defaultOrderId(operationId: string): string {
+  return `ORDER-${operationId.slice(4, 20)}`;
+}
+
+/** Tests: the order id bound to an operation (or the one the simulated server would bind). */
+export function boundOrderId(state: WorldState, operationId: string): string {
+  return state.operations[operationId]?.orderId ?? defaultOrderId(operationId);
+}
+
+/**
+ * Tests and demo: the server's BIND_PROVIDER_ORDER for `operationId`, with a command id derived
+ * from the operation (deterministic, distinct from player ids `cmd(n)`).
+ */
+export function bindOrderCommand(
+  state: WorldState,
+  operationId: string,
+  orderId: string = defaultOrderId(operationId),
+): AuthorizedCommand {
+  const op = state.operations[operationId];
+  const h = sha256Hex(`bind\u0000${operationId}\u0000${orderId}`);
+  return {
+    schemaVersion: "sim.command.v1",
+    commandId: `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`,
+    worldId: state.worldId,
+    expectedWorldVersion: state.version,
+    correlationId: null,
+    kind: "BIND_PROVIDER_ORDER",
+    payload: {
+      binding: {
+        provider: "PAYPAL_SANDBOX",
+        operationId,
+        mapping: { worldId: state.worldId, obligationId: op?.obligationId ?? "obl_unknown" },
+        orderId,
+        verification: {
+          method: "ORDER_CREATE_RESPONSE",
+          verifiedAt: "2026-11-07T09:00:00Z",
+          evidenceRef: `paypal:order:${orderId}`,
+        },
+      },
+    },
+    actorId: "act_system_paypal",
+    origin: "VERIFIED_EXTERNAL",
+  } as AuthorizedCommand;
+}
+
+/**
+ * Tests: the server's bind for the checkout `kind` just started (ADR-0008 D1b: bind right after
+ * createOrder), or null when nothing new was started.
+ */
+export function serverBindAfter(
+  before: WorldState,
+  kind: string,
+  out: { readonly state: WorldState; readonly result: { readonly status: string } },
+): AuthorizedCommand | null {
+  if (kind !== "START_PROVIDER_CHECKOUT" || out.result.status !== "ACCEPTED") return null;
+  const started = Object.values(out.state.operations).find(
+    (op) => !before.operations[op.operationId] && op.orderId === null,
+  );
+  return started ? bindOrderCommand(out.state, started.operationId) : null;
+}
+
+/**
+ * Run a script of player commands, each against the then-current version. Like the server
+ * (ADR-0008 D1b), it binds the PayPal order of every checkout it starts right away.
+ */
 export function run(state: WorldState, script: ReadonlyArray<[CommandId, Body]>): WorldState {
-  return script.reduce((s, [id, body]) => execute(s, playerCommand(s, id, body)).state, state);
+  return script.reduce((s, [id, body]) => {
+    const out = execute(s, playerCommand(s, id, body));
+    if (body.kind !== "START_PROVIDER_CHECKOUT" || out.result.status !== "ACCEPTED")
+      return out.state;
+    const started = Object.values(out.state.operations).find(
+      (op) => op.orderId === null && op.status === "ACTIVE",
+    );
+    return started
+      ? execute(out.state, bindOrderCommand(out.state, started.operationId)).state
+      : out.state;
+  }, state);
 }

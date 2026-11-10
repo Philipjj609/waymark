@@ -23,6 +23,18 @@ export const CommandErrorCodeSchema = z.enum([
   "PROVIDER_EVENT_NOT_SETTLING",
   /** Same commandId re-sent with a different intent (kind, payload, origin or actor). */
   "IDEMPOTENCY_CONFLICT",
+  /** 0.2.0: the obligation has an active PayPal sandbox checkout; pay/second checkout refused (ADR-0008). */
+  "PAYMENT_IN_FLIGHT",
+  /** 0.2.0: a provider event's operationId does not match the obligation's active checkout. */
+  "PROVIDER_OPERATION_MISMATCH",
+  /** 0.3.0: no checkout to cancel, or it is already CANCEL_REQUESTED / CAPTURE_PENDING / NEEDS_ATTENTION. */
+  "CHECKOUT_NOT_CANCELLABLE",
+  /** 0.3.0: an open capture-type attention record blocks paying this obligation (owner decision 3). */
+  "PROVIDER_ATTENTION_OPEN",
+  /** 0.3.0: the operation's PayPal order is not bound yet (BIND_PROVIDER_ORDER first); no effect. */
+  "PROVIDER_ORDER_UNBOUND",
+  /** 0.3.0: the order id differs from the one bound to the operation; never rebinds, no effect. */
+  "PROVIDER_ORDER_MISMATCH",
 ]);
 export type CommandErrorCode = z.infer<typeof CommandErrorCodeSchema>;
 
