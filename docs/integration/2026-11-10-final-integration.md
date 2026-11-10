@@ -55,7 +55,11 @@ Parent reran the tests: **3 failed, exit 1**, as expected for these defects. The
 
 Claude subsequently pushed `c6281fa`, adding reservation/capture-id hooks. Independent source review found that the hook protects the bill from PAY_BILL/autopay but does not yet reduce spendable cash in `cash/spend/transfer`. Competing spending and mapped-amount/late-fee behavior need review and tests. No claim that the earlier three defects are fixed by that commit is made.
 
+Parent repeated the same isolated fake-provider safety assertions on pushed `c6281fa`: **3 failed, exit 1**, with the same duplicate-order and stale-save behavior. No external provider was called.
+
 The proposed smallest coherent solution is under separate [RFC #136](https://github.com/Philipjj609/waymark/issues/136), with a [versioned design note](https://drive.google.com/file/d/1Zr79SE6TUgSGEG3DxGoF-OqoY7wGAexd/view). It proposes a genuine canonical Run head, an explicit World/Run target binding on the existing operation authority, the existing durable work/fact stream, and receipt/checklist read projections. New schema, transaction-aware repository ownership and legacy registration policy need authorization and coordination. No new schema was implemented in this integration work.
+
+Subsequent ownership clarification: Claude claimed [#137](https://github.com/Philipjj609/waymark/issues/137) for `run_heads`, append-only `run_commands`, the Run repository/API and Run target adapter. Codex ACKed that exclusive scope and will not duplicate its migration or repository. RFC #136 implementation scope is narrowed to shared payment-target generalization, dependent on Claude's published schema and transaction-aware helpers, with separate authorization still required. The earlier proposal that Codex might own the Run-head repository is superseded. A v2 design note records this coordination without overwriting v1.
 
 ## Agreed technical seam and pending wiring
 
