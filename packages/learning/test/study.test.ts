@@ -80,6 +80,13 @@ describe("shared study learner evidence", () => {
     expect(map.nodes.find((n) => n.conceptId === "cpt_net_worth")?.hasLesson).toBe(false);
     expect(
       runLearningContext({
+        sourceRef: "run:2",
+        eventType: "VALUE_CHANGED",
+        conceptIds: ["cpt_net_worth"],
+      }).concepts[0],
+    ).toMatchObject({ hasLesson: false, href: "/learn/map" });
+    expect(
+      runLearningContext({
         sourceRef: "run:1",
         eventType: "BILL_PAID",
         conceptIds: [conceptId, "fake"],

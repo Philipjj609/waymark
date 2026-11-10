@@ -188,7 +188,8 @@ export function runLearningContext(input: {
     eventType: input.eventType.slice(0, 80),
     concepts: SEED_CONCEPTS.filter((c) => input.conceptIds.includes(c.conceptId)).map((c) => ({
       conceptId: c.conceptId,
-      href: `/learn/lessons/${lessonSlug(c.conceptId)}`,
+      hasLesson: !!lessonUnit(c.conceptId),
+      href: lessonUnit(c.conceptId) ? `/learn/lessons/${lessonSlug(c.conceptId)}` : "/learn/map",
     })),
     evidence: [] as LearningEvidence[],
     uncertainty: ["ECONOMIC_OUTCOME_IS_NOT_UNDERSTANDING"],
