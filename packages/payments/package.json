@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "PayPal sandbox boundary: verified status mapping, exact amount conversion, event dedup and verification rules. Network client lands in WP-05.",
+  "description": "PayPal SANDBOX boundary: Orders v2 client (OAuth, idempotent create/get/capture), provider operations, verified status mapping, exact amounts, event dedup. Settles nothing by itself.",
   "exports": {
     ".": "./src/index.ts"
   },
