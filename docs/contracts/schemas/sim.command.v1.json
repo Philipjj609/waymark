@@ -1,7 +1,7 @@
 {
   "$id": "https://schemas.finance-learning-economy.invalid/sim.command.v1.json",
   "title": "sim.command.v1",
-  "x-contracts-version": "0.1.0",
+  "x-contracts-version": "0.3.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
     {
@@ -239,6 +239,138 @@
         },
         "kind": {
           "type": "string",
+          "const": "START_PROVIDER_CHECKOUT"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "obligationId": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 128,
+              "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+            }
+          },
+          "required": [
+            "obligationId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "commandId",
+        "worldId",
+        "expectedWorldVersion",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "sim.command.v1"
+        },
+        "commandId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "worldId": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 128,
+          "pattern": "^wld_[A-Za-z0-9_.:-]+$"
+        },
+        "expectedWorldVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "REQUEST_CHECKOUT_CANCEL"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "obligationId": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 128,
+              "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+            }
+          },
+          "required": [
+            "obligationId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "commandId",
+        "worldId",
+        "expectedWorldVersion",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "sim.command.v1"
+        },
+        "commandId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "worldId": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 128,
+          "pattern": "^wld_[A-Za-z0-9_.:-]+$"
+        },
+        "expectedWorldVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
           "const": "PURCHASE_ASSET"
         },
         "payload": {
@@ -363,12 +495,19 @@
                   "maxLength": 128,
                   "pattern": "^pop_[A-Za-z0-9_.:-]+$"
                 },
+                "orderId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
                 "eventType": {
                   "type": "string",
                   "enum": [
                     "CAPTURE_COMPLETED",
                     "CAPTURE_DENIED",
-                    "CAPTURE_REFUNDED"
+                    "CAPTURE_REFUNDED",
+                    "ORDER_VOIDED",
+                    "CAPTURE_PENDING"
                   ]
                 },
                 "amount": {
@@ -394,6 +533,11 @@
                     "currency"
                   ],
                   "additionalProperties": false
+                },
+                "refundedCaptureId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
                 },
                 "mapping": {
                   "type": "object",
@@ -452,6 +596,7 @@
                 "provider",
                 "providerEventId",
                 "operationId",
+                "orderId",
                 "eventType",
                 "amount",
                 "mapping",
@@ -462,6 +607,384 @@
           },
           "required": [
             "event"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "commandId",
+        "worldId",
+        "expectedWorldVersion",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "sim.command.v1"
+        },
+        "commandId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "worldId": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 128,
+          "pattern": "^wld_[A-Za-z0-9_.:-]+$"
+        },
+        "expectedWorldVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "RECONCILE_PROVIDER_STATE"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "reconciliation": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "const": "PAYPAL_SANDBOX"
+                },
+                "reconciliationId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "operationId": {
+                  "type": "string",
+                  "minLength": 5,
+                  "maxLength": 128,
+                  "pattern": "^pop_[A-Za-z0-9_.:-]+$"
+                },
+                "mapping": {
+                  "type": "object",
+                  "properties": {
+                    "worldId": {
+                      "type": "string",
+                      "minLength": 5,
+                      "maxLength": 128,
+                      "pattern": "^wld_[A-Za-z0-9_.:-]+$"
+                    },
+                    "obligationId": {
+                      "type": "string",
+                      "minLength": 5,
+                      "maxLength": 128,
+                      "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+                    }
+                  },
+                  "required": [
+                    "worldId",
+                    "obligationId"
+                  ],
+                  "additionalProperties": false
+                },
+                "observed": {
+                  "type": "object",
+                  "properties": {
+                    "orderId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "orderStatus": {
+                      "type": "string",
+                      "enum": [
+                        "CREATED",
+                        "SAVED",
+                        "APPROVED",
+                        "PAYER_ACTION_REQUIRED",
+                        "COMPLETED",
+                        "VOIDED",
+                        "EXPIRED"
+                      ]
+                    },
+                    "captures": {
+                      "maxItems": 20,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "captureId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "COMPLETED",
+                              "DECLINED",
+                              "PARTIALLY_REFUNDED",
+                              "PENDING",
+                              "REFUNDED",
+                              "FAILED"
+                            ]
+                          },
+                          "amount": {
+                            "type": "object",
+                            "properties": {
+                              "amountMinor": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "currency": {
+                                "type": "string",
+                                "enum": [
+                                  "EUR",
+                                  "USD",
+                                  "GBP",
+                                  "JPY"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "amountMinor",
+                              "currency"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "refundedAmount": {
+                            "type": "object",
+                            "properties": {
+                              "amountMinor": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "currency": {
+                                "type": "string",
+                                "enum": [
+                                  "EUR",
+                                  "USD",
+                                  "GBP",
+                                  "JPY"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "amountMinor",
+                              "currency"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "captureId",
+                          "status",
+                          "amount"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "orderId",
+                    "orderStatus",
+                    "captures"
+                  ],
+                  "additionalProperties": false
+                },
+                "verification": {
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "type": "string",
+                      "const": "ORDER_LOOKUP"
+                    },
+                    "verifiedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                    },
+                    "evidenceRef": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "verifiedAt",
+                    "evidenceRef"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "provider",
+                "reconciliationId",
+                "operationId",
+                "mapping",
+                "observed",
+                "verification"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "reconciliation"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "commandId",
+        "worldId",
+        "expectedWorldVersion",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "sim.command.v1"
+        },
+        "commandId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "worldId": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 128,
+          "pattern": "^wld_[A-Za-z0-9_.:-]+$"
+        },
+        "expectedWorldVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "BIND_PROVIDER_ORDER"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "binding": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "const": "PAYPAL_SANDBOX"
+                },
+                "operationId": {
+                  "type": "string",
+                  "minLength": 5,
+                  "maxLength": 128,
+                  "pattern": "^pop_[A-Za-z0-9_.:-]+$"
+                },
+                "mapping": {
+                  "type": "object",
+                  "properties": {
+                    "worldId": {
+                      "type": "string",
+                      "minLength": 5,
+                      "maxLength": 128,
+                      "pattern": "^wld_[A-Za-z0-9_.:-]+$"
+                    },
+                    "obligationId": {
+                      "type": "string",
+                      "minLength": 5,
+                      "maxLength": 128,
+                      "pattern": "^obl_[A-Za-z0-9_.:-]+$"
+                    }
+                  },
+                  "required": [
+                    "worldId",
+                    "obligationId"
+                  ],
+                  "additionalProperties": false
+                },
+                "orderId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "verification": {
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "type": "string",
+                      "const": "ORDER_CREATE_RESPONSE"
+                    },
+                    "verifiedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                    },
+                    "evidenceRef": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "verifiedAt",
+                    "evidenceRef"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "provider",
+                "operationId",
+                "mapping",
+                "orderId",
+                "verification"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "binding"
           ],
           "additionalProperties": false
         }

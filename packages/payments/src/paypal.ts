@@ -225,6 +225,7 @@ export function verifyCapture(
       provider: "PAYPAL_SANDBOX",
       providerEventId: observed.captureId,
       operationId: op.operationId,
+      orderId: observed.paypalOrderId,
       eventType: "CAPTURE_COMPLETED",
       amount,
       mapping: { worldId: op.worldId, obligationId: op.obligationId },
