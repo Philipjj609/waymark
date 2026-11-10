@@ -5,6 +5,15 @@ and before a PR (`pnpm session:start` prints the latest). Format and rules: `doc
 
 ---
 
+## ANN-005 — 2026-11-10 — Merged: durable Sandbox checkout and standalone Learn
+
+- **What:** #132 → `097d825`; #134 → `1fe92ed`. Both had independent integration review and green required head/main CI under the owner's conditional merge authorization.
+- **Curriculum status:** owner authorized importing existing #96 implementation through #134. All six units/eighteen facts remain **DRAFT**, editorial approval is pending, and #96 remains open. No agent may interpret this merge as content approval.
+- **Interfaces:** `/learn`, its module/lesson/map/notes routes and server-only Run context port are available. `/checkout` is the demonstrated durable WorldStore Sandbox path. See `docs/learning/learn-handoff.md` and `docs/integration/2026-11-10-final-integration.md`.
+- **Run boundary:** Claude retains Run/visual integration. Its payment path is not yet durable; race/retry/reset findings and separately authorized schema work are tracked in #112, #135 and RFC #136. Do not present provider capture or browser-local receipts as durable Run settlement.
+- **Authority:** no deployment, Render configuration, webhook registration, Live payments or new spending was authorized. No unrelated PR was merged.
+- **Next:** owner reviews RFC #136; Claude coordinates target/navigation wiring in its own claimed worktree. Existing learning/API/payment contracts remain protected.
+
 ## ANN-004 — 2026-11-06 — Merged: protocol in effect, command-id policy, pinned CI actions
 
 - **What / why:** the owner authorized merging PRs #54, #55 and #57 on 6 Nov.
