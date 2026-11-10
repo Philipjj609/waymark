@@ -217,7 +217,9 @@ export type StopKind =
   | "YEAR_END"
   | "PREDICTION"
   | "QUESTION"
-  | "SETBACK";
+  | "SETBACK"
+  | "NEW_WEEK"
+  | "PAYMENT";
 
 export interface Stop {
   readonly kind: StopKind;
@@ -461,7 +463,7 @@ export interface ScenarioDef {
 const Id = z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/);
 const PositiveMinor = z.number().int().min(1).max(100_000_000);
 
-export const CommandSchema = z.discriminatedUnion("kind", [
+const PLAYER_COMMANDS = [
   z.object({ kind: z.literal("ADVANCE"), mode: z.enum(["NEXT_STOP", "WEEK"]) }).strict(),
   z.object({ kind: z.literal("CHOOSE"), cardId: Id, optionId: Id }).strict(),
   z.object({ kind: z.literal("PAY_BILL"), billId: Id }).strict(),
@@ -507,8 +509,34 @@ export const CommandSchema = z.discriminatedUnion("kind", [
     .object({ kind: z.literal("ANSWER"), questionId: Id, answer: z.string().min(1).max(200) })
     .strict(),
   z.object({ kind: z.literal("CLOSE_BUSINESS"), businessId: Id }).strict(),
+] as const;
+
+/** What a player may send. Parsed at the boundary, trusted inside. */
+export const CommandSchema = z.discriminatedUnion("kind", [...PLAYER_COMMANDS]);
+export type PlayerCommand = z.infer<typeof CommandSchema>;
+
+/**
+ * SERVER ONLY. The server appends this after it verified a COMPLETED PayPal Sandbox capture that
+ * matches the bill (invariant 6). Players can never send it (CommandSchema excludes it), so they
+ * cannot forge a VERIFIED_EXTERNAL origin (invariant 4); it reaches the engine only inside a log
+ * the server signed.
+ */
+export const SettleExternalSchema = z
+  .object({
+    kind: z.literal("SETTLE_EXTERNAL"),
+    billId: Id,
+    amountMinor: PositiveMinor,
+    provider: z.literal("PAYPAL_SANDBOX"),
+    operationId: z.string().regex(/^pop_[A-Za-z0-9_.:-]{1,120}$/),
+  })
+  .strict();
+
+/** Everything a signed log may contain. */
+export const LoggedCommandSchema = z.discriminatedUnion("kind", [
+  ...PLAYER_COMMANDS,
+  SettleExternalSchema,
 ]);
-export type Command = z.infer<typeof CommandSchema>;
+export type Command = z.infer<typeof LoggedCommandSchema>;
 export type CommandKind = Command["kind"];
 export type CommandOf<K extends CommandKind> = Extract<Command, { kind: K }>;
 

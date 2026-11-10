@@ -1,4 +1,4 @@
-import { CommandSchema, runView } from "@fle/run";
+import { CommandSchema, LoggedCommandSchema, runView } from "@fle/run";
 import { z } from "zod";
 import { rejectUnsafeWrite } from "../../../lib/csrf";
 import { errorResponse, guarded, json, worldNotFound } from "../../../lib/http";
@@ -54,7 +54,7 @@ const SaveSchema = z
     v: z.literal(1),
     runId: z.string().regex(/^run_[0-9a-f]{16}$/),
     scenarioId: z.string().regex(/^[a-z0-9-]{1,64}$/),
-    log: z.array(CommandSchema).max(MAX_LOG),
+    log: z.array(LoggedCommandSchema).max(MAX_LOG),
     sig: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
   })
   .strict();

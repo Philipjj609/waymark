@@ -5,6 +5,9 @@ export const TEMPLATES: Readonly<Record<string, readonly string[]>> = {
   "core.bill.due": ["{label} of {amount} is due today."],
   "core.bill.paid": ["You paid {label}: {amount}.", "{label} paid: {amount}."],
   "core.bill.autopaid": ["{label} was paid automatically: {amount}."],
+  "core.bill.paid.paypal": [
+    "You paid {label} through PayPal Sandbox: {amount}. Test money, verified by the server.",
+  ],
   "core.transfer": ["You moved {amount} from {from} to {to}."],
   "core.card.expired": ["You let it pass: {title}."],
   "core.month.end": ["Month {month} is over."],

@@ -106,7 +106,7 @@ export function startRun(runId: string, seed: string, scenarioId: string): RunSt
   applyEffects(w, sc.start, { pocket: YOU, slots: {}, path: "start" });
   w.recomputeCommitted();
   beginDay(w);
-  s.stops.unshift({ kind: "RUN_START", text: sc.title, ref: null });
+  s.stops.unshift({ kind: "RUN_START", text: `Your run begins: ${sc.title}.`, ref: null });
   return s;
 }
 
@@ -129,6 +129,12 @@ function advance(w: World, mode: "NEXT_STOP" | "WEEK"): Refusal | undefined {
     beginDay(w);
     const stops = w.s.stops;
     if (mode === "NEXT_STOP" && stops.length > 0) break;
+    // A new week is always a decision point: hours reset and new chances may have arrived.
+    if (mode === "NEXT_STOP" && isWeekStart(w.day)) {
+      const free = w.freeHours();
+      w.stop("NEW_WEEK", `A new week. You have ${free} free hours.`, `w${w.day}`);
+      break;
+    }
     if (
       mode === "WEEK" &&
       (isWeekStart(w.day) || stops.some((x) => x.kind === "MONTH_END" || x.kind === "YEAR_END"))

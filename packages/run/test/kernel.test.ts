@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   apply,
   type Command,
+  CommandSchema,
   DAYS_PER_YEAR,
+  isWeekStart,
+  LoggedCommandSchema,
   type RunState,
   replay,
   startRun,
@@ -105,5 +108,66 @@ describe("run kernel", () => {
     expect(r.refusal).toBeNull();
     expect(r.state.balances.you?.["ASSET:Cash"]).toBe(before + Number(card.slots.payMinor));
     expect(r.state.hours.used).toBe(6);
+  });
+
+  it("Continue never runs past the next Monday, and says why it stopped", () => {
+    let s = startRun("run_w", "seed-w", "first-flat");
+    for (let i = 0; i < 30; i++) {
+      const before = s.day;
+      s = apply(s, ADV).state;
+      expect(s.day - before).toBeLessThanOrEqual(7);
+      expect(s.stops.length).toBeGreaterThan(0);
+      if (isWeekStart(s.day))
+        expect(s.stops.some((x) => x.kind === "NEW_WEEK" || x.kind !== "RUN_START")).toBe(true);
+    }
+  });
+
+  it("only the server can settle a bill through PayPal Sandbox, and only for the exact amount", () => {
+    const s = startRun("run_p", "seed-p", "first-flat");
+    const rent = s.bills.find((b) => b.kind === "RENT" && b.status === "DUE");
+    expect(rent).toBeDefined();
+    if (!rent) return;
+    const settle = {
+      kind: "SETTLE_EXTERNAL",
+      billId: rent.id,
+      amountMinor: rent.amountMinor,
+      provider: "PAYPAL_SANDBOX",
+      operationId: "pop_test_1",
+    } as const;
+    // Players cannot send it; a signed log can carry it.
+    expect(CommandSchema.safeParse(settle).success).toBe(false);
+    expect(LoggedCommandSchema.safeParse(settle).success).toBe(true);
+    expect(apply(s, { ...settle, amountMinor: rent.amountMinor - 1 }).refusal?.code).toBe(
+      "AMOUNT_MISMATCH",
+    );
+    const poor = startRun("run_p", "seed-p", "first-flat");
+    const r = apply(poor, settle);
+    // €400 opening cash cannot cover €650 rent: refused, nothing changes.
+    expect(r.refusal?.code).toBe("NOT_ENOUGH_CASH");
+    expect(r.state).toBe(poor);
+  });
+
+  it("a verified external payment posts like any payment and is marked VERIFIED_EXTERNAL", () => {
+    let s = startRun("run_q", "seed-q", "first-flat");
+    // Run to payday so there is cash for rent next month.
+    while (s.day < 30) s = apply(s, ADV).state;
+    const rent = s.bills.find(
+      (b) => b.kind === "RENT" && (b.status === "DUE" || b.status === "LATE"),
+    );
+    if (!rent) return;
+    const r = apply(s, {
+      kind: "SETTLE_EXTERNAL",
+      billId: rent.id,
+      amountMinor: rent.amountMinor,
+      provider: "PAYPAL_SANDBOX",
+      operationId: "pop_test_2",
+    });
+    expect(r.refusal).toBeNull();
+    const paid = r.events.find(
+      (e) => e.refs.billId === rent.id && e.refs.origin === "VERIFIED_EXTERNAL",
+    );
+    expect(paid?.refs.operationId).toBe("pop_test_2");
+    expect(r.state.bills.find((b) => b.id === rent.id)?.status).toBe("PAID");
+    sumBalances(r.state);
   });
 });

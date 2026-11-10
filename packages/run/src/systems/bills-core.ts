@@ -77,10 +77,15 @@ export function addBillFee(w: World, bill: Bill, feeMinor: number, memo: string)
 }
 
 /** Pay an accrued bill in full from its pocket. False if not enough cash. */
-export function payBill(w: World, bill: Bill): boolean {
+export interface PaidVia {
+  readonly provider: "PAYPAL_SANDBOX";
+  readonly operationId: string;
+}
+
+export function payBill(w: World, bill: Bill, via: PaidVia | null = null): boolean {
   if (bill.status !== "DUE" && bill.status !== "LATE") return false;
   if (w.cash(bill.pocket) < bill.amountMinor) return false;
-  w.post(bill.pocket, `Paid ${bill.label}`, [
+  w.post(bill.pocket, via ? `Paid ${bill.label} through PayPal Sandbox` : `Paid ${bill.label}`, [
     ["LIABILITY:Bills", "DEBIT", bill.amountMinor],
     ["ASSET:Cash", "CREDIT", bill.amountMinor],
   ]);
@@ -89,14 +94,25 @@ export function payBill(w: World, bill: Bill): boolean {
   bill.paidDay = w.day;
   w.emit(
     wasLate ? "BILL_PAID_LATE" : "BILL_PAID",
-    w.t(bill.autopay && !wasLate ? "core.bill.autopaid" : "core.bill.paid", {
-      label: bill.label,
-      amount: euros(bill.amountMinor),
-    }),
+    w.t(
+      via
+        ? "core.bill.paid.paypal"
+        : bill.autopay && !wasLate
+          ? "core.bill.autopaid"
+          : "core.bill.paid",
+      { label: bill.label, amount: euros(bill.amountMinor) },
+    ),
     {
       pocket: bill.pocket,
       amountMinor: bill.amountMinor,
-      refs: { billId: bill.id, kind: bill.kind, onTime: wasLate ? "no" : "yes" },
+      refs: {
+        billId: bill.id,
+        kind: bill.kind,
+        onTime: wasLate ? "no" : "yes",
+        ...(via
+          ? { provider: via.provider, operationId: via.operationId, origin: "VERIFIED_EXTERNAL" }
+          : {}),
+      },
       concepts: ["cpt_obligation", "cpt_cash_balance"],
     },
   );
@@ -151,6 +167,20 @@ export const billsCore: RunSystem = {
     }
   },
   commands: {
+    SETTLE_EXTERNAL(w, cmd) {
+      const bill = w.s.bills.find((b) => b.id === cmd.billId);
+      if (!bill) return refuse("UNKNOWN_BILL", "There is no such bill.");
+      if (bill.status !== "DUE" && bill.status !== "LATE") {
+        return refuse("NOT_PAYABLE", "This bill cannot be paid now.");
+      }
+      if (cmd.amountMinor !== bill.amountMinor) {
+        return refuse("AMOUNT_MISMATCH", "The payment does not match the bill.");
+      }
+      if (!payBill(w, bill, { provider: cmd.provider, operationId: cmd.operationId })) {
+        return refuse("NOT_ENOUGH_CASH", `You need ${euros(bill.amountMinor)} in that pocket.`);
+      }
+      return undefined;
+    },
     PAY_BILL(w, cmd) {
       const bill = w.s.bills.find((b) => b.id === cmd.billId);
       if (!bill) return refuse("UNKNOWN_BILL", "There is no such bill.");
