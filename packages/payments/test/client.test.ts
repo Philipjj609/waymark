@@ -225,6 +225,169 @@ function setup(
   return { pp, client, sleeps };
 }
 
+describe("recovery: order creation after provider idempotency retention", () => {
+  const input = {
+    operationId: "pop_recovery" as ProviderOperationId,
+    worldId: "wld_recovery" as WorldId,
+    obligationId: "obl_recovery" as ObligationId,
+    amount: EUR(3000),
+  };
+  let request = 2000;
+  const nextId = () => RID(++request);
+  const creates = (pp: FakePayPal) =>
+    pp.requests.filter((r) => r.method === "POST" && r.path === "/v2/checkout/orders");
+
+  it("resumes the stored order by GET after the provider forgets its request id", async () => {
+    const { pp, client } = setup({ allowSandboxTestCard: true });
+    const store = new InMemoryOperationStore();
+    const checkout = new SandboxCheckout(client, store, nextId);
+    const first = await checkout.start({ ...input, sandboxTestCard: SANDBOX_TEST_CARD });
+    pp.byRequestId.clear(); // simulate PayPal's bounded idempotency retention
+    const resumed = await new SandboxCheckout(client, store, nextId).start({
+      ...input,
+      sandboxTestCard: SANDBOX_TEST_CARD,
+    });
+    expect(resumed).toMatchObject({ kind: "OK" });
+    expect(resumed.kind === "OK" && resumed.value.orderId).toBe(
+      first.kind === "OK" && first.value.orderId,
+    );
+    expect(creates(pp)).toHaveLength(1);
+    expect(pp.orders.size).toBe(1);
+  });
+
+  it("a failed known-order lookup never creates a replacement order", async () => {
+    const { pp, client } = setup({ maxAttempts: 1 });
+    const checkout = new SandboxCheckout(client, new InMemoryOperationStore(), nextId);
+    await checkout.start(input);
+    pp.faults = ["timeout"];
+    expect(await checkout.start(input)).toMatchObject({ kind: "UNCERTAIN" });
+    expect(creates(pp)).toHaveLength(1);
+  });
+
+  it("a known order is checked against its stored amount and operation before resuming", async () => {
+    const { pp, client } = setup();
+    const checkout = new SandboxCheckout(client, new InMemoryOperationStore(), nextId);
+    const first = await checkout.start(input);
+    const order = pp.orders.get(first.kind === "OK" ? first.value.orderId : "");
+    const unit = (order?.purchase_units as Array<Record<string, unknown>> | undefined)?.[0];
+    if (unit) unit.amount = { value: "99.99", currency_code: "EUR" };
+    expect(await checkout.start(input)).toMatchObject({ kind: "CONFLICT" });
+    expect(creates(pp)).toHaveLength(1);
+  });
+
+  it("an uncertain create with an expired key is not POSTed again after restart", async () => {
+    let now = 0;
+    const { pp, client } = setup({ maxAttempts: 1 });
+    const store = new InMemoryOperationStore();
+    const checkout = new SandboxCheckout(client, store, nextId, () => now);
+    await client.getOrder("ORDER000000000001"); // acquire OAuth before losing create response
+    pp.effectThenFault = ["timeout"];
+    expect(await checkout.start(input)).toMatchObject({ kind: "UNCERTAIN" });
+    expect(await store.get(input.operationId)).toMatchObject({ createStartedAt: 0 });
+    pp.byRequestId.clear();
+    now = 6 * 60 * 60 * 1000;
+    expect(await new SandboxCheckout(client, store, nextId, () => now).start(input)).toMatchObject({
+      kind: "UNCERTAIN",
+      cause: "CREATE_RETRY_WINDOW_EXPIRED",
+    });
+    expect(creates(pp)).toHaveLength(1);
+    expect(pp.orders.size).toBe(1);
+    expect(await store.get(input.operationId)).toMatchObject({
+      createState: "UNCERTAIN",
+      createStartedAt: 0,
+      paypalOrderId: null,
+    });
+  });
+
+  it("the five-hour boundary, unknown legacy age and clock rollback fail closed", async () => {
+    for (const age of [undefined, 0, 10_001]) {
+      const { pp, client } = setup();
+      const store = new InMemoryOperationStore();
+      await store.begin({
+        ...input,
+        expected: input.amount,
+        createRequestId: nextId(),
+        captureRequestId: nextId(),
+        createState: "UNCERTAIN",
+        captureState: "NOT_STARTED",
+        paypalOrderId: null,
+        lastResult: null,
+        ...(age === undefined ? {} : { createStartedAt: age }),
+      });
+      const now = age === 0 ? 5 * 60 * 60 * 1000 : 10_000;
+      expect(
+        await new SandboxCheckout(client, store, nextId, () => now).start(input),
+      ).toMatchObject({
+        kind: "UNCERTAIN",
+        cause: "CREATE_RETRY_WINDOW_EXPIRED",
+      });
+      expect(pp.requests).toHaveLength(0);
+    }
+  });
+
+  it("an uncertain create within the window reuses its original persisted request id", async () => {
+    let now = 0;
+    const { pp, client } = setup({ maxAttempts: 1 });
+    const store = new InMemoryOperationStore();
+    const checkout = new SandboxCheckout(client, store, nextId, () => now);
+    await client.getOrder("ORDER000000000001");
+    pp.effectThenFault = ["timeout"];
+    await checkout.start(input);
+    now = 60_000;
+    expect(await checkout.start(input)).toMatchObject({ kind: "OK" });
+    expect(creates(pp)).toHaveLength(2);
+    expect(new Set(creates(pp).map((r) => r.headers["paypal-request-id"])).size).toBe(1);
+    expect(pp.orders.size).toBe(1);
+    expect(await store.get(input.operationId)).toMatchObject({ createStartedAt: 0 });
+  });
+
+  it("persists the first-attempt timestamp before any create HTTP request", async () => {
+    const pp = new FakePayPal();
+    const store = new InMemoryOperationStore();
+    let seen: number | undefined;
+    const client = new PayPalSandboxClient({
+      clientId: CLIENT_ID,
+      clientSecret: SECRET,
+      fetch: async (url, init) => {
+        if (String(url).endsWith("/v2/checkout/orders"))
+          seen = (await store.get(input.operationId))?.createStartedAt;
+        return pp.fetch(url, init);
+      },
+    });
+    await new SandboxCheckout(client, store, nextId, () => 1234).start(input);
+    expect(seen).toBe(1234);
+  });
+
+  it("a conflicting concurrent create never returns an approval URL for an unbound order", async () => {
+    const pp = new FakePayPal();
+    const store = new InMemoryOperationStore();
+    const client = new PayPalSandboxClient({
+      clientId: CLIENT_ID,
+      clientSecret: SECRET,
+      fetch: async (url, init) => {
+        if (String(url).endsWith("/v2/checkout/orders")) pp.byRequestId.clear();
+        return pp.fetch(url, init);
+      },
+    });
+    const checkout = new SandboxCheckout(client, store, nextId);
+    const results = await Promise.all([checkout.start(input), checkout.start(input)]);
+    expect(results.filter((r) => r.kind === "OK")).toHaveLength(1);
+    const conflict = results.find((r) => r.kind !== "OK");
+    expect(conflict).toEqual({
+      kind: "UNCERTAIN",
+      cause: "ORDER_MAPPING_CONFLICT",
+      attempts: 0,
+      httpStatus: null,
+      debugId: null,
+    });
+    const winner = results.find((r) => r.kind === "OK");
+    expect(await store.get(input.operationId)).toMatchObject({
+      paypalOrderId: winner?.value.orderId,
+      lastResult: "UNCERTAIN:ORDER_MAPPING_CONFLICT",
+    });
+  });
+});
+
 describe("sandbox lock and secrets", () => {
   it("refuses any base URL other than the PayPal sandbox API", () => {
     for (const baseUrl of [
