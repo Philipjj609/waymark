@@ -24,6 +24,24 @@ export const DomainEventTypeSchema = z.enum([
   "DAY_ADVANCED",
   "TIME_PAUSED",
   "PROVIDER_SETTLEMENT_APPLIED",
+  /** 0.2.0: a sandbox checkout started; its amount is now reserved (no journal). */
+  "PROVIDER_CHECKOUT_STARTED",
+  /** 0.2.0: a reservation ended without settlement (verified ORDER_VOIDED). No journal. */
+  "RESERVATION_RELEASED",
+  /** 0.3.0: the player asked to cancel a checkout; nothing is released. No journal. */
+  "PROVIDER_CHECKOUT_CANCEL_REQUESTED",
+  /** 0.3.0: a verified CAPTURE_PENDING / CAPTURE_DENIED changed a checkout's status. No journal. */
+  "PROVIDER_CHECKOUT_STATUS_CHANGED",
+  /** 0.3.0: a verified fact was recorded for a human instead of applied. No journal, no cash. */
+  "PROVIDER_ATTENTION_RECORDED",
+  /** 0.3.0: a verified refund tied to the settling capture (external status only, no journal). */
+  "PROVIDER_REFUND_RECORDED",
+  /** 0.3.0: a server reconciliation attempt and its outcome (settlement/release events follow). */
+  "PROVIDER_RECONCILED",
+  /** 0.3.0: a verified PENDING/DENIED fact kept as evidence while the status did not change. */
+  "PROVIDER_STATUS_FACT_RECORDED",
+  /** 0.3.0: the server bound the PayPal order id to a sandbox operation. No journal. */
+  "PROVIDER_ORDER_BOUND",
 ]);
 export type DomainEventType = z.infer<typeof DomainEventTypeSchema>;
 

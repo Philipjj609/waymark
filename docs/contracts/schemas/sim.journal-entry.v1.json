@@ -1,7 +1,7 @@
 {
   "$id": "https://schemas.finance-learning-economy.invalid/sim.journal-entry.v1.json",
   "title": "sim.journal-entry.v1",
-  "x-contracts-version": "0.1.0",
+  "x-contracts-version": "0.3.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {

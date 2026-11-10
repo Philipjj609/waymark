@@ -11,7 +11,11 @@ import {
   WorldVersionSchema,
 } from "./ids.js";
 import { PositiveMoneySchema } from "./money.js";
-import { VerifiedProviderEventSchema } from "./provider.js";
+import {
+  ProviderOrderBindingSchema,
+  ProviderReconciliationSchema,
+  VerifiedProviderEventSchema,
+} from "./provider.js";
 import type { Origin } from "./world.js";
 
 export const COMMAND_SCHEMA_VERSION = "sim.command.v1" as const;
@@ -40,6 +44,20 @@ export const CommandEnvelopeSchema = z.discriminatedUnion("kind", [
   command("ADVANCE_TIME", z.object({ targetDay: WorldDaySchema }).strict()),
   command("PAY_OBLIGATION", z.object({ obligationId: ObligationIdSchema }).strict()),
   command("DEFER_OBLIGATION", z.object({ obligationId: ObligationIdSchema }).strict()),
+  /**
+   * 0.2.0 (ADR-0008): pay a DUE/OVERDUE bill through a PayPal SANDBOX checkout. Reserves the
+   * remaining amount from fictional cash (an earmark, not an expense) and locks the obligation
+   * (PAYMENT_IN_FLIGHT) until a verified capture settles it or a verified ORDER_VOIDED releases it.
+   * The provider operation id is derived by the engine, never chosen by the client.
+   */
+  command("START_PROVIDER_CHECKOUT", z.object({ obligationId: ObligationIdSchema }).strict()),
+  /**
+   * 0.3.0 (ADR-0008 amendment): ask to cancel the obligation's in-flight sandbox checkout. It only
+   * marks the reservation CANCEL_REQUESTED; it releases NOTHING. The server then re-reads the
+   * order: a verified ORDER_VOIDED releases the earmark, a completed capture still settles
+   * ("the capture wins"). Allowed while AWAITING_PAYER or CAPTURE_DENIED. DEFER stays allowed.
+   */
+  command("REQUEST_CHECKOUT_CANCEL", z.object({ obligationId: ObligationIdSchema }).strict()),
   command(
     "PURCHASE_ASSET",
     z
@@ -54,17 +72,34 @@ export const CommandEnvelopeSchema = z.discriminatedUnion("kind", [
     "APPLY_VERIFIED_PROVIDER_EVENT",
     z.object({ event: VerifiedProviderEventSchema }).strict(),
   ),
+  /**
+   * 0.3.0 (owner decision 2): SERVER-ONLY (VERIFIED_EXTERNAL) reconciliation of one sandbox
+   * operation against the order read back from PayPal. Never accepted from a browser.
+   */
+  command(
+    "RECONCILE_PROVIDER_STATE",
+    z.object({ reconciliation: ProviderReconciliationSchema }).strict(),
+  ),
+  /** 0.3.0 (final pass R1): SERVER-ONLY binding of the PayPal order id to an operation. */
+  command("BIND_PROVIDER_ORDER", z.object({ binding: ProviderOrderBindingSchema }).strict()),
 ]);
+
+/** Kinds only trusted server code may construct (origin VERIFIED_EXTERNAL). */
+export const SERVER_ONLY_COMMAND_KINDS = [
+  "APPLY_VERIFIED_PROVIDER_EVENT",
+  "RECONCILE_PROVIDER_STATE",
+  "BIND_PROVIDER_ORDER",
+] as const;
 export type CommandEnvelope = z.infer<typeof CommandEnvelopeSchema>;
 
 /**
- * What the public HTTP API accepts from browsers: every kind EXCEPT
- * APPLY_VERIFIED_PROVIDER_EVENT, which only trusted server code constructs.
+ * What the public HTTP API accepts from browsers: every kind EXCEPT the server-only ones
+ * (APPLY_VERIFIED_PROVIDER_EVENT, RECONCILE_PROVIDER_STATE).
  */
 export const PlayerCommandEnvelopeSchema = z.discriminatedUnion(
   "kind",
   CommandEnvelopeSchema.options.filter(
-    (o) => o.shape.kind.value !== "APPLY_VERIFIED_PROVIDER_EVENT",
+    (o) => !(SERVER_ONLY_COMMAND_KINDS as readonly string[]).includes(o.shape.kind.value),
   ) as unknown as [
     (typeof CommandEnvelopeSchema.options)[number],
     ...(typeof CommandEnvelopeSchema.options)[number][],

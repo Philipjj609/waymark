@@ -1,7 +1,7 @@
 {
   "$id": "https://schemas.finance-learning-economy.invalid/provider.event.v1.json",
   "title": "provider.event.v1",
-  "x-contracts-version": "0.1.0",
+  "x-contracts-version": "0.3.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -24,12 +24,19 @@
       "maxLength": 128,
       "pattern": "^pop_[A-Za-z0-9_.:-]+$"
     },
+    "orderId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
     "eventType": {
       "type": "string",
       "enum": [
         "CAPTURE_COMPLETED",
         "CAPTURE_DENIED",
-        "CAPTURE_REFUNDED"
+        "CAPTURE_REFUNDED",
+        "ORDER_VOIDED",
+        "CAPTURE_PENDING"
       ]
     },
     "amount": {
@@ -55,6 +62,11 @@
         "currency"
       ],
       "additionalProperties": false
+    },
+    "refundedCaptureId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
     },
     "mapping": {
       "type": "object",
@@ -113,6 +125,7 @@
     "provider",
     "providerEventId",
     "operationId",
+    "orderId",
     "eventType",
     "amount",
     "mapping",
