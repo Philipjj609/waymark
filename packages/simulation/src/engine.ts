@@ -636,10 +636,38 @@ function earlyRefunds(tx: Tx, operationId: string, captureId: string): Attention
   );
 }
 
+/** Plan a bounded audit batch without consuming the budget needed for settlement/reconciliation. */
+function refundRecordsWithinBudget(
+  tx: Tx,
+  operationId: ProviderOperationId,
+  records: readonly AttentionRecord[],
+  eventBudget = tx.s.limits.maxEventsPerCommand - tx.emitted.length,
+  captureId = tx.s.operations[operationId]?.captureId,
+): AttentionRecord[] {
+  const op = tx.s.operations[operationId];
+  if (!op || !captureId) return [];
+  let total = op.refunded.amountMinor;
+  const selected: AttentionRecord[] = [];
+  for (const rec of records) {
+    if (seen(tx, `CAPTURE_REFUNDED:fact:${rec.providerEventId}`)) {
+      selected.push(rec); // already audited: resolving its attention needs no extra event
+      continue;
+    }
+    const next = total + rec.amount.amountMinor;
+    if (rec.amount.currency !== op.amount.currency || next > op.amount.amountMinor) continue;
+    if (eventBudget <= 0) break;
+    selected.push(rec);
+    total = next;
+    eventBudget -= 1;
+  }
+  return selected;
+}
+
 /**
  * Apply recorded early refunds as auditable refund facts (owner decision 1: external status
  * only, no journal), in arrival order, each at most once (shared refund dedup key). A refund that
- * would exceed the captured amount stays open. `resolvedBy` marks the records it applied.
+ * would exceed the captured amount or command budget stays open for the next reconciliation.
+ * `resolvedBy` marks the records it applied.
  */
 function applyRefundRecords(
   tx: Tx,
@@ -648,7 +676,7 @@ function applyRefundRecords(
   records: readonly AttentionRecord[],
   opts: { resolvedBy: string | null },
 ): void {
-  for (const rec of records) {
+  for (const rec of refundRecordsWithinBudget(tx, operationId, records)) {
     const op = tx.s.operations[operationId];
     const key = `CAPTURE_REFUNDED:fact:${rec.providerEventId}`;
     if (!op || op.captureId === null || seen(tx, key)) continue;
@@ -948,7 +976,19 @@ function decideReconciliation(
     // Here every capture is fully REFUNDED, DECLINED or FAILED: no money is held at PayPal.
     if (op.status === "CAPTURED") {
       // Settled through this operation; its capture is now fully refunded at PayPal. The bill
-      // stays SETTLED (decision 1); the engine must already know the full refund.
+      // stays SETTLED (decision 1). A previous audit batch may have left verified early refund
+      // records open: drain them only if they explain the exact remainder of this capture.
+      const captured = op.captureId ? byId.get(op.captureId) : undefined;
+      const waiting = op.captureId ? earlyRefunds(tx, op.operationId, op.captureId) : [];
+      if (
+        captured &&
+        isFullyRefunded(captured) &&
+        sameAmount(captured.amount, op.amount) &&
+        waiting.every((a) => a.amount.currency === op.amount.currency) &&
+        op.refunded.amountMinor + waiting.reduce((n, a) => n + a.amount.amountMinor, 0) ===
+          op.amount.amountMinor
+      )
+        return { outcome: "CONFIRMED", refunds: waiting };
       return {
         outcome: sameAmount(op.refunded, op.amount) ? "CONFIRMED" : "KEPT_REFUNDED_CAPTURE",
       };
@@ -1039,7 +1079,24 @@ function applyReconciliation(tx: Tx, raw: ProviderReconciliation): void {
   );
   const { outcome, capture, refunds } = decideReconciliation(tx, rc, o, op, r, open);
   const applied = APPLIED_OUTCOMES.includes(outcome);
-  const resolved = applied ? open.length : 0;
+  // Preserve the existing reconciliation event order while reporting only refunds this batch
+  // can audit. Settlement needs three events and PROVIDER_RECONCILED needs one. Skipped early
+  // refunds remain OPEN; a fresh reconciliation on the captured operation drains the next batch.
+  const plannedRefunds = refunds
+    ? refundRecordsWithinBudget(
+        tx,
+        op.operationId,
+        refunds,
+        tx.s.limits.maxEventsPerCommand - tx.emitted.length - 1 - (outcome === "SETTLED" ? 3 : 0),
+        capture?.captureId ?? op.captureId,
+      )
+    : [];
+  const pendingRefunds = new Set(refunds);
+  const resolvedRefunds = new Set(plannedRefunds);
+  const toResolve = applied
+    ? open.filter((a) => !pendingRefunds.has(a) || resolvedRefunds.has(a))
+    : [];
+  const resolved = toResolve.length;
   tx.s.reconciliations = [
     ...tx.s.reconciliations,
     {
@@ -1079,13 +1136,12 @@ function applyReconciliation(tx: Tx, raw: ProviderReconciliation): void {
       verification: rc.verification,
     });
   }
-  if (refunds && refunds.length > 0)
-    applyRefundRecords(tx, o, op.operationId, refunds, { resolvedBy: null });
+  if (plannedRefunds.length > 0)
+    applyRefundRecords(tx, o, op.operationId, plannedRefunds, { resolvedBy: null });
   if (resolved > 0) {
+    const resolvedRecords = new Set(toResolve);
     tx.s.attention = tx.s.attention.map((a) =>
-      a.operationId === op.operationId && a.resolvedBy === null
-        ? { ...a, resolvedBy: rc.reconciliationId }
-        : a,
+      resolvedRecords.has(a) ? { ...a, resolvedBy: rc.reconciliationId } : a,
     );
   }
   if ((outcome === "RELEASED" || outcome === "RESOLVED_REFUNDED") && own) {
