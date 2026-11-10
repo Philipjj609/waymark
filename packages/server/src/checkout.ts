@@ -1,5 +1,7 @@
 import type { Money, ProviderOperationId, VerifiedProviderEvent, WorldId } from "@fle/contracts";
 import {
+  isRunOperation,
+  type MatchedCaptureProof,
   type OperationRecord,
   observedCaptureOf,
   type PayPalSandboxClient,
@@ -7,7 +9,9 @@ import {
   SANDBOX_TEST_CARD,
   type SandboxCheckout,
   verifyCapture,
+  verifyCaptureProof,
 } from "@fle/payments";
+import type { RunCheckoutGateway } from "./checkout-target.js";
 import type { SessionHash, WorldStore } from "./store.js";
 import { WorldCheckoutTarget } from "./world-checkout-target.js";
 
@@ -31,6 +35,7 @@ export interface CheckoutWork {
 export interface CheckoutLease extends CheckoutWork {
   token: string;
 }
+export type CheckoutFact = VerifiedProviderEvent | MatchedCaptureProof;
 /** Internal durable outbox port. Implementations authenticate all browser-originated lookups. */
 export interface CheckoutQueue {
   authorized(
@@ -45,6 +50,17 @@ export interface CheckoutQueue {
     operation: ProviderOperationId,
     action: "CAPTURE" | "RECONCILE",
   ): Promise<boolean>;
+  authorizedRun(
+    owner: SessionHash,
+    runId: string,
+    operation: ProviderOperationId,
+  ): Promise<CheckoutWork | null>;
+  requestRun(
+    owner: SessionHash,
+    runId: string,
+    operation: ProviderOperationId,
+    action: "CAPTURE" | "RECONCILE" | "CANCEL",
+  ): Promise<boolean>;
   lease(operation: ProviderOperationId, force: boolean): Promise<CheckoutLease | null>;
   finish(
     lease: CheckoutLease,
@@ -56,14 +72,18 @@ export interface CheckoutQueue {
     },
   ): Promise<void>;
   due(limit: number): Promise<ProviderOperationId[]>;
-  remember(event: VerifiedProviderEvent): Promise<void>;
-  facts(operation: ProviderOperationId): Promise<VerifiedProviderEvent[]>;
-  applied(event: VerifiedProviderEvent): Promise<void>;
+  remember(event: CheckoutFact): Promise<void>;
+  facts(operation: ProviderOperationId): Promise<CheckoutFact[]>;
+  applied(event: CheckoutFact): Promise<void>;
 }
 
 /** No gameplay/FP-30 identifiers. A future Run target must supply equally durable reserve/commit semantics. */
 export class CheckoutService {
   private readonly target: WorldCheckoutTarget;
+  private requireRunTarget(): RunCheckoutGateway {
+    if (!this.runTarget) throw new Error("RUN_TARGET_UNAVAILABLE");
+    return this.runTarget;
+  }
 
   constructor(
     private readonly worlds: WorldStore,
@@ -72,13 +92,14 @@ export class CheckoutService {
     private readonly client: PayPalSandboxClient,
     private readonly returnOrigin: string,
     private readonly testCard = false,
+    private readonly runTarget?: RunCheckoutGateway,
   ) {
     this.target = new WorldCheckoutTarget(worlds);
   }
 
   async status(owner: SessionHash, world: WorldId, operation: ProviderOperationId) {
     const work = await this.queue.authorized(owner, world, operation);
-    if (!work) return null;
+    if (!work || isRunOperation(work.record)) return null;
     const state = await this.worlds.load(world, owner);
     if (!state) return null;
     const op = state.operations[operation];
@@ -122,6 +143,39 @@ export class CheckoutService {
     return { accepted, status: await this.status(owner, world, operation) };
   }
 
+  async statusRun(owner: SessionHash, runId: string, operation: ProviderOperationId) {
+    const work = await this.queue.authorizedRun(owner, runId, operation);
+    if (!work || !isRunOperation(work.record) || !this.runTarget) return null;
+    const state = await this.runTarget.status(owner, work.record);
+    return {
+      operationId: operation,
+      runId,
+      billId: work.record.billId,
+      runVersion: state.version,
+      realm: "PAYPAL_SANDBOX" as const,
+      expected: work.record.expected,
+      phase: work.phase,
+      approveUrl: work.phase === "IN_FLIGHT" ? work.approveUrl : null,
+      orderId: work.record.paypalOrderId,
+      captureId: state.captureId,
+      settled: state.settled,
+      needsAttention: state.needsAttention || work.phase === "ATTENTION",
+      lastResult: work.record.lastResult,
+    };
+  }
+
+  async requestRun(
+    owner: SessionHash,
+    runId: string,
+    operation: ProviderOperationId,
+    action: "CAPTURE" | "RECONCILE" | "CANCEL",
+  ) {
+    if (!this.runTarget || !(await this.queue.authorizedRun(owner, runId, operation))) return null;
+    const accepted = await this.queue.requestRun(owner, runId, operation, action);
+    if (accepted) await this.run(operation, true);
+    return { accepted, status: await this.statusRun(owner, runId, operation) };
+  }
+
   /** Bounded worker tick; every job/fact survives process restart. */
   async tick() {
     for (const operation of await this.queue.due(8)) await this.run(operation, false);
@@ -135,15 +189,24 @@ export class CheckoutService {
     let error: string | null = null;
     try {
       const record = lease.record;
+      if (isRunOperation(record) && !this.runTarget) throw new Error("RUN_TARGET_UNAVAILABLE");
       if (lease.action === "CREATE") {
-        const query = new URLSearchParams({ worldId: record.worldId, operationId: operation });
+        const run = isRunOperation(record);
+        const query = new URLSearchParams(
+          run
+            ? { runId: record.runId, operationId: operation }
+            : { worldId: record.worldId, operationId: operation },
+        );
+        const path = run ? "/run" : "/checkout/return";
+        const binding = isRunOperation(record)
+          ? { worldId: null, obligationId: null, runId: record.runId, billId: record.billId }
+          : { worldId: record.worldId, obligationId: record.obligationId };
         const result = await this.checkout.start({
           operationId: operation,
-          worldId: record.worldId,
-          obligationId: record.obligationId,
+          ...binding,
           amount: record.expected,
-          returnUrl: `${this.returnOrigin}/checkout/return?${query}`,
-          cancelUrl: `${this.returnOrigin}/checkout/return?${query}&cancel=1`,
+          returnUrl: `${this.returnOrigin}${path}?${query}`,
+          cancelUrl: `${this.returnOrigin}${path}?${query}&cancel=1`,
           ...(this.testCard ? { sandboxTestCard: SANDBOX_TEST_CARD } : {}),
         });
         if (result.kind === "OK") approveUrl = result.value.approveUrl;
@@ -156,7 +219,8 @@ export class CheckoutService {
         phase = "RECONCILING";
         error ??= "ORDER_UNRESOLVED";
       } else {
-        await this.target.bind(lease.owner, { ...rec, paypalOrderId: rec.paypalOrderId });
+        if (isRunOperation(rec)) await this.requireRunTarget().bind(lease.owner, rec);
+        else await this.target.bind(lease.owner, { ...rec, paypalOrderId: rec.paypalOrderId });
         if (
           lease.action === "CREATE" &&
           lease.phase !== "CANCELLING" &&
@@ -183,22 +247,32 @@ export class CheckoutService {
         const verifiedAt = new Date().toISOString();
         const observed = observedCaptureOf(order);
         if (observed) {
-          const verified = verifyCapture(
-            {
-              operationId: operation,
-              worldId: rec.worldId,
-              obligationId: rec.obligationId,
-              expected: rec.expected,
-              paypalOrderId: rec.paypalOrderId,
-              requestId: rec.createRequestId,
-            },
-            observed,
-            verifiedAt,
-          );
-          if (verified.ok) await this.queue.remember(verified.event);
+          if (isRunOperation(rec)) {
+            const verified = verifyCaptureProof(
+              { operationId: operation, expected: rec.expected, paypalOrderId: rec.paypalOrderId },
+              observed,
+              verifiedAt,
+            );
+            if (verified.ok) await this.queue.remember(verified.proof);
+          } else {
+            const verified = verifyCapture(
+              {
+                operationId: operation,
+                worldId: rec.worldId,
+                obligationId: rec.obligationId,
+                expected: rec.expected,
+                paypalOrderId: rec.paypalOrderId,
+                requestId: rec.createRequestId,
+              },
+              observed,
+              verifiedAt,
+            );
+            if (verified.ok) await this.queue.remember(verified.event);
+          }
         }
         await this.applyFacts(lease);
-        const { terminal, open, confirmed } = await this.target.reconcile(
+        const target = isRunOperation(rec) ? this.requireRunTarget() : this.target;
+        const { terminal, open, confirmed } = await target.reconcile(
           lease.owner,
           rec,
           order,
@@ -238,8 +312,15 @@ export class CheckoutService {
 
   private async applyFacts(lease: CheckoutLease) {
     for (const event of await this.queue.facts(lease.operationId)) {
-      await this.target.applyFact(lease.owner, event);
-      await this.queue.applied(event);
+      if (isRunOperation(lease.record)) {
+        if ("mapping" in event || !this.runTarget) throw new Error("FACT_TARGET_MISMATCH");
+        // The gateway commits Run history AND the fact-applied marker in one transaction.
+        await this.runTarget.commitVerifiedFact(lease.owner, lease.record, event);
+      } else {
+        if (!("mapping" in event)) throw new Error("FACT_TARGET_MISMATCH");
+        await this.target.applyFact(lease.owner, event);
+        await this.queue.applied(event);
+      }
     }
   }
 }

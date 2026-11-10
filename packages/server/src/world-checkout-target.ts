@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { VerifiedProviderEvent } from "@fle/contracts";
 import type { ObservedOrder, OperationRecord } from "@fle/payments";
-import { parsePayPalAmount } from "@fle/payments";
+import { isRunOperation, parsePayPalAmount } from "@fle/payments";
 import { submitProviderCommand } from "./provider-command.js";
 import type { SessionHash, WorldStore } from "./store.js";
 
@@ -10,6 +10,7 @@ export class WorldCheckoutTarget {
   constructor(private readonly worlds: WorldStore) {}
 
   async bind(owner: SessionHash, record: OperationRecord & { paypalOrderId: string }) {
+    if (isRunOperation(record)) throw new Error("WORLD_TARGET_REQUIRED");
     const binding = await submitProviderCommand(this.worlds, owner, record.worldId, {
       kind: "BIND_PROVIDER_ORDER",
       payload: {
@@ -43,6 +44,7 @@ export class WorldCheckoutTarget {
     order: ObservedOrder,
     verifiedAt: string,
   ) {
+    if (isRunOperation(record)) throw new Error("WORLD_TARGET_REQUIRED");
     const captures = order.captures.map((c) => ({
       captureId: c.captureId,
       status: c.status,
