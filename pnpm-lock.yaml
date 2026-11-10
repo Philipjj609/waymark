@@ -38,9 +38,15 @@ importers:
       '@fle/learning':
         specifier: workspace:*
         version: link:../../packages/learning
+      '@fle/payments':
+        specifier: workspace:*
+        version: link:../../packages/payments
       '@fle/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
+      '@fle/run':
+        specifier: workspace:*
+        version: link:../../packages/run
       '@fle/server':
         specifier: workspace:*
         version: link:../../packages/server
@@ -56,7 +62,13 @@ importers:
       react-dom:
         specifier: 19.3.1
         version: 19.3.1(react@19.3.1)
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
+      '@electric-sql/pglite':
+        specifier: 0.5.11
+        version: 0.5.11
       '@fle/simulation':
         specifier: workspace:*
         version: link:../../packages/simulation
@@ -72,6 +84,9 @@ importers:
       '@types/react-dom':
         specifier: 19.3.0
         version: 19.3.0(@types/react@19.3.0)
+      drizzle-orm:
+        specifier: 0.45.4
+        version: 0.45.4(@electric-sql/pglite@0.5.11)(@types/pg@8.23.1)(pg@8.23.1)
 
   packages/ai:
     dependencies:
@@ -153,6 +168,28 @@ importers:
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
+
+  packages/run:
+    dependencies:
+      '@fle/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@fle/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@fle/learning':
+        specifier: workspace:*
+        version: link:../learning
+      '@fle/simulation':
+        specifier: workspace:*
+        version: link:../simulation
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      fast-check:
+        specifier: 4.10.2
+        version: 4.10.2
 
   packages/server:
     dependencies:

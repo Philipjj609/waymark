@@ -71,6 +71,9 @@ export default defineConfig({
       PAYPAL_CLIENT_SECRET: "",
       PAYPAL_WEBHOOK_ID: "",
       CLIENT_IP_HEADER: "",
+      // The Run (#112) is off unless enabled; in a production build it also needs a real secret.
+      WAYMARK_RUN: "1",
+      RUN_SECRET: "e2e".repeat(12),
       NEXT_TELEMETRY_DISABLED: "1",
     },
   },
