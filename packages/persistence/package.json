@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@fle/contracts": "workspace:*",
+    "@fle/payments": "workspace:*",
     "@fle/server": "workspace:*",
     "@fle/simulation": "workspace:*",
     "drizzle-orm": "0.45.4",
