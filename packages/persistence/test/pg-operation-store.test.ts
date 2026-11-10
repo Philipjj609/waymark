@@ -161,7 +161,7 @@ describe("PgOperationStore on PGlite (storage semantics, not cross-connection lo
           (operation_id, world_id, obligation_id, amount_minor, currency, request_id, status)
         VALUES (${input.operationId}, ${input.worldId}, ${input.obligationId}, 3000, 'EUR', 'legacy-create', 'IN_FLIGHT')
       `);
-      expect(await migrate(legacyDb)).toEqual(["0001_provider_operation_steps.sql"]);
+      expect(await migrate(legacyDb)).toEqual(MIGRATIONS.slice(1).map((m) => m.name));
       expect(await migrate(legacyDb)).toEqual([]);
       await expect(new PgOperationStore(legacyDb).get(input.operationId)).rejects.toThrow(
         "missing provider request id",

@@ -184,6 +184,9 @@ importers:
       '@fle/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@fle/payments':
+        specifier: workspace:*
+        version: link:../payments
       '@fle/simulation':
         specifier: workspace:*
         version: link:../simulation

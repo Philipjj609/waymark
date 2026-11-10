@@ -2,6 +2,7 @@ import type { AuthorizedCommand, WorldId } from "@fle/contracts";
 import type { CommitInput, CommitOutcome, SessionHash, WorldStore } from "@fle/server";
 import { replay, type WorldConfig, type WorldState } from "@fle/simulation";
 import { and, asc, count, eq } from "drizzle-orm";
+import { checkoutCommitAllowed, scheduleCheckout } from "./checkout-hooks.js";
 import type { Db } from "./migrate.js";
 import { commands, events, journalEntries, journalLines, outbox, worlds } from "./schema.js";
 
@@ -27,6 +28,7 @@ type Writer = Db | Tx;
  * Tenant isolation (ADR-0011): every statement filters on `owner_session_hash` in the query itself.
  */
 export class PgWorldStore implements WorldStore {
+  readonly supportsCheckout = true as const;
   constructor(private readonly db: Db) {}
 
   async create(input: {
@@ -63,6 +65,8 @@ export class PgWorldStore implements WorldStore {
     return this.db.transaction(async (tx) => {
       // The version check, owner scope and row lock in one statement. A concurrent commit that
       // already moved the version leaves 0 rows here (blocked until it finishes, then re-checked).
+      const checkoutGate = await checkoutCommitAllowed(tx, input);
+      if (checkoutGate !== "ALLOWED") return { ok: false, reason: checkoutGate } as const;
       const updated = await tx
         .update(worlds)
         .set({
@@ -108,6 +112,7 @@ export class PgWorldStore implements WorldStore {
         .from(journalEntries)
         .where(eq(journalEntries.worldId, worldId));
       await insertJournals(tx, outcome.state, journaled);
+      await scheduleCheckout(tx, input);
       if (input.outbox?.length) {
         await tx
           .insert(outbox)
