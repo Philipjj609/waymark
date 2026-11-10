@@ -1,5 +1,13 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
+  connectPostgres,
+  InMemoryRunStore,
+  migrate,
+  PgRunStore,
+  type RunHead,
+  type RunStore,
+} from "@fle/persistence";
+import {
   apply,
   type Command,
   type Refusal,
@@ -8,21 +16,30 @@ import {
   type RunState,
   replay,
   SCENARIOS,
+  startRun,
 } from "@fle/run";
 
 /**
- * The Run's save (PLAY-002 §10). The server keeps no copy of a run: the browser carries a token
- * with the log of every command it has had accepted, signed by the server. A run is rebuilt by
- * replaying that log over a seed only the server can compute, so the browser can neither change
- * the past nor learn the luck that is still ahead. All money here is fictional.
- *
- * What this does NOT protect: an old token is still valid, so a player can go back to an earlier
- * save and play on differently (a "reload"). That is harmless in a single-player game with no
- * stakes outside it; nothing here is a financial record or a payment (invariant 6 is untouched).
+ * The Run's record (#137, owner-approved 10 Nov 2026). The SERVER holds each run: its scenario and
+ * the append-only log of accepted commands (packages/persistence run_heads / run_commands). The
+ * browser keeps only a signed pointer {runId, version, headHash}. So a browser cannot forge,
+ * rewrite or roll back history: there is no history in its hands, a command must name the
+ * current version (compare-and-swap), and a retried request id is answered, never re-applied.
+ * Browser-side what-ifs cannot write anything. Payment facts are not stored here; Run commands
+ * only reference payment operations and captures by id. All money in a run is fictional.
  */
 
-/** The token the browser stores. `log` is exactly the commands the server accepted. */
+/** What the browser stores: a pointer to the server's run, never its history. */
 export interface SaveToken {
+  readonly v: 2;
+  readonly runId: string;
+  readonly version: number;
+  readonly headHash: string;
+  readonly sig: string;
+}
+
+/** A browser-held save from before #137 (full log). Accepted only to import it once. */
+export interface LegacySave {
   readonly v: 1;
   readonly runId: string;
   readonly scenarioId: string;
@@ -37,18 +54,9 @@ export interface SaveToken {
  */
 const DEV_SECRET = ["waymark", "run", "local", "development", "only"].join("/");
 const MIN_SECRET = 32;
-/** Most runs whose latest state is kept in memory. One entry per run: only its head. */
 const CACHE_MAX = 100;
-/** Most commands one save may hold (about ten years of play). Keeps replay and bodies bounded. */
+/** Most commands one run may hold (about ten years of play). Keeps replay bounded. */
 export const MAX_LOG = 3_000;
-
-interface Head {
-  readonly length: number;
-  readonly sig: string;
-  readonly state: RunState;
-}
-
-const holder = globalThis as typeof globalThis & { __waymarkRunCache?: Map<string, Head> };
 
 const isDevOrTest = (env: NodeJS.ProcessEnv) =>
   env.NODE_ENV === "development" || env.NODE_ENV === "test";
@@ -87,108 +95,369 @@ export const seedFor = (runId: string) => mac("seed", runId).toString("hex");
 
 export const knownScenario = (id: string) => SCENARIOS.some((s) => s.id === id);
 
-function signature(runId: string, scenarioId: string, log: readonly Command[]): string {
-  const digest = createHash("sha256").update(JSON.stringify(log)).digest("hex");
-  // The rules version is signed too: after a rules change an old save is refused, never replayed
-  // into a different past.
+const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+
+/** The head hash of an empty run. */
+export const genesisHash = (runId: string, scenarioId: string) =>
+  sha(`${RUN_RULES_VERSION}|${runId}|${scenarioId}`);
+
+/** Each accepted command extends the chain, so the head hash commits to the whole history. */
+export const chainHash = (previous: string, command: unknown) =>
+  sha(`${previous}\n${JSON.stringify(command)}`);
+
+const equalText = (a: string, b: string) => {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+
+function pointerSig(runId: string, version: number, headHash: string): string {
+  return mac("sig", `v2|${RUN_RULES_VERSION}|${runId}|${version}|${headHash}`).toString(
+    "base64url",
+  );
+}
+
+export function signPointer(head: Pick<RunHead, "runId" | "version" | "headHash">): SaveToken {
+  return {
+    v: 2,
+    runId: head.runId,
+    version: head.version,
+    headHash: head.headHash,
+    sig: pointerSig(head.runId, head.version, head.headHash),
+  };
+}
+
+/** True only for a pointer this server signed (under the current rules). */
+export function verifyPointer(save: SaveToken): boolean {
+  return equalText(save.sig, pointerSig(save.runId, save.version, save.headHash));
+}
+
+function legacySig(runId: string, scenarioId: string, log: readonly Command[]): string {
+  const digest = sha(JSON.stringify(log));
   return mac("sig", `${RUN_RULES_VERSION}|${runId}|${scenarioId}|${digest}`).toString("base64url");
 }
 
-export function signSave(runId: string, scenarioId: string, log: readonly Command[]): SaveToken {
-  return { v: 1, runId, scenarioId, log, sig: signature(runId, scenarioId, log) };
+/** For tests and the one-time import: the pre-#137 signature over a full log. */
+export function signLegacySave(
+  runId: string,
+  scenarioId: string,
+  log: readonly Command[],
+): LegacySave {
+  return { v: 1, runId, scenarioId, log, sig: legacySig(runId, scenarioId, log) };
 }
 
-/** True only for a token whose run, scenario and exact log this server signed. */
-export function verifySave(save: SaveToken): boolean {
-  const expected = Buffer.from(signature(save.runId, save.scenarioId, save.log));
-  const given = Buffer.from(save.sig);
-  return given.length === expected.length && timingSafeEqual(given, expected);
+// -- the store ------------------------------------------------------------------------------------
+
+interface Holder {
+  __waymarkRunStore?: RunStore;
+  __waymarkRunStoreClose?: () => Promise<void>;
+  __waymarkRunStates?: Map<string, { version: number; headHash: string; state: RunState }>;
+}
+const holder = globalThis as typeof globalThis & Holder;
+
+/** True when runs survive a restart (Postgres). Memory mode is development-only. */
+export const runStoreDurable = () => (process.env.WORLD_STORE ?? "memory") === "postgres";
+
+/**
+ * One store per process, chosen like the world store: WORLD_STORE=postgres with DATABASE_URL is
+ * durable; memory is for development and tests and is lost on restart.
+ */
+export function runStore(): RunStore {
+  if (holder.__waymarkRunStore) return holder.__waymarkRunStore;
+  if (!runStoreDurable()) {
+    holder.__waymarkRunStore = new InMemoryRunStore();
+    return holder.__waymarkRunStore;
+  }
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("WORLD_STORE=postgres needs DATABASE_URL");
+  const { db, pool } = connectPostgres(url);
+  holder.__waymarkRunStoreClose = () => pool.end();
+  let ready: Promise<PgRunStore> | undefined;
+  const store = () => {
+    ready ??= migrate(db).then(() => new PgRunStore(db));
+    ready.catch(() => {
+      ready = undefined;
+    });
+    return ready;
+  };
+  holder.__waymarkRunStore = {
+    create: async (h) => (await store()).create(h),
+    load: async (id) => (await store()).load(id),
+    findRequest: async (id, req) => (await store()).findRequest(id, req),
+    append: async (id, v, entries, hash) => (await store()).append(id, v, entries, hash),
+  };
+  return holder.__waymarkRunStore;
 }
 
-// -- state cache --------------------------------------------------------------------------------
-
-function cache(): Map<string, Head> {
-  holder.__waymarkRunCache ??= new Map();
-  return holder.__waymarkRunCache;
+/** Test hook: use this store (a fresh one if omitted) and forget every cached state. */
+export function setRunStoreForTests(store?: RunStore): void {
+  holder.__waymarkRunStore = store ?? new InMemoryRunStore();
+  holder.__waymarkRunStates?.clear();
 }
 
-/** Keep only the newest state of each run, so memory grows with players, not with steps. */
-function remember(save: SaveToken, state: RunState): void {
-  const map = cache();
-  map.delete(save.runId);
-  map.set(save.runId, { length: save.log.length, sig: save.sig, state });
+/** Test hook: forget cached states, as a process restart would. */
+export function resetRunCache(): void {
+  holder.__waymarkRunStates?.clear();
+}
+
+function states() {
+  holder.__waymarkRunStates ??= new Map();
+  return holder.__waymarkRunStates;
+}
+
+function remember(head: RunHead, state: RunState) {
+  const map = states();
+  map.delete(head.runId);
+  map.set(head.runId, { version: head.version, headHash: head.headHash, state });
   if (map.size > CACHE_MAX) {
     const oldest = map.keys().next().value;
     if (oldest !== undefined) map.delete(oldest);
   }
 }
 
-/** True when this save would need a full replay (not the cached head). */
-export function needsReplay(save: SaveToken): boolean {
-  const head = cache().get(save.runId);
-  return !head || head.sig !== save.sig || head.length !== save.log.length;
-}
+// -- results --------------------------------------------------------------------------------------
 
-/**
- * The state a verified save describes. A new command usually follows the save the server just
- * handed out, so this is a cache hit and the log is replayed only once. A miss (restart, eviction,
- * an older save) replays from the start; a log that no longer replays throws ReplayError.
- */
-export function stateOf(save: SaveToken): RunState {
-  const map = cache();
-  const head = map.get(save.runId);
-  if (head && head.sig === save.sig && head.length === save.log.length) {
-    map.delete(save.runId);
-    map.set(save.runId, head); // most recently used
-    return head.state;
-  }
-  const state = replay(save.runId, seedFor(save.runId), save.scenarioId, save.log);
-  remember(save, state);
-  return state;
-}
-
-/** A brand new run: the empty log, signed, and the state it starts in. */
-export function startSave(
-  scenarioId: string,
-  runId: string = newRunId(),
-): { save: SaveToken; state: RunState } {
-  const save = signSave(runId, scenarioId, []);
-  const state = stateOf(save);
-  return { save, state };
-}
-
-export type Applied =
-  | { readonly ok: true; readonly save: SaveToken; readonly state: RunState }
+export type RunFailure =
+  /** No such run for this session (also used for someone else's run: never reveal it exists). */
+  | { readonly ok: false; readonly status: 404; readonly code: "NOT_FOUND" }
+  /** A pointer this server did not sign. */
+  | { readonly ok: false; readonly status: 403; readonly code: "BAD_SAVE" }
+  /** The browser is behind the server's run (another tab, a retry after a lost answer). */
   | {
       readonly ok: false;
+      readonly status: 409;
+      readonly code: "STALE";
+      readonly save: SaveToken;
+      readonly state: RunState;
+    }
+  /** The stored log no longer replays under these rules. */
+  | { readonly ok: false; readonly status: 409; readonly code: "RULES_CHANGED" };
+
+export type Loaded = { readonly ok: true; readonly save: SaveToken; readonly state: RunState };
+
+export type Applied =
+  | Loaded
+  | {
+      readonly ok: false;
+      readonly status: 422;
+      readonly code: "REFUSED";
       readonly refusal: Refusal;
       readonly save: SaveToken;
       readonly state: RunState;
-    };
+    }
+  | RunFailure;
+
+/** The run's current state, rebuilt from the stored log when it is not cached. */
+async function current(
+  owner: string,
+  runId: string,
+): Promise<{ head: RunHead; state: RunState } | RunFailure> {
+  const rec = await runStore().load(runId);
+  if (!rec || rec.owner !== owner) return { ok: false, status: 404, code: "NOT_FOUND" };
+  const head: RunHead = rec;
+  const cached = states().get(runId);
+  if (cached && cached.version === head.version && cached.headHash === head.headHash) {
+    return { head, state: cached.state };
+  }
+  try {
+    const state = replay(runId, seedFor(runId), rec.scenarioId, rec.commands as Command[]);
+    remember(head, state);
+    return { head, state };
+  } catch (err) {
+    if (err instanceof ReplayError) return { ok: false, status: 409, code: "RULES_CHANGED" };
+    throw err;
+  }
+}
+
+const failed = (x: unknown): x is RunFailure =>
+  typeof x === "object" && x !== null && (x as { ok?: unknown }).ok === false;
+
+/** A brand new run on the server, owned by this session. */
+export async function createRun(owner: string, scenarioId: string): Promise<Loaded> {
+  const runId = newRunId();
+  const headHash = genesisHash(runId, scenarioId);
+  const created = await runStore().create({
+    runId,
+    owner,
+    scenarioId,
+    rulesVersion: RUN_RULES_VERSION,
+    headHash,
+  });
+  if (!created) throw new Error("run id collision");
+  const head: RunHead = {
+    runId,
+    owner,
+    scenarioId,
+    rulesVersion: RUN_RULES_VERSION,
+    version: 0,
+    headHash,
+  };
+  const state = startRun(runId, seedFor(runId), scenarioId);
+  remember(head, state);
+  return { ok: true, save: signPointer(head), state };
+}
+
+/** The run a pointer names, at the server's current version (the browser may be behind). */
+export async function loadRun(owner: string, save: SaveToken): Promise<Loaded | RunFailure> {
+  if (!verifyPointer(save)) return { ok: false, status: 403, code: "BAD_SAVE" };
+  const now = await current(owner, save.runId);
+  if (failed(now)) return now;
+  return { ok: true, save: signPointer(now.head), state: now.state };
+}
 
 /**
- * Apply one command to a verified save. Accepted: the command joins the log and the new save is
- * signed. Refused: nothing changes and the same save comes back.
+ * Apply one player command. The pointer must name the server's current version: a browser that
+ * is behind gets STALE (with the current state) and nothing changes. A request id that was
+ * already accepted returns the current state and changes nothing. A refusal changes nothing.
  */
-export function applyToSave(save: SaveToken, command: Command): Applied {
-  const state = stateOf(save);
-  if (save.log.length >= MAX_LOG) {
+export async function commandRun(
+  owner: string,
+  save: SaveToken,
+  command: Command,
+  requestId: string,
+): Promise<Applied> {
+  if (!verifyPointer(save)) return { ok: false, status: 403, code: "BAD_SAVE" };
+  const now = await current(owner, save.runId);
+  if (failed(now)) return now;
+  if ((await runStore().findRequest(save.runId, requestId)) !== null) {
+    return { ok: true, save: signPointer(now.head), state: now.state };
+  }
+  if (save.version !== now.head.version || !equalText(save.headHash, now.head.headHash)) {
+    return { ok: false, status: 409, code: "STALE", save: signPointer(now.head), state: now.state };
+  }
+  return appendTo(now, { command, origin: "PLAYER", requestId });
+}
+
+/**
+ * Server-only: append a command the server itself decided on (payment reservation, settlement).
+ * Never reachable with a browser-supplied command. `expectedVersion` guards against racing a
+ * player's command; a conflict is returned, not retried here.
+ */
+export async function appendServerCommand(
+  owner: string,
+  runId: string,
+  expectedVersion: number,
+  command: Command,
+): Promise<Applied> {
+  const now = await current(owner, runId);
+  if (failed(now)) return now;
+  if (now.head.version !== expectedVersion) {
+    return { ok: false, status: 409, code: "STALE", save: signPointer(now.head), state: now.state };
+  }
+  return appendTo(now, { command, origin: "SERVER", requestId: null });
+}
+
+async function appendTo(
+  now: { head: RunHead; state: RunState },
+  entry: { command: Command; origin: "PLAYER" | "SERVER"; requestId: string | null },
+): Promise<Applied> {
+  const save = signPointer(now.head);
+  if (now.head.version >= MAX_LOG) {
     const refusal = {
       code: "RUN_FULL",
       message: "This run is as long as a run can be. Start a new one to keep playing.",
     };
-    return { ok: false, refusal, save, state };
+    return { ok: false, status: 422, code: "REFUSED", refusal, save, state: now.state };
   }
-  const result = apply(state, command);
-  if (result.refusal) return { ok: false, refusal: result.refusal, save, state };
-  const next = signSave(save.runId, save.scenarioId, [...save.log, command]);
-  remember(next, result.state);
-  return { ok: true, save: next, state: result.state };
+  const result = apply(now.state, entry.command);
+  if (result.refusal) {
+    return {
+      ok: false,
+      status: 422,
+      code: "REFUSED",
+      refusal: result.refusal,
+      save,
+      state: now.state,
+    };
+  }
+  const appended = await runStore().append(
+    now.head.runId,
+    now.head.version,
+    [entry],
+    chainHash(now.head.headHash, entry.command),
+  );
+  if (!appended.ok) {
+    // Someone else wrote first (another tab, a duplicate request): report the run as it is.
+    const again = await current(now.head.owner, now.head.runId);
+    if (failed(again)) return again;
+    if (appended.reason === "DUPLICATE_REQUEST") {
+      return { ok: true, save: signPointer(again.head), state: again.state };
+    }
+    return {
+      ok: false,
+      status: 409,
+      code: "STALE",
+      save: signPointer(again.head),
+      state: again.state,
+    };
+  }
+  remember(appended.head, result.state);
+  return { ok: true, save: signPointer(appended.head), state: result.state };
+}
+
+/**
+ * One-time import of a pre-#137 browser save into the server record, owned by this session. Only
+ * a log this server signed, only if the run is not already on the server, and never one that holds
+ * external payment commands: those were made before payments were durable and cannot be backed by
+ * the payment records.
+ */
+export async function importLegacy(
+  owner: string,
+  legacy: LegacySave,
+): Promise<Loaded | RunFailure> {
+  if (!equalText(legacy.sig, legacySig(legacy.runId, legacy.scenarioId, legacy.log))) {
+    return { ok: false, status: 403, code: "BAD_SAVE" };
+  }
+  if (legacy.log.some((c) => c.kind.endsWith("_EXTERNAL"))) {
+    return { ok: false, status: 409, code: "RULES_CHANGED" };
+  }
+  let state: RunState;
+  try {
+    state = replay(legacy.runId, seedFor(legacy.runId), legacy.scenarioId, legacy.log);
+  } catch (err) {
+    if (err instanceof ReplayError) return { ok: false, status: 409, code: "RULES_CHANGED" };
+    throw err;
+  }
+  const genesis = genesisHash(legacy.runId, legacy.scenarioId);
+  const created = await runStore().create({
+    runId: legacy.runId,
+    owner,
+    scenarioId: legacy.scenarioId,
+    rulesVersion: RUN_RULES_VERSION,
+    headHash: genesis,
+  });
+  if (!created) {
+    // Already imported (a second tab, a retry): the server's copy wins.
+    const now = await current(owner, legacy.runId);
+    if (failed(now)) return now;
+    return { ok: true, save: signPointer(now.head), state: now.state };
+  }
+  let hash = genesis;
+  for (const c of legacy.log) hash = chainHash(hash, c);
+  const appended =
+    legacy.log.length === 0
+      ? null
+      : await runStore().append(
+          legacy.runId,
+          0,
+          legacy.log.map((command) => ({ command, origin: "PLAYER" as const, requestId: null })),
+          hash,
+        );
+  if (appended && !appended.ok) {
+    const now = await current(owner, legacy.runId);
+    if (failed(now)) return now;
+    return { ok: true, save: signPointer(now.head), state: now.state };
+  }
+  const head: RunHead = {
+    runId: legacy.runId,
+    owner,
+    scenarioId: legacy.scenarioId,
+    rulesVersion: RUN_RULES_VERSION,
+    version: legacy.log.length,
+    headHash: hash,
+  };
+  remember(head, state);
+  return { ok: true, save: signPointer(head), state };
 }
 
 export { ReplayError };
-
-/** Test hook: forget every cached state. */
-export function resetRunCache(): void {
-  cache().clear();
-}

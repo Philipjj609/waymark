@@ -73,6 +73,15 @@ export function PayWithPayPal({ save, bill, primary, where, onSettled }: PayWith
             : "Something went wrong. Nothing was paid."),
       );
       setPhase("failed");
+      // A failed payment may still have moved the run (a reservation held or handed back): keep
+      // the pointer current so the next click is not seen as stale.
+      if (isObject(json) && isObject(json.save) && isObject(json.view)) {
+        onSettled({
+          save: json.save as unknown as SaveToken,
+          view: json.view as unknown as RunView,
+          receipt: null,
+        });
+      }
     } catch {
       setMessage("The game server could not be reached. Nothing was paid.");
       setPhase("failed");
