@@ -1,3 +1,4 @@
+import type { PayPalReceipt } from "../../lib/run-paypal";
 import type { SaveToken } from "../../lib/run-save";
 
 /**
@@ -13,6 +14,15 @@ export const NAME_MAX = 40;
 /** A sanity bound so a runaway loop cannot fill the disk with saves. */
 const MAX_RUNS = 20;
 
+/** A verified PayPal Sandbox receipt, with the game date it happened on. */
+export type StoredReceipt = PayPalReceipt & { readonly calendarLabel: string };
+
+/** The "Quick demo" checklist for a run: which steps are ticked, and whether it was put away. */
+export interface DemoState {
+  readonly ticks: readonly string[];
+  readonly hidden: boolean;
+}
+
 export interface StoredRun {
   readonly id: string;
   readonly name: string;
@@ -21,6 +31,52 @@ export interface StoredRun {
   readonly calendarLabel: string;
   /** Milliseconds since 1970, from the browser clock (only used for "last played"). */
   readonly updatedAt: number;
+  /**
+   * Extras kept next to the save (all optional, so older saves load unchanged): this run's
+   * verified PayPal Sandbox receipts, whether the first-run guide was done, the demo checklist.
+   */
+  readonly receipts?: readonly StoredReceipt[];
+  readonly guideDone?: boolean;
+  readonly demo?: DemoState;
+}
+
+/** The extras only, so a changed save can carry them over to its new entry. */
+export type RunExtras = Pick<StoredRun, "receipts" | "guideDone" | "demo">;
+
+export const extrasOf = (run: StoredRun | undefined): RunExtras =>
+  run ? { receipts: run.receipts, guideDone: run.guideDone, demo: run.demo } : {};
+
+function looksLikeReceipt(v: unknown): v is StoredReceipt {
+  return (
+    isObject(v) &&
+    typeof v.orderId === "string" &&
+    typeof v.captureId === "string" &&
+    typeof v.billLabel === "string" &&
+    typeof v.amountMinor === "number" &&
+    Number.isInteger(v.amountMinor) &&
+    typeof v.calendarLabel === "string"
+  );
+}
+
+/** Drops anything in the extras that is not the right shape; a damaged extra never blocks a run. */
+function cleanExtras(run: StoredRun): StoredRun {
+  const raw = run as unknown as Record<string, unknown>;
+  const receipts = Array.isArray(raw.receipts) ? raw.receipts.filter(looksLikeReceipt) : undefined;
+  const demoRaw = raw.demo;
+  const demo: DemoState | undefined =
+    isObject(demoRaw) && Array.isArray(demoRaw.ticks)
+      ? {
+          ticks: demoRaw.ticks.filter((t): t is string => typeof t === "string"),
+          hidden: demoRaw.hidden === true,
+        }
+      : undefined;
+  const { receipts: _r, demo: _d, guideDone: _g, ...base } = raw;
+  return {
+    ...(base as unknown as StoredRun),
+    ...(receipts ? { receipts } : {}),
+    ...(demo ? { demo } : {}),
+    ...(raw.guideDone === true ? { guideDone: true } : {}),
+  };
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
@@ -56,7 +112,7 @@ function readRuns(): StoredRun[] {
     const raw = window.localStorage.getItem(RUNS_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(looksLikeRun) : [];
+    return Array.isArray(parsed) ? parsed.filter(looksLikeRun).map(cleanExtras) : [];
   } catch {
     return [];
   }

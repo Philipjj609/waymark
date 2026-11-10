@@ -11,6 +11,10 @@ export type { PayPalReceipt };
 export interface PayWithPayPalProps {
   readonly save: SaveToken;
   readonly bill: BillView;
+  /** The main action for this bill (filled button) rather than a secondary one. */
+  readonly primary?: boolean;
+  /** Where the button appears, so the same bill can offer it twice without a duplicate test id. */
+  readonly where?: string;
   /** Called with the new save, view and PayPal's receipt once the server verified the payment. */
   readonly onSettled: (next: {
     save: SaveToken;
@@ -27,7 +31,7 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "obj
  * before the bill counts as paid. Nobody signs in to PayPal and nothing real moves. The browser
  * only asks; it can never settle a bill itself.
  */
-export function PayWithPayPal({ save, bill, onSettled }: PayWithPayPalProps) {
+export function PayWithPayPal({ save, bill, primary, where, onSettled }: PayWithPayPalProps) {
   const [phase, setPhase] = useState<"idle" | "paying" | "failed">("idle");
   const [message, setMessage] = useState("");
 
@@ -76,10 +80,10 @@ export function PayWithPayPal({ save, bill, onSettled }: PayWithPayPalProps) {
   }
 
   return (
-    <div className="run-paypal" data-testid={`paypal-${bill.id}`}>
+    <div className="run-paypal" data-testid={`paypal-${where ? `${where}-` : ""}${bill.id}`}>
       <button
         type="button"
-        className="btn"
+        className={primary ? "btn btn-primary" : "btn"}
         onClick={pay}
         disabled={phase === "paying"}
         aria-busy={phase === "paying"}

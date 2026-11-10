@@ -54,7 +54,8 @@ const sumBalances = (s: RunState) => {
 describe("run kernel", () => {
   it("starts with opening cash, a rent bill announced and a first card", () => {
     const s = startRun("run_a", "seed-1", "first-flat");
-    expect(s.balances.you?.["ASSET:Cash"]).toBe(40_000);
+    // €400 saved plus the first €1,450 pay.
+    expect(s.balances.you?.["ASSET:Cash"]).toBe(185_000);
     expect(s.bills.some((b) => b.kind === "RENT")).toBe(true);
     expect(s.stops[0]?.kind).toBe("RUN_START");
     expect(s.cards.length).toBeGreaterThanOrEqual(1);
@@ -141,8 +142,14 @@ describe("run kernel", () => {
       "AMOUNT_MISMATCH",
     );
     const poor = startRun("run_p", "seed-p", "first-flat");
+    // Take the opening cash down to €400 (balanced against opening equity): too little for €650.
+    poor.balances.you = {
+      ...poor.balances.you,
+      "ASSET:Cash": 40_000,
+      "EQUITY:Opening": (poor.balances.you?.["EQUITY:Opening"] ?? 0) - 145_000,
+    };
     const r = apply(poor, settle);
-    // €400 opening cash cannot cover €650 rent: refused, nothing changes.
+    // €400 cannot cover €650 rent: refused, nothing changes.
     expect(r.refusal?.code).toBe("NOT_ENOUGH_CASH");
     expect(r.state).toBe(poor);
   });

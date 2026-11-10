@@ -265,13 +265,22 @@ body:has(.run) {
   background: var(--pen-wash);
 }
 .run .btn:disabled {
+  /* No opacity: faded text drops under 3:1. Disabled reads as flat and dashed instead. */
   cursor: not-allowed;
-  opacity: 0.55;
+  border-style: dashed;
+  border-color: var(--rule-strong);
+  background: var(--paper);
+  color: var(--pencil);
 }
 .run .btn-primary {
   border-color: var(--pen);
   background: var(--pen);
   color: var(--pen-ink);
+}
+.run .btn-primary:disabled {
+  border-color: var(--rule-strong);
+  background: var(--paper);
+  color: var(--pencil);
 }
 .run .btn-primary:hover:not(:disabled) {
   background: var(--pen);
@@ -334,7 +343,7 @@ body:has(.run) {
 /* ---------------------------------------------------------------- time: the week strip */
 .run-time {
   display: grid;
-  grid-template-columns: minmax(0, 15rem) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 17rem) minmax(0, 1fr) auto;
   grid-template-areas: "when strip go";
   align-items: center;
   gap: 16px 28px;
@@ -581,6 +590,10 @@ body:has(.run) {
   font-weight: 650;
 }
 .run-need-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 6px;
   color: var(--pen);
   font-weight: 600;
   text-underline-offset: 3px;
@@ -1422,9 +1435,6 @@ dialog.run-sheet::backdrop {
   .run-desk[data-pane="notes"] [data-p]:not([data-p="notes"]) {
     display: none;
   }
-  .run-desk[data-pane="business"] .run-pane-empty {
-    display: block;
-  }
   .run-start {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1445,11 +1455,6 @@ dialog.run-sheet::backdrop {
   .run-sheet-body {
     padding: 16px 16px 20px;
   }
-}
-
-.run-pane-empty {
-  display: none;
-  padding: 20px 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1513,4 +1518,283 @@ dialog.run-sheet::backdrop {
 .run[data-busy="true"] .run-segment,
 .run[data-busy="true"] .run-switch {
   cursor: progress;
+}
+
+/* ---------------------------------------------------------------- structure and keyboard */
+html:has(.run) {
+  /* The phone's fixed Continue bar and tab bar (about 130px) never cover a focused item. */
+  scroll-padding-bottom: 150px;
+  scroll-padding-top: 12px;
+}
+.run-main {
+  display: block;
+}
+.run-main:focus {
+  outline: none;
+}
+.run-skip {
+  position: absolute;
+  left: 12px;
+  top: -80px;
+  z-index: 40;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 650;
+  text-decoration: none;
+}
+.run-skip:focus {
+  top: 12px;
+}
+.run-brand {
+  /* now the page's h1 */
+  line-height: 1.2;
+}
+
+/* ---------------------------------------------------------------- goal, cash chip, PayPal chip */
+.run-goal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--pen);
+  background: var(--pen-wash);
+  font-size: 0.9375rem;
+}
+.run-goal[data-done="true"] {
+  border-left-color: var(--green);
+  background: var(--green-wash);
+}
+.run-goal-label {
+  color: var(--pencil);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.run-goal-text {
+  font-family: var(--serif);
+  font-weight: 600;
+}
+.run-goal-progress {
+  flex-basis: 100%;
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run .run-cash-chip {
+  font-size: 0.8125rem;
+  white-space: normal;
+}
+.run-cash-phone {
+  display: none;
+  margin: 6px 0 0;
+}
+.run-summary-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.run-summary-head .run-h {
+  margin-bottom: 8px;
+}
+.run-pp {
+  margin: 0 0 8px;
+}
+.run .run-pp-chip {
+  min-height: 32px;
+  border: 1px solid var(--rule-strong);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+.run .run-pp-chip[data-tone="paid"] {
+  color: var(--green);
+  background: var(--green-wash);
+}
+.run-pp-list {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--rule-strong);
+  background: var(--sheet);
+}
+.run-pp-list ul {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+/* ---------------------------------------------------------------- continue check, guide, demo */
+.run-confirm-now {
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 2px solid var(--pen);
+  border-radius: 6px;
+  background: var(--sheet);
+}
+.run-confirm-now:focus {
+  outline: none;
+}
+.run-confirm-q {
+  margin: 0 0 10px;
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+.run-guide,
+.run-demo {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: 6px;
+  background: var(--sheet);
+}
+.run-guide-h,
+.run-demo-h {
+  margin: 0 0 6px;
+  font-family: var(--serif);
+  font-size: 1rem;
+  font-weight: 650;
+}
+.run-demo-count {
+  margin-left: 6px;
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.run-guide-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+}
+.run-guide-steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.run-guide-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--pen);
+  color: var(--pen-ink);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+.run-demo-list {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+}
+.run-demo-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.run-demo-tick {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  margin-top: 1px;
+  border: 2px solid var(--rule-strong);
+  border-radius: 4px;
+  color: var(--green);
+  font-weight: 700;
+}
+.run-demo-list li[data-done="true"] .run-demo-tick {
+  border-color: var(--green);
+  background: var(--green-wash);
+}
+.run-demo-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin: 0 0 16px;
+}
+.run-lede-paypal {
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+.run-forecast ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.9375rem;
+}
+.run-refusal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+/* ---------------------------------------------------------------- month close: short first */
+.run-sheet-headline {
+  margin: 8px 0 12px;
+  font-family: var(--serif);
+  font-size: 1.1875rem;
+  line-height: 1.4;
+}
+.run-sheet-two {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 32px;
+  margin: 0 0 12px;
+  padding: 10px 0;
+  border-block: 2px solid var(--ink);
+}
+.run-sheet-two dt {
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-sheet-two dd {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+.run-sheet-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 20px -24px -24px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--rule-strong);
+  background: var(--sheet);
+}
+
+@media (max-width: 859px) {
+  .run-cash-phone {
+    display: block;
+  }
+  .run-sheet-foot {
+    margin: 20px -16px -20px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  }
+  .run-sheet-foot .btn-primary {
+    flex: 1 1 auto;
+  }
 }

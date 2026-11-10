@@ -188,8 +188,8 @@ export const TEMPLATES: Readonly<Record<string, readonly string[]>> = {
 
   "card.payday_flyer.title": ["A flyer for quick cash", "Money fast, no questions"],
   "card.payday_flyer.body": [
-    "Your cash is low and a flyer offers a quick loan. It is easy to get, and it is expensive to keep. You could also find cash work for {earn}.",
-    "A quick cash lender is advertising near you. Borrowing is fast. You could earn {earn} from some cash work instead.",
+    "Your cash is low and a flyer offers a quick loan. It is easy to get, and it is expensive to keep. You could also find cash work for {earn}. Free debt advice exists in most countries; a bank or your city can point you to it.",
+    "A quick cash lender is advertising near you. Borrowing is fast. You could earn {earn} from some cash work instead. Free debt advice exists in most countries; a bank or your city can point you to it.",
   ],
   "card.payday_flyer.work": ["Pick up cash work: 6 hours, {earn}"],
 

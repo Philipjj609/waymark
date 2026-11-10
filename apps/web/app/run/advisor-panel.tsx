@@ -14,9 +14,37 @@ export interface AdvisorPanelProps {
 type Mode = "ask" | "do";
 const MAX_TEXT = 300;
 
+/** Window events between the screens and this panel (kept here: the panel is client code). */
+export const ASK_EVENT = "run:ask";
+export const ASKED_EVENT = "run:asked";
+/** The one-tap question; the server answers it with the single most useful next step. */
+export const WHAT_NOW_QUESTION = "What should I do now?";
+
+/** A question sent from a button elsewhere: its text if usable (1 to 300 characters), else null. */
+export function askFromEvent(detail: unknown): string | null {
+  if (typeof detail !== "object" || detail === null) return null;
+  const text = (detail as { text?: unknown }).text;
+  if (typeof text !== "string") return null;
+  const clean = text
+    .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean.length > 0 && clean.length <= MAX_TEXT ? clean : null;
+}
+
 /** What POST /api/run/advisor answers (lib/run-advisor.ts). Parsed defensively: it is a network body. */
 type Answer =
-  | { kind: "ask"; facts: string[]; answer: string; source: "model" | "stand-in" }
+  | {
+      kind: "ask";
+      facts: string[];
+      relevant: string[];
+      lead: string | null;
+      answer: string;
+      source: "model" | "stand-in";
+      checked: boolean;
+      proposal: PlayerCommand | null;
+      summary: string | null;
+    }
   | { kind: "proposal"; command: PlayerCommand; summary: string; source: "model" | "rules" }
   | { kind: "refusal"; message: string }
   | { kind: "unclear"; hint: string }
@@ -30,11 +58,17 @@ function readAnswer(json: unknown): Answer {
   const failed: Answer = { kind: "error", message: "The advisor sent back something unexpected." };
   if (!isObject(json)) return failed;
   if (isStrings(json.facts) && typeof json.answer === "string") {
+    const model = json.source === "model";
     return {
       kind: "ask",
       facts: json.facts,
+      relevant: isStrings(json.relevant) ? json.relevant : json.facts.slice(0, 5),
+      lead: typeof json.lead === "string" && json.lead.length > 0 ? json.lead : null,
       answer: json.answer,
-      source: json.source === "model" ? "model" : "stand-in",
+      source: model ? "model" : "stand-in",
+      checked: model && json.checked === true,
+      proposal: isObject(json.proposal) ? (json.proposal as unknown as PlayerCommand) : null,
+      summary: typeof json.summary === "string" ? json.summary : null,
     };
   }
   if (isObject(json.proposal) && typeof json.summary === "string") {
@@ -122,18 +156,50 @@ export function AdvisorPanel({ save, view, onCommand }: AdvisorPanelProps) {
   const help = HELP[mode];
   const clean = text.trim();
 
-  async function submit(e: { preventDefault(): void }) {
-    e.preventDefault();
-    if (busy || clean.length === 0) return;
+  async function run(asMode: Mode, question: string) {
     const ticket = ++latest.current;
     setBusy(true);
     setAnswer(null);
     askedDay.current = view.day;
-    const result = await callAdvisor(mode, clean, save);
+    const result = await callAdvisor(asMode, question, save);
     // Ignore a slow reply if the player has moved on to another question or tab.
-    if (ticket === latest.current) setAnswer(result);
-    setBusy(false);
+    if (ticket === latest.current) {
+      setAnswer(result);
+      // Entry points elsewhere on the page listen for this to know an answer is on screen.
+      window.dispatchEvent(
+        new CustomEvent(ASKED_EVENT, {
+          detail: { text: question, mode: asMode, kind: result.kind },
+        }),
+      );
+      setBusy(false);
+    }
   }
+
+  async function submit(e: { preventDefault(): void }) {
+    e.preventDefault();
+    if (busy || clean.length === 0) return;
+    await run(mode, clean);
+  }
+
+  // A question sent from a button elsewhere (event "run:ask", detail {text}) is filled in, asked,
+  // and the panel brought into view. The latest closure lives in a ref so the listener binds once.
+  const root = useRef<HTMLElement | null>(null);
+  const asker = useRef<(question: string) => void>(() => {});
+  asker.current = (question: string) => {
+    setMode("ask");
+    setText(question);
+    root.current?.scrollIntoView({ block: "center" });
+    root.current?.focus({ preventScroll: true });
+    void run("ask", question);
+  };
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const question = askFromEvent((e as CustomEvent).detail);
+      if (question) asker.current(question);
+    };
+    window.addEventListener(ASK_EVENT, onAsk);
+    return () => window.removeEventListener(ASK_EVENT, onAsk);
+  }, []);
 
   async function confirm(command: PlayerCommand) {
     if (sending) return;
@@ -155,7 +221,13 @@ export function AdvisorPanel({ save, view, onCommand }: AdvisorPanelProps) {
   }
 
   return (
-    <section className="run-panel advisor" aria-labelledby={`${fieldId}-h`} data-testid="advisor">
+    <section
+      ref={root}
+      tabIndex={-1}
+      className="run-panel advisor"
+      aria-labelledby={`${fieldId}-h`}
+      data-testid="advisor"
+    >
       <style>{ADVISOR_CSS}</style>
       <h2 id={`${fieldId}-h`} className="run-sr">
         Advisor
@@ -175,6 +247,18 @@ export function AdvisorPanel({ save, view, onCommand }: AdvisorPanelProps) {
           </button>
         ))}
       </fieldset>
+
+      {mode === "ask" ? (
+        <button
+          type="button"
+          className="btn advisor-now"
+          disabled={busy}
+          data-testid="advisor-now"
+          onClick={() => asker.current(WHAT_NOW_QUESTION)}
+        >
+          {WHAT_NOW_QUESTION}
+        </button>
+      ) : null}
 
       <form onSubmit={submit} className="advisor-form">
         <label htmlFor={fieldId} className="advisor-label">
@@ -213,7 +297,14 @@ export function AdvisorPanel({ save, view, onCommand }: AdvisorPanelProps) {
       </form>
 
       <div className="advisor-out" aria-live="polite" data-testid="advisor-out">
-        {answer?.kind === "ask" ? <AskOut answer={answer} /> : null}
+        {answer?.kind === "ask" ? (
+          <AskOut
+            answer={answer}
+            sending={sending}
+            onConfirm={(command) => confirm(command)}
+            onCancel={() => setAnswer(null)}
+          />
+        ) : null}
         {answer?.kind === "proposal" ? (
           <ProposalOut
             answer={answer}
@@ -242,24 +333,60 @@ export function AdvisorPanel({ save, view, onCommand }: AdvisorPanelProps) {
   );
 }
 
-function AskOut({ answer }: { answer: Extract<Answer, { kind: "ask" }> }) {
+function AskOut({
+  answer,
+  sending,
+  onConfirm,
+  onCancel,
+}: {
+  answer: Extract<Answer, { kind: "ask" }>;
+  sending: boolean;
+  onConfirm(command: PlayerCommand): void;
+  onCancel(): void;
+}) {
+  const proposal = answer.proposal;
   return (
     <div data-testid="advisor-ask-out">
-      <h3 className="run-h-sub">What is true right now</h3>
-      <p className="small muted advisor-hint">
-        Every number is here, written by the game from your run.
+      {answer.lead ? (
+        <p className="advisor-lead" data-testid="advisor-lead">
+          {answer.lead}
+        </p>
+      ) : null}
+      {proposal && answer.summary ? (
+        <ProposalOut
+          answer={{ kind: "proposal", command: proposal, summary: answer.summary, source: "rules" }}
+          sending={sending}
+          onConfirm={() => onConfirm(proposal)}
+          onCancel={onCancel}
+          advice
+        />
+      ) : null}
+      <p className="small muted advisor-label-line" data-testid="advisor-wording">
+        {answer.source === "model"
+          ? "Wording: AI, checked against the facts"
+          : "Wording: written by the game"}
+        {answer.checked ? (
+          <span className="advisor-badge" data-testid="advisor-checked">
+            Checked
+          </span>
+        ) : null}
       </p>
-      <ul className="advisor-facts">
-        {answer.facts.map((f) => (
+      <p className="advisor-prose">{answer.answer}</p>
+      <h3 className="run-h-sub">What this is based on</h3>
+      <p className="small muted advisor-hint">Facts: from your run</p>
+      <ul className="advisor-facts" data-testid="advisor-relevant">
+        {answer.relevant.map((f) => (
           <li key={f}>{f}</li>
         ))}
       </ul>
-      <h3 className="run-h-sub">
-        {answer.source === "model"
-          ? "Explanation (AI, may be imperfect)"
-          : "Explanation (written by the game, not AI)"}
-      </h3>
-      <p className="advisor-prose">{answer.answer}</p>
+      <details className="advisor-all">
+        <summary>All facts</summary>
+        <ul className="advisor-facts">
+          {answer.facts.map((f) => (
+            <li key={f}>{f}</li>
+          ))}
+        </ul>
+      </details>
     </div>
   );
 }
@@ -269,20 +396,25 @@ function ProposalOut({
   sending,
   onConfirm,
   onCancel,
+  advice = false,
 }: {
   answer: Extract<Answer, { kind: "proposal" }>;
   sending: boolean;
   onConfirm(): void;
   onCancel(): void;
+  /** True for the "what should I do now" suggestion: no typed words were read. */
+  advice?: boolean;
 }) {
   return (
     <fieldset className="advisor-confirm" data-testid="advisor-proposal">
       <legend>Check this before you confirm</legend>
       <p className="mt-0">{answer.summary}</p>
       <p className="small muted advisor-hint">
-        {answer.source === "model"
-          ? "Your words were read by AI, then checked by the game's rules."
-          : "Your words were read by simple rules, then checked by the game's rules."}{" "}
+        {advice
+          ? "This suggestion comes from your run and is checked by the game's rules."
+          : answer.source === "model"
+            ? "Your words were read by AI, then checked by the game's rules."
+            : "Your words were read by simple rules, then checked by the game's rules."}{" "}
         Nothing has changed yet.
       </p>
       <div className="advisor-row">
@@ -293,7 +425,7 @@ function ProposalOut({
           onClick={onConfirm}
           data-testid="advisor-confirm"
         >
-          Confirm
+          {advice ? "Do it" : "Confirm"}
         </button>
         <button type="button" className="btn" disabled={sending} onClick={onCancel}>
           Cancel
@@ -315,6 +447,13 @@ const ADVISOR_CSS = `
 .advisor-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-2);margin-top:var(--space-2)}
 .advisor-out{margin-top:var(--space-3);min-width:0}
 .advisor-facts{margin:0;padding-left:var(--space-4);display:grid;gap:var(--space-1)}
+.advisor-now{width:100%;margin-bottom:var(--space-3)}
+.advisor-lead{margin:0 0 var(--space-3);font-weight:650;line-height:1.45}
+.advisor-label-line{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);margin:0 0 var(--space-1)}
+.advisor-badge{display:inline-block;padding:0 var(--space-2);border:1px solid var(--color-accent);border-radius:999px;font-weight:650}
+.advisor-all{margin-top:var(--space-2)}
+.advisor-all summary{cursor:pointer;min-height:44px;display:flex;align-items:center}
+.advisor-all summary:focus-visible,.advisor-now:focus-visible,.advisor:focus-visible{outline:3px solid var(--color-focus);outline-offset:2px}
 .advisor-prose{margin:0;font-family:var(--run-serif,inherit);line-height:1.5}
 .advisor-note{margin:0;padding:var(--space-3);border:1px solid var(--color-line);border-radius:var(--radius-sm);background:var(--tone-other-bg);color:var(--tone-other-ink)}
 .advisor-error{background:var(--tone-overdue-bg);color:var(--tone-overdue-ink)}

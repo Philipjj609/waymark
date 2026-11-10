@@ -82,6 +82,11 @@ function scanPayments(w: World): void {
   for (let i = start; i < s.events.length; i++) {
     const e = s.events[i];
     if (e?.kind !== "BILL_PAID" || e.refs.onTime !== "yes") continue;
+    // Paying inside the grace days avoids the fee but is not "on time": no credit for it, and none
+    // on a day when any other bill is overdue, so the record never rises while a bill is slipping.
+    const paid = s.bills.find((b) => b.id === e.refs.billId);
+    if (paid && e.day > paid.dueDay) continue;
+    if (overdueOn(w, e.day)) continue;
     const month = calendar(e.day).monthIndex;
     if (num(w, "life.creditGainMonth") !== month) {
       s.flags["life.creditGainMonth"] = month;
@@ -93,6 +98,17 @@ function scanPayments(w: World): void {
     s.person.creditRecord = w.clamp100(s.person.creditRecord + CREDIT_ON_TIME);
   }
   s.flags["life.eventCursor"] = s.events.length;
+}
+
+/** True when some bill was past its due day and still unpaid on `day` (grace or late). */
+function overdueOn(w: World, day: number): boolean {
+  return w.s.bills.some(
+    (b) =>
+      b.status !== "UPCOMING" &&
+      b.dueDay < day &&
+      (b.paidDay === null || b.paidDay > day) &&
+      b.status !== "DEFAULTED",
+  );
 }
 
 function markLate(w: World, bill: Bill): void {
@@ -290,6 +306,14 @@ export const lifeSystem: RunSystem = {
       "{label} is late. It is still owed.",
       "{label} missed its grace period. It is still owed.",
     ],
+    "life.bill.note.due": [
+      "Due today. You have {grace} of grace; after that a fee of {fee} is added.",
+    ],
+    "life.bill.note.grace": ["Overdue by {over}, but no fee yet. {left} of grace left."],
+    "life.bill.note.grace_last": [
+      "Overdue, and today is the last day of grace. A fee of {fee} is added tomorrow.",
+    ],
+    "life.bill.note.late": ["Late by {days}. Fees of {fees} were added and it is still owed."],
     "life.landlord.warning": [
       "Your landlord wrote about the unpaid {label}. Please pay soon.",
       "A warning from your landlord: {label} is still unpaid.",

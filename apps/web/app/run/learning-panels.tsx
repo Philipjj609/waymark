@@ -2,6 +2,7 @@
 
 import type { LearningView, MonthClose, RunView, YearReview } from "@fle/run";
 import { useEffect, useId, useRef, useState } from "react";
+import { type AskWhy, AskWhyButton } from "./extras";
 import { euros, inDaysText, parseEuros } from "./format";
 import type { Act } from "./ui";
 
@@ -138,13 +139,26 @@ export function MonthCloseSheet({
   act,
   questions,
   onDismiss,
+  onAsk,
 }: {
   close: MonthClose;
   act: Act;
   questions: readonly Question[];
   onDismiss: () => void;
+  onAsk: AskWhy;
 }) {
   const ref = useModal();
+  // The detail is open by default where there is room, and folded away on a phone.
+  const [detail, setDetail] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(min-width: 860px)").matches,
+  );
+  const same = close.profitMinor === close.cashChangeMinor;
+  const headline = same
+    ? `Your profit and your cash moved together this month: ${euros(close.profitMinor)}.`
+    : `Your profit was ${euros(close.profitMinor)}, but your cash changed by ${euros(close.cashChangeMinor)}.`;
+  const why = same
+    ? `Why did my profit and my cash change match in month ${close.monthIndex}?`
+    : `Why is my cash different from my profit in month ${close.monthIndex}?`;
   return (
     <dialog
       ref={ref}
@@ -160,18 +174,10 @@ export function MonthCloseSheet({
         <h2 id="mc-h" className="run-sheet-h">
           Closing the books on month {close.monthIndex}
         </h2>
-        <p className="run-sheet-sub">
-          A sale counts as profit when you make it. It counts as cash when it arrives.
+        <p className="run-sheet-headline" data-testid="month-headline">
+          {headline}
         </p>
-        <dl className="run-pairs">
-          <div>
-            <dt>Came in</dt>
-            <dd className="figure">{euros(close.inMinor)}</dd>
-          </div>
-          <div>
-            <dt>Went out</dt>
-            <dd className="figure">{euros(close.outMinor)}</dd>
-          </div>
+        <dl className="run-sheet-two">
           <div>
             <dt>Profit</dt>
             <dd className="figure">{euros(close.profitMinor)}</dd>
@@ -180,22 +186,48 @@ export function MonthCloseSheet({
             <dt>Change in cash</dt>
             <dd className="figure">{euros(close.cashChangeMinor)}</dd>
           </div>
-          <div>
-            <dt>Still owed to you</dt>
-            <dd className="figure">{euros(close.owedToYouMinor)}</dd>
-          </div>
         </dl>
-        {close.lines.length > 0 ? (
-          <ul className="run-sheet-lines">
-            {close.lines.map((l) => (
-              <li key={l}>{l}</li>
-            ))}
-          </ul>
-        ) : null}
+        <p className="run-sheet-sub">
+          {close.subtitle ||
+            "A sale counts as profit when you make it. It counts as cash when it arrives."}
+        </p>
+        <button
+          type="button"
+          className="btn btn-small btn-quiet"
+          aria-expanded={detail}
+          aria-controls="mc-detail"
+          data-testid="month-detail-toggle"
+          onClick={() => setDetail((d) => !d)}
+        >
+          {detail ? "Hide detail" : "Show detail"}
+        </button>
+        <div id="mc-detail" hidden={!detail}>
+          <dl className="run-pairs">
+            <div>
+              <dt>Came in</dt>
+              <dd className="figure">{euros(close.inMinor)}</dd>
+            </div>
+            <div>
+              <dt>Went out</dt>
+              <dd className="figure">{euros(close.outMinor)}</dd>
+            </div>
+            <div>
+              <dt>Still owed to you</dt>
+              <dd className="figure">{euros(close.owedToYouMinor)}</dd>
+            </div>
+          </dl>
+          {close.lines.length > 0 ? (
+            <ul className="run-sheet-lines">
+              {close.lines.map((l) => (
+                <li key={l}>{l}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
         {questions.length > 0 ? (
           <div className="run-sheet-ask">
             <h3 className="run-h" style={{ fontSize: "1.0625rem" }}>
-              A question before you turn the page
+              A question, if you want one
             </h3>
             <ul className="run-list">
               {questions.map((q) => (
@@ -205,6 +237,13 @@ export function MonthCloseSheet({
           </div>
         ) : null}
         <div className="run-sheet-foot">
+          <AskWhyButton
+            text={why}
+            onAsk={(t) => {
+              onDismiss();
+              onAsk(t);
+            }}
+          />
           <button
             type="button"
             className="btn btn-primary"

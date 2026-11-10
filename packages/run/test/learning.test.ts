@@ -689,7 +689,10 @@ describe("year review", () => {
     expect(yr).not.toBeNull();
     if (!yr) return;
     expect(yr.year).toBe(1);
-    expect(yr.netWorthStartMinor).toBe(runView(start).netWorthMinor);
+    // The baseline is taken before the first bill falls due: the €1,850 start, not the figure
+    // with day-1 rent already owed.
+    expect(yr.netWorthStartMinor).toBe(185_000);
+    expect(yr.netWorthStartMinor).toBeGreaterThan(runView(start).netWorthMinor);
     expect(Number.isInteger(yr.netWorthEndMinor)).toBe(true);
     expect(yr.story.length).toBeGreaterThanOrEqual(2);
     expect(yr.story[0]).toBe("Year 1 is behind you.");

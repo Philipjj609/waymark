@@ -5,7 +5,7 @@ import { z } from "zod";
  * Shared shapes for the Run (PLAY-002). Everything except `ledger` is plain JSON so a draft can be
  * cloned and a snapshot cached. All amounts are integer euro cents (invariant 1), fictional (7).
  */
-export const RUN_RULES_VERSION = "run.rules.v1";
+export const RUN_RULES_VERSION = "run.rules.v2";
 export const CURRENCY = "EUR" as const;
 
 export type Minor = number;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { DEMO_NAME, DEMO_SCENARIO } from "./extras";
 import { conceptWords, euros } from "./format";
 import { defaultName, lastPlayed, NAME_MAX, type StoredRun } from "./storage";
 
@@ -22,6 +23,7 @@ export function StartScreen({
   runs,
   loaded,
   onStart,
+  onDemo,
   onContinue,
   onDelete,
 }: {
@@ -30,6 +32,8 @@ export function StartScreen({
   /** False until storage has been read, so the page does not flash an empty list. */
   loaded: boolean;
   onStart: (scenarioId: string, name: string) => void;
+  /** Starts the three-minute judge demo (Side studio, named "Demo run"). */
+  onDemo: () => void;
   onContinue: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -57,6 +61,20 @@ export function StartScreen({
           Some things are luck. Nothing here is real money, and nothing you do here can cost you
           any.
         </p>
+        <p className="run-lede run-lede-paypal" data-testid="paypal-line">
+          Bills are paid through PayPal Sandbox with test money, and an AI advisor explains but
+          never decides.
+        </p>
+        {scenarios.some((s) => s.id === DEMO_SCENARIO) ? (
+          <p className="run-demo-start">
+            <button type="button" className="btn" data-testid="quick-demo" onClick={onDemo}>
+              Quick demo (3 minutes)
+            </button>
+            <span className="small muted">
+              Starts Side studio as “{DEMO_NAME}” with a short checklist.
+            </span>
+          </p>
+        ) : null}
       </section>
 
       {loaded && runs.length > 0 ? (
@@ -89,9 +107,10 @@ export function StartScreen({
                   type="button"
                   className="btn"
                   data-testid={`start-${s.id}`}
+                  aria-label={`Start ${s.title}`}
                   onClick={() => setChosen(s)}
                 >
-                  Start here
+                  Start {s.title}
                 </button>
               </div>
             </li>

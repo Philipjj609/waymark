@@ -4,6 +4,7 @@ import { cloneState } from "./engine.js";
 import { businessPanel } from "./systems/business.js";
 import { cardDef, optionLabel, optionStatus } from "./systems/cards.js";
 import { borrowingOptions, invoiceActions } from "./systems/credit.js";
+import { goalView } from "./systems/goals.js";
 import { learningView } from "./systems/learning.js";
 import { type PocketId, type RunState, YOU } from "./types.js";
 import type {
@@ -16,7 +17,7 @@ import type {
   RunView,
   TimelineItem,
 } from "./view-types.js";
-import { World } from "./world.js";
+import { euros, World } from "./world.js";
 
 /** How far ahead the timeline looks (one run month). */
 const TIMELINE_DAYS = DAYS_PER_MONTH;
@@ -120,7 +121,6 @@ export function runView(state: RunState): RunView {
         cashMinor: w.cash(b.id),
         reputation: b.reputation,
         ...businessPanel(fresh(), b),
-        forecast: [],
         month: monthFigures(state, b.id),
       }),
     ),
@@ -137,7 +137,7 @@ export function runView(state: RunState): RunView {
       })),
     borrowing: borrowingOptions(fresh()),
     learning: learningView(fresh()),
-    goal: null,
+    goal: goalView(fresh()),
   };
 }
 
@@ -168,18 +168,48 @@ function billViews(state: RunState, w: World): BillView[] {
     .filter(
       (b) => b.status !== "PAID" || (b.paidDay !== null && state.day - b.paidDay <= RECENT_DAYS),
     )
-    .map((b) => ({
-      id: b.id,
-      pocket: b.pocket,
-      label: b.label,
-      payee: b.payee,
-      kind: b.kind,
-      amountMinor: b.amountMinor,
-      dueInDays: b.dueDay - state.day,
-      status: b.status,
-      autopay: b.autopay,
-      canPay: (b.status === "DUE" || b.status === "LATE") && w.cash(b.pocket) >= b.amountMinor,
-    }));
+    .map((b) => {
+      // Grace is inclusive: a bill is still fee-free on dueDay + graceDays and late from the next day.
+      const overdue = b.status === "DUE" && state.day > b.dueDay;
+      const graceLeft = overdue ? Math.max(0, b.dueDay + b.graceDays - state.day) : null;
+      return {
+        id: b.id,
+        pocket: b.pocket,
+        label: b.label,
+        payee: b.payee,
+        kind: b.kind,
+        amountMinor: b.amountMinor,
+        dueInDays: b.dueDay - state.day,
+        status: b.status,
+        autopay: b.autopay,
+        canPay: (b.status === "DUE" || b.status === "LATE") && w.cash(b.pocket) >= b.amountMinor,
+        graceLeftDays: graceLeft,
+        note: billNote(w, b, state.day, graceLeft),
+      };
+    });
+}
+
+/** The authored line on where a bill stands. Distinguishes overdue within grace from late. */
+function billNote(w: World, b: RunState["bills"][number], day: number, graceLeft: number | null) {
+  const days = (n: number) => `${n} ${n === 1 ? "day" : "days"}`;
+  if (b.status === "LATE") {
+    return w.t("life.bill.note.late", {
+      days: days(day - (b.dueDay + b.graceDays)),
+      fees: euros(b.feesMinor),
+    });
+  }
+  if (b.status !== "DUE") return null;
+  if (graceLeft !== null) {
+    return w.t(graceLeft === 0 ? "life.bill.note.grace_last" : "life.bill.note.grace", {
+      over: days(day - b.dueDay),
+      left: days(graceLeft),
+      fee: euros(b.lateFeeMinor),
+    });
+  }
+  if (b.graceDays > 0 && b.lateFeeMinor > 0) {
+    return w.t("life.bill.note.due", { grace: days(b.graceDays), fee: euros(b.lateFeeMinor) });
+  }
+  return null;
 }
 
 function invoiceViews(state: RunState, fresh: () => World): InvoiceView[] {

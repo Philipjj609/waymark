@@ -73,7 +73,8 @@ export const SCENARIOS: readonly ScenarioDef[] = [
   {
     id: "first-flat",
     title: "First flat",
-    summary: "You are 20, with a warehouse job, a small room and €400 saved.",
+    summary:
+      "You are 20, with a warehouse job and a small room. You had €400 saved, and your first pay of €1,450 has just arrived, so you start with €1,850. Rent is due today.",
     pressure: "Little buffer, so surprises hurt.",
     teaches: ["cpt_cash_balance", "cpt_obligation", "cpt_liquidity"],
     person: {
@@ -87,7 +88,9 @@ export const SCENARIOS: readonly ScenarioDef[] = [
       reputation: 50,
       creditRecord: 50,
     },
-    cashMinor: 40_000,
+    // €400 saved plus the first warehouse pay (€1,450) that has just arrived. At €400 the rent
+    // due on day 1 could not be paid at all, which made the easiest-sounding start the unfair one.
+    cashMinor: 185_000,
     hoursBudget: 60,
     recurring: [
       {
@@ -178,7 +181,7 @@ export const SCENARIOS: readonly ScenarioDef[] = [
     id: "the-stall",
     title: "The stall",
     summary:
-      "A relative hands you a market stall. You have no job, €300 of your own and a business to learn.",
+      "A relative hands you a market stall, with its first shelves already stocked. You have no job, €300 of your own and a business to learn.",
     pressure: "Every euro in the stall is one you cannot spend on rent.",
     teaches: ["cpt_working_capital", "cpt_margin", "cpt_liquidity"],
     person: {
@@ -205,7 +208,14 @@ export const SCENARIOS: readonly ScenarioDef[] = [
         kind: "SYSTEM",
         action: "business.start",
         // The stall comes with its own float, so your €300 stays yours.
-        params: { type: "STOCK", name: "The stall", capitalMinor: 500_000, fromOutside: true },
+        params: {
+          type: "STOCK",
+          name: "The stall",
+          capitalMinor: 500_000,
+          fromOutside: true,
+          // An opening batch bought from the gift, so the first week has something to sell.
+          openingStockUnits: 120,
+        },
       },
     ],
     flags: { "credit.family": true },
@@ -214,7 +224,7 @@ export const SCENARIOS: readonly ScenarioDef[] = [
     id: "fresh-start",
     title: "Fresh start",
     summary:
-      "You have a new retail job and a flat of your own. You also carry an old credit card balance of €1,800.",
+      "You have a new retail job and a flat of your own. You also carry an old credit card balance of €1,800. Free debt advice exists in most countries; a bank or your city can point you to it.",
     pressure: "Interest on the old card quietly eats the money you could save.",
     teaches: ["cpt_interest", "cpt_credit_record", "cpt_obligation"],
     person: {

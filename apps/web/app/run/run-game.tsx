@@ -5,6 +5,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AdvisorPanel } from "./advisor-panel";
 import { callRun, type RunBody, type SaveToken } from "./api";
 import { Businesses } from "./business-panel";
+import {
+  type AskWhy,
+  AskWhyButton,
+  CashChange,
+  type CashChip,
+  ContinueConfirm,
+  cashChipOf,
+  DEMO_NAME,
+  DEMO_SCENARIO,
+  DemoChecklist,
+  demoProgress,
+  FirstRunGuide,
+  GoalLine,
+  payableBills,
+} from "./extras";
 import { Borrowing, Transfer } from "./finance-panels";
 import { euros } from "./format";
 import { Bills, Inbox, Invoices } from "./inbox";
@@ -13,7 +28,15 @@ import { MoneyStrip } from "./money-strip";
 import { NeedsYou, type Pane } from "./needs-you";
 import { type PayPalReceipt, PayPalReceiptCard } from "./pay-with-paypal";
 import { type ScenarioSummary, StartScreen } from "./start-screen";
-import { loadRuns, type StoredRun, sortRuns, writeRuns } from "./storage";
+import {
+  extrasOf,
+  loadRuns,
+  type RunExtras,
+  type StoredReceipt,
+  type StoredRun,
+  sortRuns,
+  writeRuns,
+} from "./storage";
 import { Feed, Timeline } from "./timeline";
 import type { Act } from "./ui";
 import { WeekStrip } from "./week-strip";
@@ -29,27 +52,31 @@ interface Active {
   readonly id: string;
   readonly name: string;
   readonly scenarioId: string;
+  /** True for the "Quick demo" run, which shows the checklist. */
+  readonly demo?: boolean;
 }
 
 const FONTS_HREF =
   "https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Literata:opsz,wght@7..72,400;7..72,600;7..72,700&display=swap";
 
-/** What changed, in a sentence or two, for the screen-reader live region. */
-function describeChange(prev: RunView | null, next: RunView, command: Command | null): string {
+/**
+ * What changed, for the screen-reader live region: the date and the money, in short sentences
+ * with full stops so speech pauses. The full list of what needs you is read from its own section.
+ */
+function describeChange(prev: RunView | null, next: RunView): string {
   const parts: string[] = [];
   if (!prev || next.day !== prev.day) parts.push(`It is now ${next.calendar.label}.`);
-  if (prev) {
-    const seen = new Set(prev.feed.map((f) => f.id));
-    for (const f of next.feed.filter((x) => !seen.has(x.id)).slice(0, 3)) parts.push(f.text);
-    const before = prev.pockets.find((p) => p.kind === "YOU")?.cashMinor;
-    const after = next.pockets.find((p) => p.kind === "YOU")?.cashMinor;
-    if (before !== undefined && after !== undefined && before !== after) {
-      parts.push(`Your cash is now ${euros(after)}.`);
-    }
+  const before = prev?.pockets.find((p) => p.kind === "YOU")?.cashMinor;
+  const after = next.pockets.find((p) => p.kind === "YOU")?.cashMinor;
+  if (before !== undefined && after !== undefined && before !== after) {
+    parts.push(
+      `Cash ${after < before ? "down" : "up"} ${euros(Math.abs(after - before))}. You hold ${euros(after)}.`,
+    );
   }
-  if (command?.kind === "ADVANCE") {
-    const needs = next.stops.filter((s) => s.kind !== "RUN_START");
-    if (needs.length > 0) parts.push(`What needs you now: ${needs.map((s) => s.text).join(" ")}`);
+  if (parts.length === 0 && prev) {
+    const seen = new Set(prev.feed.map((f) => f.id));
+    const fresh = next.feed.find((f) => !seen.has(f.id));
+    if (fresh) parts.push(fresh.text);
   }
   return parts.join(" ");
 }
@@ -72,6 +99,7 @@ export function RunGame({
   const [problem, setProblem] = useState<Problem | null>(null);
   const [announce, setAnnounce] = useState("");
   const [dismissed, setDismissed] = useState<readonly string[]>([]);
+  const [chip, setChip] = useState<CashChip | null>(null);
   const busyRef = useRef(false);
   const pendingFocus = useRef<string | null>(null);
   const runsRef = useRef<readonly StoredRun[]>([]);
@@ -120,8 +148,15 @@ export function RunGame({
 
   /** Takes a view and save the server vouched for, and remembers the run in this browser. */
   const adopt = useCallback(
-    (nextSave: SaveToken, nextView: RunView, who: Active, command: Command | null) => {
-      setAnnounce(describeChange(viewRef.current, nextView, command));
+    (
+      nextSave: SaveToken,
+      nextView: RunView,
+      who: Active,
+      command: Command | null,
+      receipt: PayPalReceipt | null = null,
+    ) => {
+      setAnnounce(describeChange(viewRef.current, nextView));
+      setChip(command?.kind === "ADVANCE" ? cashChipOf(viewRef.current, nextView) : null);
       viewRef.current = nextView;
       activeRef.current = who;
       setActive(who);
@@ -129,6 +164,13 @@ export function RunGame({
       setSave(nextSave);
       setRefusal(null);
       setProblem(null);
+      const prior = runsRef.current.find((r) => r.id === who.id);
+      const extras = extrasOf(prior);
+      let receipts = extras.receipts ?? [];
+      if (receipt && !receipts.some((r) => r.captureId === receipt.captureId)) {
+        const kept: StoredReceipt = { ...receipt, calendarLabel: nextView.calendar.label };
+        receipts = [...receipts, kept];
+      }
       const entry: StoredRun = {
         id: who.id,
         name: who.name,
@@ -136,8 +178,24 @@ export function RunGame({
         save: nextSave,
         calendarLabel: nextView.calendar.label,
         updatedAt: Date.now(),
+        ...extras,
+        ...(receipts.length > 0 ? { receipts } : {}),
+        ...(who.demo && !extras.demo
+          ? { demo: { ticks: [], hidden: false }, guideDone: true }
+          : {}),
       };
       commitRuns(sortRuns([entry, ...runsRef.current.filter((r) => r.id !== who.id)]));
+    },
+    [commitRuns],
+  );
+
+  /** Changes the extras kept beside a run (guide done, demo ticks) without touching its save. */
+  const updateExtras = useCallback(
+    (id: string, change: (prev: RunExtras) => RunExtras) => {
+      const run = runsRef.current.find((r) => r.id === id);
+      if (!run) return;
+      const next = { ...run, ...change(extrasOf(run)) };
+      commitRuns(runsRef.current.map((r) => (r.id === id ? next : r)));
     },
     [commitRuns],
   );
@@ -147,7 +205,7 @@ export function RunGame({
     async (
       body: RunBody,
       command: Command | null,
-      opening: { name: string; scenarioId: string; id?: string } | null,
+      opening: { name: string; scenarioId: string; id?: string; demo?: boolean } | null,
     ): Promise<boolean> => {
       if (busyRef.current) return false;
       busyRef.current = true;
@@ -156,7 +214,12 @@ export function RunGame({
         const out = await callRun(body);
         const who = (id: string): Active | null =>
           opening
-            ? { id: opening.id ?? id, name: opening.name, scenarioId: opening.scenarioId }
+            ? {
+                id: opening.id ?? id,
+                name: opening.name,
+                scenarioId: opening.scenarioId,
+                ...(opening.demo ? { demo: true } : {}),
+              }
             : activeRef.current;
         if (out.kind === "ok") {
           const a = who(out.save.runId);
@@ -206,10 +269,14 @@ export function RunGame({
     setProblem(null);
   };
 
-  const start = (scenarioId: string, name: string) => {
+  const start = (scenarioId: string, name: string, demo = false) => {
     pendingFocus.current = "run-stops";
     resetScreen();
-    void request({ action: "start", scenarioId }, null, { name, scenarioId });
+    void request({ action: "start", scenarioId }, null, {
+      name,
+      scenarioId,
+      ...(demo ? { demo: true } : {}),
+    });
   };
 
   const resume = (id: string) => {
@@ -222,6 +289,7 @@ export function RunGame({
       name: run.name,
       scenarioId: run.scenarioId,
       id: run.id,
+      ...(run.demo ? { demo: true } : {}),
     });
   };
 
@@ -231,6 +299,7 @@ export function RunGame({
     setActive(null);
     setView(null);
     setSave(null);
+    setChip(null);
     resetScreen();
     setAnnounce("Back at your runs.");
   };
@@ -247,12 +316,28 @@ export function RunGame({
   const dismiss = (key: string) => setDismissed((d) => (d.includes(key) ? d : [...d, key]));
   const reopen = (key: string) => setDismissed((d) => d.filter((k) => k !== key));
   const playing = view !== null && save !== null && active !== null;
+  const onDesk = playing && !(view.learning.yearReview && yearKey && !dismissed.includes(yearKey));
+  const skipTarget = onDesk ? "run-stops" : "run-main";
+  const runExtras = extrasOf(active ? runs.find((r) => r.id === active.id) : undefined);
 
   return (
     <div className="run" data-testid="run-root" data-busy={busy}>
+      <a
+        className="run-skip"
+        href={`#${skipTarget}`}
+        data-testid="skip-link"
+        onClick={(e) => {
+          e.preventDefault();
+          const el = document.getElementById(skipTarget);
+          el?.focus();
+          el?.scrollIntoView({ block: "start" });
+        }}
+      >
+        {onDesk ? "Skip to what needs you" : "Skip to the main part of the page"}
+      </a>
       <div className="run-page">
         <header className="run-top">
-          <p className="run-brand">The Run</p>
+          <h1 className="run-brand">The Run</h1>
           <p className="run-banner">
             <strong>Practice money, not real.</strong> Every amount here is made up. This is a
             learning game, not financial advice.
@@ -278,37 +363,43 @@ export function RunGame({
           />
         ) : null}
 
-        {!playing || !view || !save || !active ? (
-          <StartScreen
-            scenarios={scenarios}
-            runs={runs}
-            loaded={loaded}
-            onStart={start}
-            onContinue={resume}
-            onDelete={removeRun}
-          />
-        ) : view.learning.yearReview && yearKey && !dismissed.includes(yearKey) ? (
-          <YearReviewPage
-            review={view.learning.yearReview}
-            act={act}
-            questions={view.learning.questions}
-            onDismiss={() => dismiss(yearKey)}
-          />
-        ) : (
-          <Desk
-            view={view}
-            save={save}
-            runName={active.name}
-            act={act}
-            refusal={refusal}
-            paypalSandbox={paypalSandbox}
-            monthSheetOpen={monthKey !== null && !dismissed.includes(monthKey)}
-            onDismissMonth={() => monthKey && dismiss(monthKey)}
-            onOpenMonth={() => monthKey && reopen(monthKey)}
-            onOpenYear={() => yearKey && reopen(yearKey)}
-            onSettled={(next) => adopt(next.save, next.view, active, null)}
-          />
-        )}
+        <main id="run-main" tabIndex={-1} className="run-main">
+          {!playing || !view || !save || !active ? (
+            <StartScreen
+              scenarios={scenarios}
+              runs={runs}
+              loaded={loaded}
+              onStart={start}
+              onDemo={() => start(DEMO_SCENARIO, DEMO_NAME, true)}
+              onContinue={resume}
+              onDelete={removeRun}
+            />
+          ) : view.learning.yearReview && yearKey && !dismissed.includes(yearKey) ? (
+            <YearReviewPage
+              review={view.learning.yearReview}
+              act={act}
+              questions={view.learning.questions}
+              onDismiss={() => dismiss(yearKey)}
+            />
+          ) : (
+            <Desk
+              view={view}
+              save={save}
+              runName={active.name}
+              act={act}
+              refusal={refusal}
+              paypalSandbox={paypalSandbox}
+              chip={chip}
+              extras={runExtras}
+              onExtras={(change) => updateExtras(active.id, change)}
+              monthSheetOpen={monthKey !== null && !dismissed.includes(monthKey)}
+              onDismissMonth={() => monthKey && dismiss(monthKey)}
+              onOpenMonth={() => monthKey && reopen(monthKey)}
+              onOpenYear={() => yearKey && reopen(yearKey)}
+              onSettled={(next) => adopt(next.save, next.view, active, null, next.receipt)}
+            />
+          )}
+        </main>
       </div>
     </div>
   );
@@ -381,6 +472,9 @@ function Desk({
   act,
   refusal,
   paypalSandbox,
+  chip,
+  extras,
+  onExtras,
   monthSheetOpen,
   onDismissMonth,
   onOpenMonth,
@@ -393,6 +487,9 @@ function Desk({
   act: Act;
   refusal: string | null;
   paypalSandbox: boolean;
+  chip: CashChip | null;
+  extras: RunExtras;
+  onExtras: (change: (prev: RunExtras) => RunExtras) => void;
   monthSheetOpen: boolean;
   onDismissMonth: () => void;
   onOpenMonth: () => void;
@@ -402,7 +499,20 @@ function Desk({
   const [receipt, setReceipt] = useState<PayPalReceipt | null>(null);
   const [pane, setPane] = useState<Pane>("week");
   const [toolsOpen, setToolsOpen] = useState(false);
-  const [goTo, setGoTo] = useState<{ id: string; n: number } | null>(null);
+  const [goTo, setGoTo] = useState<{ id: string; n: number; ask?: string } | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  const receipts = extras.receipts ?? [];
+  const payable = payableBills(view);
+  const showConfirm = confirming && payable.length > 0;
+  const hasBusiness = view.businesses.length > 0;
+  const tabs = TABS.filter((t) => t.pane !== "business" || hasBusiness);
+  const shownPane: Pane = pane === "business" && !hasBusiness ? "week" : pane;
+
+  // The confirm only makes sense while a bill can be paid; once it cannot, it is gone.
+  useEffect(() => {
+    if (confirming && payable.length === 0) setConfirming(false);
+  }, [confirming, payable.length]);
 
   // "Take me there": show the right pane (phones show one at a time), then scroll to the thing
   // and put keyboard focus on it. The scroll waits a frame so the pane is on screen first.
@@ -413,6 +523,10 @@ function Desk({
     const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     el.scrollIntoView({ block: "center", behavior: calm ? "auto" : "smooth" });
     el.focus({ preventScroll: true });
+    // "Ask why": tell the advisor panel once the Ask area is on screen.
+    if (goTo.ask) {
+      window.dispatchEvent(new CustomEvent("run:ask", { detail: { text: goTo.ask } }));
+    }
   }, [goTo]);
 
   const go = (target: { id: string; pane: Pane }) => {
@@ -421,13 +535,64 @@ function Desk({
     setGoTo((g) => ({ id: target.id, n: (g?.n ?? 0) + 1 }));
   };
 
+  const askWhy: AskWhy = (text) => {
+    setPane("ask");
+    setGoTo((g) => ({ id: "run-ask", n: (g?.n ?? 0) + 1, ask: text }));
+  };
+
   const choosePane = (p: Pane) => {
     setPane(p);
     window.scrollTo({ top: 0 });
   };
 
+  const advance = () => {
+    setConfirming(false);
+    if (!extras.guideDone) onExtras((prev) => ({ ...prev, guideDone: true }));
+    void act({ kind: "ADVANCE", mode: "NEXT_STOP" });
+  };
+
+  const onContinue = () => {
+    if (payable.length > 0) setConfirming(true);
+    else advance();
+  };
+
+  const settle = (next: { save: SaveToken; view: RunView; receipt: PayPalReceipt | null }) => {
+    setReceipt(next.receipt);
+    onSettled(next);
+  };
+
+  // The demo checklist ticks itself from what the view shows; the advisor step comes from the
+  // advisor panel's "run:asked" event.
+  const demo = extras.demo;
+  useEffect(() => {
+    if (!demo) return;
+    const fresh = demoProgress(view, receipts, paypalSandbox).filter(
+      (t) => !demo.ticks.includes(t),
+    );
+    if (fresh.length === 0) return;
+    onExtras((prev) =>
+      prev.demo
+        ? { ...prev, demo: { ...prev.demo, ticks: [...new Set([...prev.demo.ticks, ...fresh])] } }
+        : prev,
+    );
+  }, [demo, view, receipts, paypalSandbox, onExtras]);
+  const hasDemo = demo !== undefined;
+  useEffect(() => {
+    if (!hasDemo) return;
+    const onAsked = () =>
+      onExtras((prev) =>
+        prev.demo && !prev.demo.ticks.includes("ask")
+          ? { ...prev, demo: { ...prev.demo, ticks: [...prev.demo.ticks, "ask"] } }
+          : prev,
+      );
+    window.addEventListener("run:asked", onAsked);
+    return () => window.removeEventListener("run:asked", onAsked);
+  }, [hasDemo, onExtras]);
+
+  const paypal = { enabled: paypalSandbox, save, onSettled: settle };
+
   return (
-    <div className="run-desk" data-pane={pane} data-testid="desk">
+    <div className="run-desk" data-pane={shownPane} data-testid="desk">
       <section className="run-time" aria-label="Time">
         <div className="run-when">
           <h2 className="run-date" data-testid="calendar-label">
@@ -436,6 +601,12 @@ function Desk({
           <p className="run-runname" data-testid="run-name-label">
             {runName}
           </p>
+          {view.goal ? <GoalLine goal={view.goal} /> : null}
+          {chip ? (
+            <p className="run-cash-phone" aria-hidden="true">
+              <CashChange chip={chip} />
+            </p>
+          ) : null}
         </div>
         <WeekStrip view={view} />
         <div className="run-go">
@@ -444,7 +615,7 @@ function Desk({
             className="btn btn-primary run-continue"
             data-testid="advance-next"
             aria-describedby="run-go-help"
-            onClick={() => act({ kind: "ADVANCE", mode: "NEXT_STOP" })}
+            onClick={onContinue}
           >
             Continue
           </button>
@@ -454,12 +625,24 @@ function Desk({
         </div>
       </section>
 
+      {showConfirm ? (
+        <ContinueConfirm
+          bills={payable}
+          act={act}
+          save={save}
+          paypalSandbox={paypalSandbox}
+          onSettled={settle}
+          onContinueAnyway={advance}
+        />
+      ) : null}
+
       {receipt ? <PayPalReceiptCard receipt={receipt} onClose={() => setReceipt(null)} /> : null}
 
       {refusal ? (
-        <p className="run-refusal" role="alert" data-testid="refusal">
-          {refusal}
-        </p>
+        <div className="run-refusal" role="alert" data-testid="refusal">
+          <p className="mt-0 mb-0">{refusal}</p>
+          <AskWhyButton text={`Why was this refused: ${refusal}`} onAsk={askWhy} />
+        </div>
       ) : null}
 
       {monthSheetOpen && view.learning.monthClose ? (
@@ -468,32 +651,38 @@ function Desk({
           act={act}
           questions={view.learning.questions}
           onDismiss={onDismissMonth}
+          onAsk={askWhy}
         />
       ) : null}
 
       <div className="run-spread">
         <div className="run-col run-col-left">
           <div data-p="week">
+            {demo && !demo.hidden ? (
+              <DemoChecklist
+                demo={demo}
+                paypalSandbox={paypalSandbox}
+                onHide={() =>
+                  onExtras((prev) =>
+                    prev.demo ? { ...prev, demo: { ...prev.demo, hidden: true } } : prev,
+                  )
+                }
+              />
+            ) : null}
+            {!extras.guideDone ? (
+              <FirstRunGuide onDone={() => onExtras((prev) => ({ ...prev, guideDone: true }))} />
+            ) : null}
             <NeedsYou
               view={view}
               runName={runName}
+              act={act}
+              paypal={paypal}
               onGo={go}
               onOpenMonth={onOpenMonth}
               onOpenYear={onOpenYear}
             />
             <Inbox view={view} act={act} />
-            <Bills
-              view={view}
-              act={act}
-              paypal={{
-                enabled: paypalSandbox,
-                save,
-                onSettled: (next) => {
-                  setReceipt(next.receipt);
-                  onSettled(next);
-                },
-              }}
-            />
+            <Bills view={view} act={act} paypal={paypal} onAsk={askWhy} />
             <Invoices view={view} act={act} />
             <Asks view={view} act={act} hideQuestions={monthSheetOpen} />
           </div>
@@ -501,16 +690,10 @@ function Desk({
 
         <div className="run-col run-col-right">
           <div data-p="money">
-            <MoneyStrip view={view} />
+            <MoneyStrip view={view} chip={chip} receipts={receipts} paypalSandbox={paypalSandbox} />
           </div>
           <div data-p="business">
             <Businesses view={view} act={act} />
-            {view.businesses.length === 0 ? (
-              <p className="empty run-pane-empty">
-                No business yet. When a chance to start one turns up in your inbox, it will appear
-                here.
-              </p>
-            ) : null}
           </div>
           <div data-p="money">
             <Timeline view={view} />
@@ -570,13 +753,17 @@ function Desk({
         </div>
       </div>
 
-      <nav className="run-tabs" aria-label="Sections">
-        {TABS.map((t) => (
+      <nav
+        className="run-tabs"
+        aria-label="Sections"
+        style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
+      >
+        {tabs.map((t) => (
           <button
             key={t.pane}
             type="button"
             className="run-tab"
-            aria-current={pane === t.pane ? "page" : undefined}
+            aria-current={shownPane === t.pane ? "page" : undefined}
             data-testid={`tab-${t.pane}`}
             onClick={() => choosePane(t.pane)}
           >

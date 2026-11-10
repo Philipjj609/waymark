@@ -101,8 +101,9 @@ describe("late bills", () => {
     const lateEvent = kinds(s, "BILL_LATE")[0];
     expect(lateEvent?.concepts).toEqual(["cpt_obligation"]);
     expect(lateEvent?.amountMinor).toBe(4_000);
-    // The record fell by 8 for rent (and rose by the two on-time autopaid bills before it).
-    expect(s.person.creditRecord).toBe(credit0 + 2 - 8);
+    // The record fell by 8 for rent. The autopaid bills on day 2 earn nothing: rent was already
+    // overdue that day, and the record never rises while a bill is slipping.
+    expect(s.person.creditRecord).toBe(credit0 - 8);
 
     // Many more mornings later the fee is still added only once.
     while (s.day < 12) s = step(s, ADV);
@@ -131,8 +132,8 @@ describe("late bills", () => {
     while (s.day < 3) s = step(s, ADV);
     expect(power()?.status).toBe("LATE");
     expect(power()?.amountMinor).toBe(3_500);
-    // Rent is not late yet on day 3: 50 + two on-time autopays - 5.
-    expect(s.person.creditRecord).toBe(50 + 2 - 5);
+    // Rent is not late yet on day 3, but it is overdue, so the day-2 autopays earn nothing: 50 - 5.
+    expect(s.person.creditRecord).toBe(50 - 5);
     while (s.day < 12) s = step(s, ADV);
     expect(power()?.feesMinor).toBe(500);
   });

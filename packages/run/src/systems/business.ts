@@ -44,13 +44,15 @@ interface StartParams {
   readonly name: string;
   readonly capitalMinor: Minor;
   readonly fromOutside: boolean;
+  /** Items already on the shelves when the shop opens (STOCK only), bought from the capital. */
+  readonly openingStockUnits: number;
 }
 
 const TYPES: readonly string[] = ["SERVICE", "STOCK", "SUBSCRIPTION", "EQUIPMENT"];
 
 /** Parse the loosely typed params of a SYSTEM effect. Null when they are not usable. */
 function parseStart(params: Readonly<Record<string, unknown>>): StartParams | null {
-  const { type, name, capitalMinor, fromOutside } = params;
+  const { type, name, capitalMinor, fromOutside, openingStockUnits } = params;
   if (typeof type !== "string" || !TYPES.includes(type)) return null;
   if (typeof capitalMinor !== "number" || !Number.isInteger(capitalMinor) || capitalMinor < 1)
     return null;
@@ -60,6 +62,10 @@ function parseStart(params: Readonly<Record<string, unknown>>): StartParams | nu
     name: cleaned || "My business",
     capitalMinor,
     fromOutside: fromOutside === true,
+    openingStockUnits:
+      typeof openingStockUnits === "number" && Number.isInteger(openingStockUnits)
+        ? Math.max(0, openingStockUnits)
+        : 0,
   };
 }
 
@@ -94,6 +100,9 @@ function startBusiness(w: World, p: StartParams): void {
     w.transfer(YOU, id, p.capitalMinor, "Starting money for a business");
   }
   w.recomputeCommitted();
+  // Opening stock comes out of the business's own cash, never out of yours.
+  const openingCost = p.type === "STOCK" ? restockCost(p.openingStockUnits) : 0;
+  const stocked = openingCost > 0 && w.cash(id) >= openingCost;
   w.emit(
     "BUSINESS_STARTED",
     w.t(p.fromOutside ? "business.started.gift" : "business.started", {
@@ -107,6 +116,24 @@ function startBusiness(w: World, p: StartParams): void {
       concepts: ["cpt_cash_balance"],
     },
   );
+  if (stocked) {
+    w.post(id, "Opening stock", [
+      ["ASSET:Stock", "DEBIT", openingCost],
+      ["ASSET:Cash", "CREDIT", openingCost],
+    ]);
+    biz.stockUnits = p.openingStockUnits;
+    refreshUnitCost(w, biz);
+    // Not BUSINESS_RESTOCK: this is the scenario's setup, not a choice the player made.
+    w.emit(
+      "BUSINESS_STOCKED",
+      w.t("business.stocked", {
+        name: p.name,
+        units: p.openingStockUnits,
+        amount: euros(openingCost),
+      }),
+      { pocket: id, amountMinor: openingCost, refs: { businessId: id } },
+    );
+  }
 }
 
 // -- demand ----------------------------------------------------------------------------------
@@ -201,22 +228,46 @@ function payFixed(
   );
 }
 
+/**
+ * Jobs a week would bring at the business's settings. `noise` is the luck factor in percent: the
+ * real week draws it from a hidden stream, the forecast passes 100 and so never touches luck.
+ */
+function serviceDemand(w: World, b: Business, marketingOn: boolean, noise: number): number {
+  const price = SERVICE_PRICE[str(b, "price") as PriceLevel] ?? SERVICE_PRICE.STANDARD;
+  return wholeOf(
+    scale(SERVICE_BASE_JOBS_X100, [
+      price.demandPct,
+      marketingOn ? MARKETING.SERVICE[marketingOf(b)].demandPct : 100,
+      SERVICE_TERMS_DEMAND_PCT[str(b, "terms")] ?? 100,
+      reputationPct(b.reputation),
+      seasonPct(w),
+      noise,
+    ]),
+  );
+}
+
+/** Items a week would sell at the shop's settings, if the shelves were full (see serviceDemand). */
+function stockDemand(w: World, b: Business, marketingOn: boolean, noise: number): number {
+  const markup = num(b, "markup");
+  return wholeOf(
+    scale(STOCK_BASE_UNITS_X100, [
+      stockPriceDemandPct(markup),
+      marketingOn ? MARKETING.STOCK[marketingOf(b)].demandPct : 100,
+      num(b, "daysOpen") * 25,
+      reputationPct(b.reputation),
+      seasonPct(w),
+      noise,
+    ]),
+  );
+}
+
 function tradeService(w: World, b: Business): WeekResult {
   const m = payMarketing(w, b, "SERVICE");
-  const level = marketingOf(b);
   const price = SERVICE_PRICE[str(b, "price") as PriceLevel] ?? SERVICE_PRICE.STANDARD;
   const terms = str(b, "terms");
   const helper = b.levers.helper === true;
 
-  const demand100 = scale(SERVICE_BASE_JOBS_X100, [
-    price.demandPct,
-    m.on ? MARKETING.SERVICE[level].demandPct : 100,
-    SERVICE_TERMS_DEMAND_PCT[terms] ?? 100,
-    reputationPct(b.reputation),
-    seasonPct(w),
-    noisePct(w, b),
-  ]);
-  const demand = wholeOf(demand100);
+  const demand = serviceDemand(w, b, m.on, noisePct(w, b));
   const capacity = Math.floor((num(b, "hours") + (helper ? HELPER_HOURS : 0)) / JOB_HOURS);
   const jobs = Math.min(demand, capacity);
 
@@ -287,19 +338,10 @@ function refreshUnitCost(w: World, b: Business): void {
 
 function tradeStock(w: World, b: Business): WeekResult {
   const m = payMarketing(w, b, "STOCK");
-  const level = marketingOf(b);
   const markup = num(b, "markup");
   const unitPrice = stockPriceMinor(markup);
 
-  const demand100 = scale(STOCK_BASE_UNITS_X100, [
-    stockPriceDemandPct(markup),
-    m.on ? MARKETING.STOCK[level].demandPct : 100,
-    num(b, "daysOpen") * 25,
-    reputationPct(b.reputation),
-    seasonPct(w),
-    noisePct(w, b),
-  ]);
-  const demand = wholeOf(demand100);
+  const demand = stockDemand(w, b, m.on, noisePct(w, b));
   const sold = Math.min(demand, b.stockUnits);
 
   const revenue = sold * unitPrice;
@@ -353,6 +395,9 @@ function tradeStock(w: World, b: Business): WeekResult {
   };
 }
 
+/** The ref of the stop that points at a shop's stock row. */
+export const stockRef = (b: Business): string => `business:${b.id}:stock`;
+
 function weekly(w: World, b: Business): void {
   const r = b.type === "SERVICE" ? tradeService(w, b) : tradeStock(w, b);
   const profit = r.revenueMinor - r.costsMinor;
@@ -385,13 +430,16 @@ function weekly(w: World, b: Business): void {
     concepts: ["cpt_profit_vs_cash"],
   });
 
-  // A shop that would not cover last week's sales pauses time so you can restock.
+  // A shop that would not cover last week's sales pauses time so you can restock. The ref points
+  // at the shop's stock row, so the page can take you there.
   if (b.type === "STOCK" && r.sold > 0 && b.stockUnits < r.sold) {
     w.stop(
       "STOCK_OUT",
       w.t("business.stockout", { name: b.name, units: b.stockUnits, sold: r.sold }),
-      b.id,
+      stockRef(b),
     );
+  } else if (b.type === "STOCK" && b.stockUnits === 0 && w.cash(b.id) >= UNIT_COST_MINOR) {
+    w.stop("STOCK_OUT", w.t("business.shelves.empty"), stockRef(b));
   }
 }
 
@@ -511,6 +559,32 @@ export const businessSystem: RunSystem = {
     },
   },
   templates: {
+    "business.stocked": [
+      "{name} opens with {units} items on the shelves, bought with {amount} of the starting money. When they run low, you can buy more.",
+      "The shelves at {name} start with {units} items, bought for {amount} from the starting money. Buy more when they run low.",
+    ],
+    "business.shelves.empty": ["The shelves are empty. Buy stock to open."],
+    "business.forecast.service": [
+      "At these settings: about {jobs} jobs a week, about {sales} in sales, about {profit} after costs.",
+    ],
+    "business.forecast.stock": [
+      "At these settings: about {count} items sold a week, about {sales} in sales, about {profit} after costs.",
+    ],
+    "business.forecast.hours": [
+      "You have hours for {capacity} jobs a week, but about {demand} would come. More hours or a helper would let you take them.",
+    ],
+    "business.forecast.terms": [
+      "Clients pay about {days} days after the work, so the cash comes later than the sales.",
+    ],
+    "business.forecast.stock.empty": [
+      "The shelves are empty, so nothing sells until you buy stock.",
+    ],
+    "business.forecast.stock.left": [
+      "Your {units} items on the shelves last about {weeks} weeks at this pace.",
+    ],
+    "business.forecast.stock.short": [
+      "Your {units} items on the shelves cover less than one week at this pace.",
+    ],
     "business.started": [
       "You opened {name} with {amount} of your own money.",
       "{name} is open. You put in {amount}.",
@@ -601,11 +675,68 @@ function leverView(spec: LeverSpec, b: Business): LeverView {
   }
 }
 
+/**
+ * What the current settings would bring in an average week: the same demand rules as the real
+ * week with the luck factor fixed at 100%, so it never reads (or hints at) a hidden stream.
+ * Marketing is assumed to be paid. Rounded wording only ("about"); the real week varies.
+ */
+export function forecastLines(w: World, b: Business): string[] {
+  if (b.status !== "OPEN") return [];
+  if (b.type === "SERVICE") {
+    const price = SERVICE_PRICE[str(b, "price") as PriceLevel] ?? SERVICE_PRICE.STANDARD;
+    const helper = b.levers.helper === true;
+    const demand = serviceDemand(w, b, true, 100);
+    const capacity = Math.floor((num(b, "hours") + (helper ? HELPER_HOURS : 0)) / JOB_HOURS);
+    const jobs = Math.min(demand, capacity);
+    const sales = jobs * price.minor;
+    const costs = MARKETING.SERVICE[marketingOf(b)].costMinor + (helper ? HELPER_WEEKLY_MINOR : 0);
+    const lines = [
+      w.t("business.forecast.service", {
+        jobs,
+        sales: euros(sales),
+        profit: euros(sales - costs),
+      }),
+    ];
+    if (capacity < demand) {
+      lines.push(w.t("business.forecast.hours", { capacity, demand }));
+    }
+    const days = TERMS_DAYS[str(b, "terms")] ?? 0;
+    if (days > 0 && jobs > 0) lines.push(w.t("business.forecast.terms", { days }));
+    return lines;
+  }
+  if (b.type === "STOCK") {
+    const unitPrice = stockPriceMinor(num(b, "markup"));
+    const unitCost = b.memory.unitCostMinor ?? UNIT_COST_MINOR;
+    const count = stockDemand(w, b, true, 100);
+    const sales = count * unitPrice;
+    const costs = count * unitCost + MARKETING.STOCK[marketingOf(b)].costMinor + STALL_FEE_MINOR;
+    const lines = [
+      w.t("business.forecast.stock", {
+        count,
+        sales: euros(sales),
+        profit: euros(sales - costs),
+      }),
+    ];
+    if (b.stockUnits === 0) lines.push(w.t("business.forecast.stock.empty"));
+    else if (b.stockUnits < count)
+      lines.push(w.t("business.forecast.stock.short", { units: b.stockUnits }));
+    else
+      lines.push(
+        w.t("business.forecast.stock.left", {
+          units: b.stockUnits,
+          weeks: Math.max(1, Math.floor(b.stockUnits / Math.max(1, count))),
+        }),
+      );
+    return lines;
+  }
+  return [];
+}
+
 /** The panel figures for one business (R7's view uses it). */
 export function businessPanel(
-  _w: World,
+  w: World,
   b: Business,
-): Pick<BusinessView, "typeLabel" | "levers" | "stock" | "lastWeek"> {
+): Pick<BusinessView, "typeLabel" | "levers" | "stock" | "lastWeek" | "forecast"> {
   const m = b.memory;
   const lastWeek: { label: string; value: string }[] = [];
   if (m.lastRevenue !== undefined) {
@@ -639,5 +770,6 @@ export function businessPanel(
           }
         : null,
     lastWeek,
+    forecast: forecastLines(w, b),
   };
 }

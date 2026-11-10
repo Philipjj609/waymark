@@ -136,7 +136,7 @@ export async function POST(req: Request): Promise<Response> {
       const model = modelForRequest();
       const body =
         mode === "ask"
-          ? await askAdvisor(text, view, model)
+          ? await askAdvisor(text, view, model, undefined, state)
           : await doAdvisor(text, state, view, model);
       return json(body, 200, setCookie);
     } catch (err) {

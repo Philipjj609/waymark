@@ -1,24 +1,42 @@
 import type { RunView } from "@fle/run";
+import { CashChange, type CashChip, PayPalChip } from "./extras";
 import { euros } from "./format";
+import type { StoredReceipt } from "./storage";
 
 /**
  * Where you stand, written like the first page of a notebook ledger: the cash you hold large,
  * the rest as ruled lines. Integer cents only; every figure is practice money.
  */
-export function MoneyStrip({ view }: { view: RunView }) {
+export function MoneyStrip({
+  view,
+  chip = null,
+  receipts = [],
+  paypalSandbox = false,
+}: {
+  view: RunView;
+  /** What happened to your cash since the last Continue, with the reasons. */
+  chip?: CashChip | null;
+  /** This run's verified PayPal Sandbox payments. */
+  receipts?: readonly StoredReceipt[];
+  paypalSandbox?: boolean;
+}) {
   const you = view.pockets.find((p) => p.kind === "YOU");
   const others = view.pockets.filter((p) => p.kind !== "YOU");
   return (
     <section className="run-summary" aria-labelledby="sum-h" data-testid="money-strip">
-      <h2 id="sum-h" className="run-h">
-        Your money
-      </h2>
+      <div className="run-summary-head">
+        <h2 id="sum-h" className="run-h">
+          Your money
+        </h2>
+        <PayPalChip receipts={receipts} enabled={paypalSandbox} />
+      </div>
       {you ? (
         <p className="run-cash">
           <span className="run-cash-label">Cash you hold</span>
           <span className="run-cash-figure figure" data-testid="cash-you">
             {euros(you.cashMinor)}
           </span>
+          {chip ? <CashChange chip={chip} testId="cash-change" /> : null}
         </p>
       ) : null}
       <dl className="run-ruled">

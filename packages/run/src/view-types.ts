@@ -112,6 +112,13 @@ export interface BillView {
   readonly status: "UPCOMING" | "DUE" | "LATE" | "PAID" | "DEFAULTED";
   readonly autopay: boolean;
   readonly canPay: boolean;
+  /**
+   * Days of grace left while the bill is overdue but still fee-free (0 = the last day), else
+   * null. "Overdue" is DUE with a negative `dueInDays`; "late" is status LATE, where a fee applies.
+   */
+  readonly graceLeftDays: number | null;
+  /** Plain words on where the bill stands (due, overdue within grace, late). Null when none. */
+  readonly note: string | null;
 }
 
 export interface InvoiceView {
@@ -187,9 +194,9 @@ export interface BusinessView {
   } | null;
   /** Figures from the last full week, in plain words for the panel. */
   readonly lastWeek: readonly { readonly label: string; readonly value: string }[];
-  /** This month so far, from the business's books. */
   /** Plain lines on what the current settings would bring in an average week (no luck). */
   readonly forecast: readonly string[];
+  /** This month so far, from the business's books. */
   readonly month: {
     readonly salesMinor: Minor;
     readonly costsMinor: Minor;
@@ -243,6 +250,8 @@ export interface MonthClose {
   readonly profitMinor: Minor;
   readonly cashChangeMinor: Minor;
   readonly owedToYouMinor: Minor;
+  /** One sentence under the figures, chosen by what the month showed. */
+  readonly subtitle: string;
   readonly lines: readonly string[];
 }
 

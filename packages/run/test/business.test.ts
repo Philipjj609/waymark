@@ -7,7 +7,10 @@ import {
   startRun,
   World,
 } from "../src/index.js";
-import { businessPanel, businessSystem, restockCost } from "../src/systems/business.js";
+import { businessPanel, businessSystem, restockCost, stockRef } from "../src/systems/business.js";
+
+/** First flat opens with €400 saved plus the first €1,450 pay (#112 council fix). */
+const START_CASH = 185_000;
 
 const WEEK: Command = { kind: "ADVANCE", mode: "WEEK" };
 
@@ -75,7 +78,7 @@ describe("business start", () => {
     const { state, biz } = withBusiness("s1", { type: "SERVICE", capitalMinor: 20_000 });
     expect(biz.reputation).toBe(50);
     expect(biz.status).toBe("OPEN");
-    expect(state.balances.you?.["ASSET:Cash"]).toBe(20_000);
+    expect(state.balances.you?.["ASSET:Cash"]).toBe(START_CASH - 20_000);
     expect(state.balances.you?.["ASSET:BusinessStake"]).toBe(20_000);
     expect(state.balances[biz.id]?.["ASSET:Cash"]).toBe(20_000);
     expect(state.balances[biz.id]?.["EQUITY:OwnerCapital"]).toBe(20_000);
@@ -90,7 +93,7 @@ describe("business start", () => {
       capitalMinor: 30_000,
       fromOutside: true,
     });
-    expect(state.balances.you?.["ASSET:Cash"]).toBe(40_000);
+    expect(state.balances.you?.["ASSET:Cash"]).toBe(START_CASH);
     expect(state.balances.you?.["REVENUE:Gifts"]).toBe(30_000);
     expect(state.balances[biz.id]?.["ASSET:Cash"]).toBe(30_000);
     expectBooksBalance(state);
@@ -193,7 +196,7 @@ describe("stock business", () => {
     const { state, biz } = withBusiness("stock-3", { type: "STOCK", capitalMinor: 30_000 });
     let s = apply(state, { kind: "RESTOCK", businessId: biz.id, units: 40 }).state;
     s = apply(s, WEEK).state;
-    expect(s.stops.some((x) => x.kind === "STOCK_OUT" && x.ref === biz.id)).toBe(true);
+    expect(s.stops.some((x) => x.kind === "STOCK_OUT" && x.ref === stockRef(biz))).toBe(true);
   });
 
   it("lets spoilage and the stall fee run without breaking the books", () => {

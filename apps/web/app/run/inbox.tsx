@@ -1,5 +1,6 @@
 import type { BillView, CardView, InvoiceView, RunView } from "@fle/run";
 import type { SaveToken } from "../../lib/run-save";
+import { type AskWhy, AskWhyButton } from "./extras";
 import { daysLeftText, euros, inDaysText, plural } from "./format";
 import { type PayPalReceipt, PayWithPayPal } from "./pay-with-paypal";
 import { type Act, pocketName } from "./ui";
@@ -110,7 +111,17 @@ export interface PayPalSlot {
   }) => void;
 }
 
-export function Bills({ view, act, paypal }: { view: RunView; act: Act; paypal: PayPalSlot }) {
+export function Bills({
+  view,
+  act,
+  paypal,
+  onAsk,
+}: {
+  view: RunView;
+  act: Act;
+  paypal: PayPalSlot;
+  onAsk: AskWhy;
+}) {
   const open = view.bills.filter((b) => b.status === "DUE" || b.status === "LATE");
   const later = view.bills.filter((b) => b.status === "UPCOMING" || b.status === "DEFAULTED");
   return (
@@ -150,6 +161,9 @@ export function Bills({ view, act, paypal }: { view: RunView; act: Act; paypal: 
             </div>
             <span className="figure run-line-amount">{euros(b.amountMinor)}</span>
             <div className="run-actions run-line-actions">
+              {paypal.enabled && b.canPay && b.pocket === "you" ? (
+                <PayWithPayPal save={paypal.save} bill={b} primary onSettled={paypal.onSettled} />
+              ) : null}
               <button
                 type="button"
                 className="btn"
@@ -157,13 +171,18 @@ export function Bills({ view, act, paypal }: { view: RunView; act: Act; paypal: 
                 data-testid="pay-bill"
                 onClick={() => act({ kind: "PAY_BILL", billId: b.id })}
               >
-                Pay {euros(b.amountMinor)}
+                {paypal.enabled && b.canPay && b.pocket === "you"
+                  ? `Pay ${euros(b.amountMinor)} from game cash (no PayPal)`
+                  : `Pay ${euros(b.amountMinor)}`}
               </button>
               {!b.canPay ? (
                 <span className="small muted">Not enough cash to pay this yet.</span>
               ) : null}
-              {paypal.enabled && b.canPay && b.pocket === "you" ? (
-                <PayWithPayPal save={paypal.save} bill={b} onSettled={paypal.onSettled} />
+              {b.status === "LATE" ? (
+                <AskWhyButton
+                  text={`Why is ${b.label} late, and what does it cost me?`}
+                  onAsk={onAsk}
+                />
               ) : null}
             </div>
           </li>

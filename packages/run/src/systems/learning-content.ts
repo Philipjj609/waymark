@@ -139,6 +139,21 @@ export const LEARNING_TEMPLATES: Readonly<Record<string, readonly string[]>> = {
   "learning.close.differ": [
     "Profit and the change in your cash are not the same number. Here is why.",
   ],
+  "learning.close.gift_relative": [
+    "{amount} from your relative is money given to you, not profit. It is left out of the profit above.",
+  ],
+  "learning.close.gift_other": [
+    "{amount} you were given as a gift is not profit either. It is left out of the profit above.",
+  ],
+  "learning.close.sub_differ": [
+    "A sale counts as profit when you make it, and as cash when the money arrives.",
+  ],
+  "learning.close.sub_together": [
+    "This month your profit and your cash moved together because nobody owed you anything.",
+  ],
+  "learning.close.sub_close": [
+    "This month your profit and your cash ended up close to each other.",
+  ],
   "learning.close.recv_up": [
     "Clients owe you {amount} more than a month ago. You earned it, but it has not reached your cash.",
   ],
@@ -165,9 +180,15 @@ export const LEARNING_TEMPLATES: Readonly<Record<string, readonly string[]>> = {
   ],
 
   "learning.year.title": ["Year {year} is behind you."],
-  "learning.year.late": ["You had late bills in {n} of the 12 months."],
-  "learning.year.late_one": ["You had late bills in 1 of the 12 months."],
-  "learning.year.nolate": ["No bill went late this year."],
+  "learning.year.late": [
+    "You had late bills in {n} of the 12 months. A bill is late once its grace days run out and a fee is added.",
+  ],
+  "learning.year.late_one": [
+    "You had late bills in 1 of the 12 months. A bill is late once its grace days run out and a fee is added.",
+  ],
+  "learning.year.nolate": [
+    "No bill went late this year. A bill is late once its grace days run out and a fee is added.",
+  ],
   "learning.year.business_one": ["You started 1 business."],
   "learning.year.business": ["You started {n} businesses."],
   "learning.year.loan_one": ["You took 1 loan."],
@@ -555,13 +576,12 @@ export const TRANSFER_QUESTION: QuestionDef = {
     {
       id: "a",
       outcome: "SUPPORTS",
-      label:
-        "€250. Only the €400 Sam holds counts on the 1st, because the pay and the client's money arrive later.",
+      label: "€250, because only the €400 Sam holds on the 1st can pay the rent.",
     },
     {
       id: "b",
       outcome: "CONTRADICTS",
-      label: "Nothing. The €400, the pay and the client's €300 together are more than the rent.",
+      label: "Nothing, because Sam's pay and the client's €300 will cover the rent.",
     },
     { id: "c", outcome: "INCONCLUSIVE", label: NOT_SURE },
   ],

@@ -1,7 +1,15 @@
 /** #118 / #120: the Run's advisor. Fictional money only; no real model is ever called. */
-import { apply, cloneState, type PlayerCommand, type RunState, runView } from "@fle/run";
+import {
+  apply,
+  cloneState,
+  type PlayerCommand,
+  type RunState,
+  type RunView,
+  runView,
+} from "@fle/run";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { POST } from "../app/api/run/advisor/route";
+import { ASK_EVENT, ASKED_EVENT, askFromEvent } from "../app/run/advisor-panel";
 import { resetRateLimits } from "../lib/rate-limit";
 import {
   type AdvisorModel,
@@ -9,13 +17,19 @@ import {
   DAILY_MODEL_CAP,
   doAdvisor,
   factsFor,
+  leadFor,
+  lendersByCost,
+  nextAction,
   proposalProblem,
+  questionShape,
   readByRules,
+  relevantFacts,
   resetAdvisorCapForTests,
   setAdvisorModelForTests,
   standInAnswer,
   takeDailyModelCall,
   typedAmounts,
+  yearlyCostTenths,
 } from "../lib/run-advisor";
 import { resetRunCache, seedFor, startSave } from "../lib/run-save";
 
@@ -511,5 +525,379 @@ describe("POST /api/run/advisor", () => {
     expect((await POST(post({ mode: "fly", text: "hi", save }))).status).toBe(400);
     env.WAYMARK_RUN = "0";
     expect((await POST(post({ mode: "ask", text: "hi", save }))).status).toBe(404);
+  });
+});
+
+// -- #112 council: the literal answer first, relevant facts, next action, entry points ------------
+
+/** A copy of the stall view with chosen parts replaced; the view is plain data. */
+function viewWith(patch: Partial<RunView>): RunView {
+  return { ...view, ...patch };
+}
+
+const feedEvent = (id: string, day: number, kind: string, text: string, amountMinor: number) => ({
+  id,
+  day,
+  kind,
+  text,
+  amountMinor,
+});
+
+const cashPocket = (cashMinor: number) =>
+  view.pockets.map((p) => (p.kind === "YOU" ? { ...p, cashMinor } : p));
+
+describe("literal first sentence", () => {
+  const rentPaid = viewWith({
+    feed: [
+      feedEvent("e1", view.day, "BILL_PAID", "You paid the rent.", 65_000),
+      feedEvent("e2", view.day - 2, "INCOME", "Market day takings.", 12_000),
+    ],
+  });
+
+  it("why did cash drop: says how much and names the biggest payment", () => {
+    const lead = leadFor("Why did my cash drop this week?", rentPaid);
+    expect(questionShape("Why did my cash drop this week?")).toBe("cashDrop");
+    expect(lead).toContain("Your cash went down by €530 over the last 7 days");
+    expect(lead).toContain("€120 came in and €650 went out");
+    expect(lead).toContain("The biggest payment out: You paid the rent (€650).");
+  });
+
+  it("says plainly when cash did not drop", () => {
+    const quiet = viewWith({
+      feed: [feedEvent("e1", view.day, "INCOME", "Market day takings.", 30_000)],
+    });
+    expect(leadFor("why did my cash drop", quiet)).toContain("did not go down");
+    expect(leadFor("Why did my cash go up?", quiet)).toContain("Your cash went up by €300");
+    expect(leadFor("Why did my cash go up?", rentPaid)).toContain("did not go up");
+    expect(leadFor("why did my cash drop", viewWith({ feed: [] }))).toContain(
+      "No money moved in the last 7 days",
+    );
+  });
+
+  it("can I afford X: cash minus fixed bills, then the purchase", () => {
+    const v = viewWith({
+      pockets: cashPocket(100_000),
+      timeline: [
+        { direction: "OUT", certainty: "KNOWN", amountMinor: 65_000 },
+        { direction: "IN", certainty: "KNOWN", amountMinor: 20_000 },
+      ] as unknown as RunView["timeline"],
+    });
+    expect(leadFor("Can I afford the course for €200?", v)).toBe(
+      "You have €1,000 and €650 is already fixed to go out over the next 28 days, which leaves €350. After a €200 purchase you would have €150 left.",
+    );
+    expect(leadFor("Can I afford a laptop for 500 euros?", v)).toContain(
+      "would leave you €150 short, unless your €200 of certain income arrives first",
+    );
+    // No price written: the game asks the player to do the sum, and does not take "3 weeks" for money.
+    const noPrice = leadFor("Can I afford the course in 3 weeks?", v) ?? "";
+    expect(noPrice).toContain("which leaves €350.");
+    expect(noPrice).toContain("Try it yourself");
+    expect(noPrice).not.toContain("purchase");
+  });
+
+  it("why is cash lower than profit: names the business and both figures", () => {
+    const biz = view.businesses[0];
+    if (!biz) throw new Error("no business");
+    const v = viewWith({
+      owedToYouMinor: 40_000,
+      businesses: [
+        { ...biz, month: { ...biz.month, profitMinor: 90_000, cashChangeMinor: 20_000 } },
+      ],
+    });
+    const lead = leadFor("Why is my cash lower than my profit?", v) ?? "";
+    expect(lead).toContain(`${biz.name} shows €900 of profit but its cash changed by €200`);
+    expect(lead).toContain("Clients still owe you €400");
+    expect(leadFor("why is my cash lower than my profit", viewWith({ businesses: [] }))).toContain(
+      "no business running",
+    );
+  });
+
+  it("should I borrow: says which lender is cheapest, and is honest when costs are unstated", () => {
+    const v = viewWith({
+      pockets: cashPocket(5_000),
+      borrowing: [
+        {
+          lender: "PAYDAY",
+          label: "x",
+          maxMinor: 30_000,
+          terms: "A fee of €60. That is about 260% a year.",
+        },
+        {
+          lender: "FRIEND",
+          label: "x",
+          maxMinor: 20_000,
+          terms: "No interest, pay back when you can.",
+        },
+        {
+          lender: "BANK",
+          label: "x",
+          maxMinor: 100_000,
+          terms: "About 1% a month; about 12.5% a year.",
+        },
+      ],
+    });
+    const lead = leadFor("Should I borrow?", v) ?? "";
+    expect(lead).toContain("The cheapest is a friend, about 0% a year.");
+    expect(lead).toContain("The dearest is a payday lender, about 260% a year.");
+    expect(leadFor("Should I borrow?", viewWith({ borrowing: [] }))).toContain("Nobody will lend");
+    const unstated = leadFor(
+      "should i borrow",
+      viewWith({ borrowing: [{ lender: "BANK", label: "x", maxMinor: 1, terms: "Some terms." }] }),
+    );
+    expect(unstated).toContain("not stated");
+  });
+
+  it("returns nothing for other questions, and the stand-in still answers", async () => {
+    expect(leadFor("hello", view)).toBeNull();
+    const out = await askAdvisor("hello", view, null);
+    expect(out.lead).toBeNull();
+    expect(out.relevant.length).toBeGreaterThan(0);
+  });
+
+  it("the lead is built from the view only: player words never reach it", () => {
+    const lead = leadFor("Can I afford SECRETWORD123 for €5?", view) ?? "";
+    expect(lead).not.toContain("SECRETWORD123");
+  });
+});
+
+describe("lenders by yearly cost", () => {
+  const terms = (t: string, lender: RunView["borrowing"][number]["lender"]) => ({
+    lender,
+    label: "x",
+    maxMinor: 10_000,
+    terms: t,
+  });
+
+  it("reads 'about X% a year', falls back to twelve months of a monthly rate, and never invents one", () => {
+    expect(yearlyCostTenths("It costs about 13% a year.")).toBe(130);
+    expect(yearlyCostTenths("about 12.5% a year")).toBe(125);
+    expect(yearlyCostTenths("Interest is 2% a month.")).toBe(240);
+    expect(yearlyCostTenths("No interest at all.")).toBe(0);
+    expect(yearlyCostTenths("A fee of €60.")).toBeNull();
+  });
+
+  it("orders cheapest first, unknown last, and the facts follow that order", () => {
+    const v = viewWith({
+      borrowing: [
+        terms("A fee of €60.", "PAYDAY"),
+        terms("About 24% a year.", "CARD"),
+        terms("No interest.", "FRIEND"),
+        terms("About 13% a year.", "BANK"),
+      ],
+    });
+    expect(lendersByCost(v).map((o) => o.lender)).toEqual(["FRIEND", "BANK", "CARD", "PAYDAY"]);
+    const borrowFacts = factsFor(v).filter((f) => f.startsWith("You could borrow"));
+    expect(borrowFacts.map((f) => f.split(" from ")[1]?.split(".")[0])).toEqual([
+      "a friend",
+      "the bank",
+      "your credit card",
+      "a payday lender",
+    ]);
+    // The yearly figure is added only when the terms do not already say it.
+    expect(borrowFacts[0]).toContain("That is about 0% a year");
+    expect(borrowFacts[1]).not.toContain("That is");
+  });
+});
+
+describe("relevant facts", () => {
+  const rentPaid = viewWith({
+    feed: [feedEvent("e1", view.day, "BILL_PAID", "You paid the rent.", 65_000)],
+  });
+
+  it("show at most five, most relevant first, and are a subset of all facts", () => {
+    for (const q of [
+      "Why did my cash drop this week?",
+      "Can I afford the course?",
+      "Why is my cash lower than my profit?",
+      "Should I borrow?",
+      "What should I do now?",
+      "hello",
+    ]) {
+      const rel = relevantFacts(q, rentPaid);
+      const all = factsFor(rentPaid);
+      expect(rel.length).toBeGreaterThan(0);
+      expect(rel.length).toBeLessThanOrEqual(5);
+      for (const f of rel) expect(all).toContain(f);
+    }
+  });
+
+  it("a cash question leaves out hours and net worth, and includes the payment that moved cash", () => {
+    const rel = relevantFacts("Why did my cash drop this week?", rentPaid).join(" | ");
+    expect(rel).toContain("You have");
+    expect(rel).toContain("The biggest payment out this week");
+    expect(rel).not.toMatch(/free hours|net worth/);
+  });
+
+  it("a borrowing question brings the lender terms and leaves bills behind", () => {
+    const v = viewWith({
+      borrowing: [
+        { lender: "FRIEND", label: "x", maxMinor: 20_000, terms: "No interest." },
+        { lender: "BANK", label: "x", maxMinor: 90_000, terms: "About 13% a year." },
+      ],
+    });
+    const rel = relevantFacts("Should I borrow?", v);
+    expect(rel[0]).toContain("from a friend");
+    expect(rel[1]).toContain("from the bank");
+    expect(rel.join(" ")).not.toContain("free hours");
+  });
+
+  it("a profit question brings the business month and what clients owe", () => {
+    const rel = relevantFacts("Why is my cash lower than my profit?", view).join(" | ");
+    expect(rel).toContain("this month: sales");
+    expect(rel).toContain("owe");
+  });
+});
+
+describe("what should I do now", () => {
+  const bill = (over: Partial<RunView["bills"][number]>): RunView["bills"][number] =>
+    ({
+      id: "bill_x",
+      pocket: "you",
+      label: "Rent",
+      payee: "the landlord",
+      kind: "RENT",
+      amountMinor: 65_000,
+      dueInDays: 0,
+      status: "DUE",
+      autopay: false,
+      canPay: true,
+      ...over,
+    }) as RunView["bills"][number];
+  const card = (over: Partial<RunView["cards"][number]>): RunView["cards"][number] => ({
+    id: "c1",
+    cardId: "c",
+    kind: "OFFER",
+    title: "A weekend job",
+    body: "b",
+    pocket: "you",
+    expiresInDays: 0,
+    options: [{ id: "o", label: "Yes", available: true, why: null, hours: 4 }],
+    ...over,
+  });
+  const calm = viewWith({ bills: [], cards: [], pockets: cashPocket(500_000), timeline: [] });
+
+  it("a payable due bill comes first, and maps to PAY_BILL", () => {
+    const v = viewWith({
+      bills: [bill({ id: "bill_late", status: "LATE", dueInDays: -2 }), bill({ id: "bill_due" })],
+      cards: [card({})],
+    });
+    const next = nextAction(v);
+    expect(next.command).toEqual({ kind: "PAY_BILL", billId: "bill_late" });
+    expect(next.advice).toContain("already overdue");
+    expect(nextAction(viewWith({ bills: [bill({})] })).advice).toContain("is due today");
+  });
+
+  it("skips bills that cannot be paid or pay themselves, then an expiring card comes next", () => {
+    const v = viewWith({
+      bills: [bill({ canPay: false }), bill({ id: "b2", autopay: true })],
+      cards: [
+        card({ expiresInDays: 3 }),
+        card({ id: "c2", title: "Late fee warning", expiresInDays: 1 }),
+      ],
+    });
+    const next = nextAction(v);
+    expect(next.command).toBeNull();
+    expect(next.advice).toContain('"Late fee warning"');
+    expect(next.advice).toContain("tomorrow");
+  });
+
+  it("then a low-cash warning, else Continue", () => {
+    const low = viewWith({
+      bills: [],
+      cards: [],
+      pockets: cashPocket(10_000),
+      timeline: [
+        { direction: "OUT", certainty: "KNOWN", amountMinor: 65_000 },
+      ] as unknown as RunView["timeline"],
+    });
+    expect(nextAction(low).advice).toContain("do not cover everything already fixed");
+    expect(nextAction(low).command).toBeNull();
+    expect(nextAction(calm).advice).toContain("Press Continue");
+  });
+
+  it("the Ask answer carries a proposal for a payable bill, validated by the rules", async () => {
+    const out = await askAdvisor("What should I do now?", view, null, undefined, state);
+    const due = view.bills.find((b) => (b.status === "DUE" || b.status === "LATE") && b.canPay);
+    if (due && !due.autopay) {
+      expect(out.proposal).toMatchObject({ kind: "PAY_BILL" });
+      expect(out.summary).toContain("Pay ");
+      expect(out.lead).toContain("Pay ");
+    } else {
+      expect(out.proposal).toBeUndefined();
+    }
+    // Without the run state there is nothing to dry-run, so no proposal is ever offered.
+    expect((await askAdvisor("What should I do now?", view, null)).proposal).toBeUndefined();
+  });
+});
+
+describe("ask results", () => {
+  it("drops a repeat of the lead sentence, so a model that echoes it is still accepted", async () => {
+    const lead = (await askAdvisor("Why did my cash drop?", view, null)).lead as string;
+    const echo: AdvisorModel = {
+      complete: async () =>
+        JSON.stringify({
+          answer: `${lead} The payment that left was the main cause, and nothing came in to soften it.`,
+        }),
+    };
+    const r = await askAdvisor("Why did my cash drop?", view, echo);
+    expect(r.source).toBe("model");
+    expect(r.answer).not.toContain(lead);
+    expect(r.answer).toContain("main cause");
+    expect(r.checked).toBe(true);
+  });
+
+  it("flag a model answer that passed the checks, and not the stand-in", async () => {
+    const good: AdvisorModel = {
+      complete: async () =>
+        JSON.stringify({
+          answer:
+            "Weigh what you hold against the bills that are already coming, and keep some spare.",
+        }),
+    };
+    const m = await askAdvisor("Why did my cash drop?", view, good);
+    expect(m.checked).toBe(true);
+    expect(m.lead).not.toBeNull();
+    const s = await askAdvisor("Why did my cash drop?", view, null);
+    expect(s.checked).toBe(false);
+    const bad = await askAdvisor("Why did my cash drop?", view, {
+      complete: async () => JSON.stringify({ answer: "You lost 1,234 euros this week for sure." }),
+    });
+    expect(bad.checked).toBe(false);
+    expect(bad.source).toBe("stand-in");
+  });
+
+  it("come back over the route with lead, relevant facts and the checked flag", async () => {
+    const { save } = startSave("first-flat");
+    setAdvisorModelForTests(null);
+    const res = await POST(post({ mode: "ask", text: "Why did my cash drop this week?", save }));
+    const body = (await res.json()) as {
+      facts: string[];
+      relevant: string[];
+      lead: string | null;
+      checked: boolean;
+    };
+    expect(res.status).toBe(200);
+    expect(body.lead).toContain("cash");
+    expect(body.relevant.length).toBeLessThanOrEqual(5);
+    expect(body.facts.length).toBeGreaterThan(body.relevant.length);
+    expect(body.checked).toBe(false);
+
+    const next = await POST(post({ mode: "ask", text: "What should I do now?", save }));
+    const nb = (await next.json()) as { lead: string; proposal?: PlayerCommand };
+    expect(nb.lead.length).toBeGreaterThan(10);
+  });
+});
+
+describe("run:ask events", () => {
+  it("accept {text}, clean it, and ignore anything else", () => {
+    expect(askFromEvent({ text: "  Why did my cash drop?  " })).toBe("Why did my cash drop?");
+    expect(askFromEvent({ text: "a\u0000b\n\nc" })).toBe("a b c");
+    expect(askFromEvent({ text: "" })).toBeNull();
+    expect(askFromEvent({ text: "x".repeat(301) })).toBeNull();
+    expect(askFromEvent({ text: 5 })).toBeNull();
+    expect(askFromEvent(null)).toBeNull();
+    expect(askFromEvent("Why?")).toBeNull();
+    expect(ASK_EVENT).toBe("run:ask");
+    expect(ASKED_EVENT).toBe("run:asked");
   });
 });

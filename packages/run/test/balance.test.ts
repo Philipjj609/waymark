@@ -89,13 +89,17 @@ describe("balance sweep (4 seeds, 1 year)", () => {
     // Before tuning, careful and hustler ended near EUR 4.1k from a EUR 5.3k start: the stall could
     // not pay its own way. Rent EUR 500 and a EUR 50 pitch fee fixed that; stock still ties up cash.
     const start = 30_000 + 500_000;
+    // Eight seeds, not four: the median of four sits within a few percent of the start, so any
+    // change that shifts ids (and with them the card draws) flipped it. Over 16 seeds careful's
+    // median is about EUR 5.5k against the EUR 5.3k start.
+    const seeds = [...SEEDS, "bal-4", "bal-5", "bal-6", "bal-7"];
     for (const strategy of ["careful", "hustler"] as const) {
-      const worth = SEEDS.map((seed) =>
+      const worth = seeds.map((seed) =>
         netWorth(playRun("the-stall", seed, strategy, 1 + 2 * DAYS_PER_YEAR).state),
       );
       expect(median(worth), strategy).toBeGreaterThan(start);
     }
-  }, 60_000);
+  }, 120_000);
 
   it("no single strategy is the best in every scenario", () => {
     const best = SCENARIOS.map((sc) => {

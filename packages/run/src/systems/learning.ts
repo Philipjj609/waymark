@@ -297,6 +297,9 @@ interface MonthFigures {
   stockChange: number;
   billsChange: number;
   loansChange: number;
+  /** Money given to you for a business (not profit), and other gifts such as birthday money. */
+  businessGiftMinor: number;
+  otherGiftMinor: number;
 }
 
 /**
@@ -315,6 +318,8 @@ export function monthFigures(s: RunState, firstDay: number, lastDay: number): Mo
     stockChange: 0,
     billsChange: 0,
     loansChange: 0,
+    businessGiftMinor: 0,
+    otherGiftMinor: 0,
   };
   const entries = s.ledger.all;
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -330,7 +335,11 @@ export function monthFigures(s: RunState, firstDay: number, lastDay: number): Mo
       const signed = debit ? amount : -amount;
       const account: string = l.account;
       if (account === "ASSET:Cash") cash += signed;
-      else if (account.startsWith("REVENUE:") && account !== "REVENUE:BusinessIncome")
+      else if (account === "REVENUE:Gifts") {
+        // Money given to you is not earned: left out of profit and named in the close instead.
+        if (e.lines.some((x) => x.account === "ASSET:BusinessStake")) f.businessGiftMinor -= signed;
+        else f.otherGiftMinor -= signed;
+      } else if (account.startsWith("REVENUE:") && account !== "REVENUE:BusinessIncome")
         f.profitMinor -= signed;
       else if (account.startsWith("EXPENSE:")) f.profitMinor -= signed;
       else if (account === "ASSET:Receivables") f.receivablesChange += signed;
@@ -362,6 +371,8 @@ function storeClose(w: World): void {
   fl["learning.close.dStock"] = f.stockChange;
   fl["learning.close.dBills"] = f.billsChange;
   fl["learning.close.dLoans"] = f.loansChange;
+  fl["learning.close.giftBiz"] = f.businessGiftMinor;
+  fl["learning.close.giftOther"] = f.otherGiftMinor;
 }
 
 function monthCloseView(w: World): MonthClose | null {
@@ -384,7 +395,12 @@ function monthCloseView(w: World): MonthClose | null {
     w.t("learning.close.cash", { cash: euros(cash) }),
   ];
   if (owed > 0) lines.push(w.t("learning.close.owed", { owed: euros(owed) }));
-  if (Math.abs(profit - cash) > DIFFERENCE_NOTE_MINOR) {
+  if (n("giftBiz") > 0)
+    lines.push(w.t("learning.close.gift_relative", { amount: euros(n("giftBiz")) }));
+  if (n("giftOther") > 0)
+    lines.push(w.t("learning.close.gift_other", { amount: euros(n("giftOther")) }));
+  const differs = Math.abs(profit - cash) > DIFFERENCE_NOTE_MINOR;
+  if (differs) {
     lines.push(w.t("learning.close.differ"));
     const part = (value: number, up: string, down: string) => {
       if (Math.abs(value) < DIFFERENCE_NOTE_MINOR) return;
@@ -395,6 +411,12 @@ function monthCloseView(w: World): MonthClose | null {
     part(n("dBills"), "learning.close.bills_up", "learning.close.bills_down");
     part(n("dLoans"), "learning.close.loans_up", "learning.close.loans_down");
   }
+  // The subtitle says only what this month showed: no claim about a gap that is not there.
+  const subtitleId = differs
+    ? "learning.close.sub_differ"
+    : owed === 0
+      ? "learning.close.sub_together"
+      : "learning.close.sub_close";
   return {
     monthIndex: month,
     inMinor,
@@ -402,6 +424,7 @@ function monthCloseView(w: World): MonthClose | null {
     profitMinor: profit,
     cashChangeMinor: cash,
     owedToYouMinor: owed,
+    subtitle: w.t(subtitleId),
     lines,
   };
 }
@@ -537,6 +560,7 @@ function yearReviewView(w: World): YearReview | null {
   const loans = count((e) => e.kind === "LOAN_TAKEN");
   const sideJobs = count(isSideWorkTaken);
   const evictions = count((e) => e.kind === "EVICTED");
+  const milestones = events.filter((e) => inYear(e) && e.kind === "MILESTONE");
 
   const story = [w.t("learning.year.title", { year })];
   story.push(
@@ -551,7 +575,8 @@ function yearReviewView(w: World): YearReview | null {
   counted(loans, "learning.year.loan_one", "learning.year.loan");
   counted(sideJobs, "learning.year.side_one", "learning.year.side");
   counted(evictions, "learning.year.evicted_one", "learning.year.evicted");
-  if (businesses + loans + sideJobs + evictions === 0 && lateMonths === 0)
+  for (const m of milestones) story.push(m.text);
+  if (businesses + loans + sideJobs + evictions + milestones.length === 0 && lateMonths === 0)
     story.push(w.t("learning.year.quiet"));
 
   // Candidates: what the money did, not whether it turned out well (that is luck, not learning).
@@ -631,7 +656,7 @@ function notesView(s: RunState): LearningView["notes"] {
         conceptId,
         label: note.label,
         firstSeenDay,
-        text: event ? `${note.sentence} It first came up here: ${event.text}` : note.sentence,
+        text: event ? `${note.sentence} Seen in your run: ${event.text}` : note.sentence,
       };
     });
 }
@@ -642,8 +667,11 @@ export const learningSystem: RunSystem = {
   id: "learning",
 
   beginDay(w) {
+    // The baseline is taken before any bill of the year falls due (the engine sets year 1 at the
+    // start; every later year starts where the one before ended), so rent owed on day 1 is not
+    // already counted against the starting figure. This is only a fallback.
     if ((w.day - 1) % DAYS_PER_YEAR === 0)
-      w.s.flags[`learning.nw.start.${w.cal.year}`] = netWorthOf(w.s);
+      w.s.flags[`learning.nw.start.${w.cal.year}`] ??= netWorthOf(w.s);
     if (isWeekStart(w.day)) {
       noteDecisions(w);
       maybeAskPrediction(w);
@@ -658,6 +686,7 @@ export const learningSystem: RunSystem = {
     w.s.learning.questions = [];
     if (isYearEnd(w.day)) {
       w.s.flags[`learning.nw.end.${w.cal.year}`] = netWorthOf(w.s);
+      w.s.flags[`learning.nw.start.${w.cal.year + 1}`] = netWorthOf(w.s);
       openQuestion(w, TRANSFER_QUESTION, null);
       return;
     }

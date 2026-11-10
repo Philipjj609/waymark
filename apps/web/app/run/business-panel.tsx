@@ -52,6 +52,17 @@ function BusinessPanel({ business: b, act }: { business: BusinessView; act: Act 
             </div>
           ) : null}
 
+          {b.forecast.length > 0 ? (
+            <div className="run-forecast" data-testid="forecast">
+              <h3 className="run-h-sub">With these settings</h3>
+              <ul>
+                {b.forecast.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           {b.stock ? <Stock business={b} act={act} /> : null}
 
           {b.lastWeek.length > 0 ? (

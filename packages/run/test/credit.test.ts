@@ -392,7 +392,8 @@ describe("loan life", () => {
   it("a payday loan rolls over once with a new fee, then counts as missed", () => {
     const s = fresh();
     s.balances.you = { ...s.balances.you, "ASSET:Cash": 2_000 };
-    s.balances.you["EQUITY:Opening"] = (s.balances.you["EQUITY:Opening"] ?? 0) - 38_000;
+    // First flat opens with €1,850; take it down to €20 so the payday loan is the only cash.
+    s.balances.you["EQUITY:Opening"] = (s.balances.you["EQUITY:Opening"] ?? 0) - 183_000;
     const t = command(s, { kind: "BORROW", lender: "PAYDAY", pocket: "you", amountMinor: 20_000 });
     const loan = t.loans[0] as Loan;
     expect(loan.balanceMinor).toBe(24_000);
@@ -431,7 +432,7 @@ describe("starting debt and cards", () => {
       ],
       { pocket: "you", slots: {}, path: "t" },
     );
-    expect(cash(s)).toBe(40_000);
+    expect(cash(s)).toBe(185_000); // first flat: €400 saved plus the first €1,450 pay
     expect(bal(s, "LIABILITY:CardDebt")).toBe(180_000);
     expect(s.loans[0]?.balanceMinor).toBe(180_000);
     balanced(s);

@@ -145,29 +145,103 @@ function availability(w: World, lender: LenderKind, pocket: PocketId): Availabil
   }
 }
 
-function termsText(w: World, lender: LenderKind, maxMinor: number): string {
-  const rate = bankRateBp(w.s.person.creditRecord);
+/**
+ * What a rate of `periodBp` per period costs over `periods` periods, as a whole percent, in
+ * integer maths (each step rounds to a hundredth of a percent). Used for the yearly figure.
+ */
+export function yearlyPercent(periodBp: number, periods: number): number {
+  let factor = 10_000;
+  for (let i = 0; i < periods; i++)
+    factor = Math.floor((factor * (10_000 + periodBp) + 5_000) / 10_000);
+  return Math.floor((factor - 10_000 + 50) / 100);
+}
+
+/** What `amountMinor` grows to after `months` months at `rateBp` a month with nothing paid. */
+function grownBalance(amountMinor: number, rateBp: number, months: number): number {
+  let bal = amountMinor;
+  for (let i = 0; i < months; i++) bal += bpOf(bal, rateBp);
+  return bal;
+}
+
+/** Total paid back by monthly instalments of `instalment` until `principal` is cleared. */
+function totalRepaid(principal: number, rateBp: number, instalment: number): number {
+  let bal = principal;
+  let paid = 0;
+  for (let i = 0; i < BANK_INSTALMENTS && bal > 0; i++) {
+    bal += bpOf(bal, rateBp);
+    const pay = Math.min(instalment, bal);
+    bal -= pay;
+    paid += pay;
+  }
+  return paid;
+}
+
+const EXAMPLE_BANK_MINOR = 100_000;
+const EXAMPLE_SMALL_MINOR = 30_000;
+
+/**
+ * The cost of an option in two plain forms that make lenders comparable: about how much a year,
+ * and a worked example in euros. The yearly figure is the cost if the same terms ran for a whole
+ * year, so it is approximate; it says so.
+ */
+function costText(w: World, lender: LenderKind): string {
   switch (lender) {
     case "FRIEND":
-      return w.t("credit.terms.friend");
     case "FAMILY":
-      return w.t("credit.terms.family");
-    case "BANK":
-      return w.t("credit.terms.bank", {
-        rate: ratePct(rate),
-        instalment: euros(bankInstalment(maxMinor, rate)),
+      return w.t(lender === "FRIEND" ? "credit.cost.friend" : "credit.cost.family", {
+        amount: euros(EXAMPLE_SMALL_MINOR),
       });
+    case "BANK": {
+      const rate = bankRateBp(w.s.person.creditRecord);
+      return w.t("credit.cost.bank", {
+        apr: yearlyPercent(rate, 12),
+        amount: euros(EXAMPLE_BANK_MINOR),
+        back: euros(
+          totalRepaid(EXAMPLE_BANK_MINOR, rate, bankInstalment(EXAMPLE_BANK_MINOR, rate)),
+        ),
+      });
+    }
     case "CARD":
-      return w.t("credit.terms.card", {
-        rate: ratePct(CARD_RATE_BP),
-        min: euros(CARD_MIN_PAYMENT),
+      return w.t("credit.cost.card", {
+        apr: yearlyPercent(CARD_RATE_BP, 12),
+        amount: euros(EXAMPLE_SMALL_MINOR),
+        owed: euros(grownBalance(EXAMPLE_SMALL_MINOR, CARD_RATE_BP, 12)),
       });
     case "PAYDAY":
-      return w.t("credit.terms.payday", {
-        fee: euros(percentOf(maxMinor, PAYDAY_FEE_PERCENT)),
-        max: euros(maxMinor),
+      return w.t("credit.cost.payday", {
+        apr: yearlyPercent(PAYDAY_FEE_PERCENT * 100, 13),
+        amount: euros(EXAMPLE_SMALL_MINOR),
+        back: euros(EXAMPLE_SMALL_MINOR + percentOf(EXAMPLE_SMALL_MINOR, PAYDAY_FEE_PERCENT)),
       });
   }
+}
+
+function termsText(w: World, lender: LenderKind, maxMinor: number): string {
+  const rate = bankRateBp(w.s.person.creditRecord);
+  const terms = ((): string => {
+    switch (lender) {
+      case "FRIEND":
+        return w.t("credit.terms.friend");
+      case "FAMILY":
+        return w.t("credit.terms.family");
+      case "BANK":
+        return w.t("credit.terms.bank", {
+          rate: ratePct(rate),
+          instalment: euros(bankInstalment(maxMinor, rate)),
+        });
+      case "CARD":
+        return w.t("credit.terms.card", {
+          rate: ratePct(CARD_RATE_BP),
+          min: euros(CARD_MIN_PAYMENT),
+        });
+      case "PAYDAY":
+        return w.t("credit.terms.payday", {
+          fee: euros(percentOf(maxMinor, PAYDAY_FEE_PERCENT)),
+          max: euros(maxMinor),
+        });
+    }
+  })();
+  return `${terms} ${costText(w, lender)}`;
 }
 
 /** What you could borrow right now for yourself, in plain words (R7's view uses it). */
@@ -546,6 +620,21 @@ const templates: Readonly<Record<string, readonly string[]>> = {
   "credit.terms.payday": [
     "Up to {max}. A fee of 20% for 4 weeks, which is {fee} at the top amount. Unpaid after 4 weeks, it costs another fee.",
   ],
+  "credit.cost.friend": [
+    "About 0% a year, since there is no interest. Example: borrow {amount}, pay back {amount}.",
+  ],
+  "credit.cost.family": [
+    "About 0% a year, since there is no interest. Example: borrow {amount}, pay back {amount}.",
+  ],
+  "credit.cost.bank": [
+    "About {apr}% a year (an approximate figure). Example: borrow {amount}, pay back about {back} over 12 months.",
+  ],
+  "credit.cost.card": [
+    "About {apr}% a year (an approximate figure). Example: borrow {amount} and pay nothing for 12 months, and you would owe about {owed}.",
+  ],
+  "credit.cost.payday": [
+    "About {apr}% a year if it were repeated all year (an approximate figure). Example: borrow {amount}, pay back {back} in 4 weeks.",
+  ],
   "credit.loan.taken": ["You borrowed {amount}: {label}."],
   "credit.loan.taken_fee": [
     "You borrowed {amount}: {label}. The fee of {fee} is added to what you owe.",
@@ -586,7 +675,7 @@ const templates: Readonly<Record<string, readonly string[]>> = {
   "credit.offer.card.decline": ["No thanks"],
   "credit.offer.payday.title": ["A payday loan flyer", "Cash today, says the flyer"],
   "credit.offer.payday.body": [
-    "Short of cash? A lender offers {amount} today. The fee is 20% for 4 weeks.",
+    "Short of cash? A lender offers {amount} today. The fee is 20% for 4 weeks. Free debt advice exists in most countries; a bank or your city can point you to it.",
   ],
   "credit.offer.payday.take": ["Take {amount} now"],
   "credit.offer.payday.decline": ["Throw it away"],

@@ -49,7 +49,7 @@ describe("runView", () => {
     expect(v.scenario).toEqual({ id: "first-flat", title: "First flat" });
     expect(v.day).toBe(1);
     expect(v.calendar.label).toBe(calendarLabel(1));
-    expect(v.pockets).toEqual([{ id: "you", label: "You", kind: "YOU", cashMinor: 40_000 }]);
+    expect(v.pockets).toEqual([{ id: "you", label: "You", kind: "YOU", cashMinor: 185_000 }]);
     expect(v.person.job).toBe("Warehouse pay");
     expect(v.hours.free).toBe(v.hours.budget - v.hours.committed - v.hours.used);
     expect(v.stops[0]?.kind).toBe("RUN_START");
@@ -68,6 +68,7 @@ describe("runView", () => {
         "day",
         "feed",
         "fictional",
+        "goal",
         "hours",
         "invoices",
         "learning",
@@ -139,8 +140,8 @@ describe("runView", () => {
   it("net worth is assets minus liabilities, counting the business stake once", () => {
     const { state } = richRun();
     const v = runView(state);
-    // Cash 40,000 + receivable 18,000 - rent bill due on day 1 (65,000).
-    const assets = 40_000 + 18_000;
+    // Cash 185,000 (€400 saved + first pay) + receivable 18,000 - rent bill due on day 1 (65,000).
+    const assets = 185_000 + 18_000;
     const liabilities = state.bills
       .filter((b) => b.status === "DUE")
       .reduce((a, b) => a + b.amountMinor, 0);
@@ -164,7 +165,7 @@ describe("runView", () => {
     expect(w.transfer("you", "biz_t", 10_000, "Seed money")).toBe(true);
     const v2 = runView(s2);
     expect(v2.netWorthMinor).toBe(v.netWorthMinor);
-    expect(v2.pockets.map((p) => p.cashMinor)).toEqual([30_000, 10_000]);
+    expect(v2.pockets.map((p) => p.cashMinor)).toEqual([175_000, 10_000]);
     expect(v2.businesses[0]?.cashMinor).toBe(10_000);
   });
 

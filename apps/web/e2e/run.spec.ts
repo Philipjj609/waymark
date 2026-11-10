@@ -8,10 +8,8 @@ import { expect, type Page, type Response, test } from "@playwright/test";
 
 const RUNS_KEY = "waymark.run.saves.v2";
 const LEGACY_KEY = "waymark.run.save.v1";
-/** Screenshots for the UX council (a scratch folder outside the repo). */
-const SHOTS =
-  process.env.RUN_SHOTS_DIR ??
-  "C:/Users/phili/AppData/Local/Temp/claude/40b59aff0cbb7ac9/65115155-930f-4990-af83-832317a808ee/scratchpad/council/shots";
+/** Screenshots to look at (test-results is not committed). */
+const SHOTS = process.env.RUN_SHOTS_DIR ?? "test-results/run-shots";
 
 const isRunPost = (r: Response) =>
   r.request().method() === "POST" && new URL(r.url()).pathname === "/api/run";
@@ -50,9 +48,19 @@ async function closeSheets(page: Page) {
   }
 }
 
+/**
+ * Press Continue. When a bill you can pay is waiting, the page asks first ("Pay it first?"), so
+ * this answers "Continue anyway" and time moves, as a player who wants to carry on would.
+ */
+async function pressContinue(page: Page) {
+  await page.getByTestId("advance-next").click();
+  const anyway = page.getByTestId("continue-anyway");
+  if (await anyway.isVisible()) await anyway.click();
+}
+
 /** Press Continue once and wait until the game has answered and the screen has settled. */
 async function carryOn(page: Page, keepSheets = false): Promise<{ status: number; day: number }> {
-  const res = await clickAndWaitForRun(page, () => page.getByTestId("advance-next").click());
+  const res = await clickAndWaitForRun(page, () => pressContinue(page));
   const body = (await res.json()) as { view?: { day: number } };
   await expect(page.getByTestId("run-root")).toHaveAttribute("data-busy", "false");
   if (!keepSheets) await closeSheets(page);
@@ -64,6 +72,17 @@ const noHorizontalScroll = (page: Page) =>
 
 const storedRuns = (page: Page) =>
   page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? "[]"), RUNS_KEY);
+
+/** Puts the keyboard back at the top of the page, as if the player had just arrived. */
+async function tabFromTop(page: Page) {
+  await page.evaluate(() => {
+    const body = document.body;
+    body.tabIndex = -1;
+    body.focus();
+    body.removeAttribute("tabindex");
+    getSelection()?.removeAllRanges();
+  });
+}
 
 test.describe("the Run", () => {
   test("start, name, play a few decisions, reload and continue", async ({ page }) => {
@@ -205,6 +224,9 @@ test.describe("the Run", () => {
     await expect(sheet).toBeVisible();
     await expect(sheet).toContainText("Closing the books on month");
     await expect(sheet).toContainText("Came in");
+    // The headline comes first, with the two numbers that differ; the question is optional.
+    await expect(sheet.getByTestId("month-headline")).toContainText("profit");
+    await expect(sheet.getByTestId("month-detail-toggle")).toBeVisible();
 
     const question = sheet.getByTestId("question").first();
     if ((await question.count()) > 0) {
@@ -237,7 +259,9 @@ test.describe("the Run", () => {
     await expect(page.getByTestId("desk")).toBeVisible();
 
     await carryOn(page);
-    for (const tab of ["week", "business", "money", "ask", "notes"]) {
+    // A start with no business has no Business tab: an empty tab is hidden, not shown bare.
+    await expect(page.getByTestId("tab-business")).toHaveCount(0);
+    for (const tab of ["week", "money", "ask", "notes"]) {
       await page.getByTestId(`tab-${tab}`).click();
       expect(await noHorizontalScroll(page), `tab ${tab}`).toBeLessThanOrEqual(0);
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
@@ -251,11 +275,14 @@ test.describe("the Run", () => {
     }
   });
 
-  test("keyboard: the main action is reachable and shows a focus ring", async ({ page }) => {
+  test("keyboard: Continue is reachable with a focus ring, and the bill check works by key", async ({
+    page,
+  }) => {
     await startFirstFlat(page);
     // Tab from the top of the page, as a keyboard user would (a script's .focus() does not
     // trigger :focus-visible).
     const next = page.getByTestId("advance-next");
+    await tabFromTop(page);
     for (let i = 0; i < 15 && !(await next.evaluate((el) => el === document.activeElement)); i++) {
       await page.keyboard.press("Tab");
     }
@@ -264,8 +291,19 @@ test.describe("the Run", () => {
       .getByTestId("advance-next")
       .evaluate((el) => getComputedStyle(el).outlineStyle);
     expect(outline).not.toBe("none");
-    const res = await clickAndWaitForRun(page, () => page.keyboard.press("Enter"));
-    expect(res.status()).toBe(200);
+
+    await page.keyboard.press("Enter");
+    const confirm = page.getByTestId("continue-confirm");
+    if (await confirm.isVisible()) {
+      // Focus moves into the question; the next Tab reaches "Pay from game cash".
+      await expect(confirm).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(page.getByTestId("confirm-pay-cash")).toBeFocused();
+      const paid = await clickAndWaitForRun(page, () => page.keyboard.press("Enter"));
+      expect(paid.status()).toBe(200);
+    } else {
+      await page.waitForResponse(isRunPost);
+    }
   });
 
   test("the server rejects a save whose log was changed (403)", async ({ page, baseURL }) => {
@@ -309,6 +347,231 @@ test.describe("the Run", () => {
     await page.getByTestId("remove-run").click();
     await expect(page.getByTestId("saved-run")).toHaveCount(0);
     await expect(page.getByTestId("start-screen")).toBeVisible();
+  });
+
+  test("Continue asks before letting a payable bill go late", async ({ page }) => {
+    await startFirstFlat(page);
+    const confirm = page.getByTestId("continue-confirm");
+    const rent = page.getByTestId("bill").first();
+    test.skip(
+      (await rent.getByTestId("pay-bill").isDisabled()) === true,
+      "needs a start where the first bill can be paid",
+    );
+
+    // Nothing is sent: the page asks first, in the page itself.
+    let posted = false;
+    page.on("request", (r) => {
+      if (r.method() === "POST" && new URL(r.url()).pathname === "/api/run") posted = true;
+    });
+    await page.getByTestId("advance-next").click();
+    await expect(confirm).toBeVisible();
+    await expect(confirm).toContainText("you can pay it. Pay it first?");
+    await expect(confirm.getByTestId("confirm-pay-cash")).toBeVisible();
+    await expect(confirm.getByTestId("continue-anyway")).toBeVisible();
+    expect(posted, "no request until the player chooses").toBe(false);
+
+    // PayPal is not set up in this test server, so the cash button is the main one.
+    await expect(confirm.getByRole("button", { name: /PayPal Sandbox/ })).toHaveCount(0);
+    const paid = await clickAndWaitForRun(page, () =>
+      confirm.getByTestId("confirm-pay-cash").click(),
+    );
+    expect(paid.status()).toBe(200);
+    await expect(confirm).toBeHidden();
+
+    // With nothing payable left, Continue goes straight through.
+    const moved = await clickAndWaitForRun(page, () => page.getByTestId("advance-next").click());
+    expect(moved.status()).toBe(200);
+  });
+
+  test("a payable bill has a direct Pay button in What needs you now", async ({ page }) => {
+    await startFirstFlat(page);
+    const stopPay = page.getByTestId("stop-pay");
+    test.skip((await stopPay.count()) === 0, "needs a start where the first bill can be paid");
+    const paid = await clickAndWaitForRun(page, () => stopPay.first().click());
+    expect(paid.status()).toBe(200);
+    await expect(page.getByTestId("stop-pay")).toHaveCount(0);
+  });
+
+  test("a late bill can ask why: the Ask area opens and the advisor is told", async ({ page }) => {
+    await startFirstFlat(page);
+    await page.evaluate(() => {
+      const w = window as unknown as { __asked: string[] };
+      w.__asked = [];
+      window.addEventListener("run:ask", (e) =>
+        w.__asked.push((e as CustomEvent<{ text: string }>).detail.text),
+      );
+    });
+    // Carry on past the first bill without paying it, so it goes late.
+    const late = page.locator('[data-testid="bill"][data-status="LATE"]').first();
+    for (let i = 0; i < 8 && (await late.count()) === 0; i++) {
+      await carryOn(page);
+    }
+    test.skip((await late.count()) === 0, "no bill went late in this run");
+    await late.getByTestId("ask-why").click();
+    // Focus lands in the Ask area (the area itself, or the question box inside it).
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.getElementById("run-ask")?.contains(document.activeElement)),
+      )
+      .toBe(true);
+    const asked = await page.evaluate(() => (window as unknown as { __asked: string[] }).__asked);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatch(/late/);
+  });
+
+  test("structure: one main landmark, one h1, and a skip link that works", async ({ page }) => {
+    await startFirstFlat(page);
+    await expect(page.locator("main#run-main")).toHaveCount(1);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+    await expect(page.getByRole("status")).toHaveCount(1);
+
+    // The skip link is the first stop for the keyboard, shows itself, and lands on the list.
+    await tabFromTop(page);
+    await page.keyboard.press("Tab");
+    const skip = page.getByTestId("skip-link");
+    await expect(skip).toBeFocused();
+    await expect(skip).toHaveText("Skip to what needs you");
+    const box = await skip.boundingBox();
+    expect(box?.y ?? -1).toBeGreaterThanOrEqual(0);
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("stops")).toBeFocused();
+
+    // "Take me there" is a real touch target.
+    const link = page.locator(".run-need-link").first();
+    if ((await link.count()) > 0) {
+      const h = (await link.boundingBox())?.height ?? 0;
+      expect(h).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  test("the goal shows under the date, and the first-run guide is skippable and remembered", async ({
+    page,
+  }) => {
+    await startFirstFlat(page, "Guided");
+    await expect(page.getByTestId("goal")).toBeVisible();
+    const guide = page.getByTestId("first-run-guide");
+    await expect(guide).toContainText("Press Continue");
+    await guide.getByRole("button", { name: "Skip the tips" }).click();
+    await expect(guide).toBeHidden();
+    expect((await storedRuns(page))[0].guideDone).toBe(true);
+
+    // Remembered per run: back in, it stays away. A new run gets it again.
+    await page.reload();
+    await clickAndWaitForRun(page, () => page.getByTestId("continue-run").click());
+    await expect(page.getByTestId("desk")).toBeVisible();
+    await expect(page.getByTestId("first-run-guide")).toHaveCount(0);
+    await page.getByTestId("leave-run").click();
+    await startRun(page, "side-studio", "Second");
+    await expect(page.getByTestId("first-run-guide")).toBeVisible();
+    // Pressing Continue is the first step done, so the guide goes by itself.
+    await carryOn(page);
+    await expect(page.getByTestId("first-run-guide")).toHaveCount(0);
+  });
+
+  test("the start screen says how PayPal and the advisor fit in", async ({ page }) => {
+    await page.goto("/run");
+    await expect(page.getByTestId("paypal-line")).toHaveText(
+      "Bills are paid through PayPal Sandbox with test money, and an AI advisor explains but never decides.",
+    );
+    // Buttons name their start.
+    await expect(page.getByRole("button", { name: "Start First flat" })).toBeVisible();
+  });
+
+  test("Quick demo: starts Side studio and a checklist that ticks itself", async ({ page }) => {
+    await page.goto("/run");
+    await expect(page.getByTestId("start-screen")).toBeVisible();
+    const started = await clickAndWaitForRun(page, () => page.getByTestId("quick-demo").click());
+    expect(started.status()).toBe(200);
+    await expect(page.getByTestId("run-name-label")).toHaveText("Demo run");
+    const list = page.getByTestId("demo-checklist");
+    await expect(list).toBeVisible();
+    await expect(list).toContainText("Pay the rent");
+    await expect(list).toContainText("Open the studio");
+    await expect(list).toContainText("Continue to the month close");
+    await expect(list).toContainText("Ask the advisor a question");
+    await expect(list).toContainText("0 of 4 done");
+
+    // Paying the rent ticks the first step (here with game cash: PayPal is off in this server).
+    const pay = page.getByTestId("stop-pay").first();
+    const paid = await clickAndWaitForRun(page, () => pay.click());
+    expect(paid.status()).toBe(200);
+    await expect(page.getByTestId("demo-pay")).toHaveAttribute("data-done", "true");
+
+    // The advisor panel announces an answer with a window event; the checklist listens.
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("run:asked")));
+    await expect(page.getByTestId("demo-ask")).toHaveAttribute("data-done", "true");
+
+    // The ticks are remembered with the run, and the checklist can be put away.
+    await page.reload();
+    await clickAndWaitForRun(page, () => page.getByTestId("continue-run").click());
+    await expect(page.getByTestId("demo-ask")).toHaveAttribute("data-done", "true");
+    await list.getByRole("button", { name: "Hide the checklist" }).click();
+    await expect(list).toBeHidden();
+  });
+
+  test("PayPal Sandbox receipts are kept per run, next to the save, and survive play", async ({
+    page,
+  }) => {
+    await startFirstFlat(page, "Receipts");
+    const receipt = {
+      operationId: "pop_test",
+      orderId: "ORDER123",
+      captureId: "CAPTURE456",
+      status: "COMPLETED",
+      amountMinor: 65000,
+      currency: "EUR",
+      billLabel: "Rent",
+      evidence: "paypal:order:ORDER123:capture:CAPTURE456",
+      verifiedAt: "2026-01-01T00:00:00.000Z",
+      calendarLabel: "Year 1, month 1, week 1 (Mon)",
+    };
+    await page.evaluate(
+      ([key, r]) => {
+        const runs = JSON.parse(localStorage.getItem(key) as string);
+        runs[0].receipts = [r];
+        localStorage.setItem(key, JSON.stringify(runs));
+      },
+      [RUNS_KEY, receipt] as const,
+    );
+    await page.reload();
+    await clickAndWaitForRun(page, () => page.getByTestId("continue-run").click());
+    const chip = page.getByTestId("paypal-chip");
+    await expect(chip).toHaveText("PayPal Sandbox: 1 payment verified");
+    await chip.click();
+    await expect(page.getByTestId("paypal-receipts")).toContainText("ORDER123");
+    await expect(page.getByTestId("paypal-receipts")).toContainText("Test money");
+
+    // Playing on keeps them (the entry is rewritten on every move).
+    await carryOn(page);
+    expect((await storedRuns(page))[0].receipts).toHaveLength(1);
+
+    // A damaged extra is dropped, never a reason to lose the run.
+    await page.evaluate((key) => {
+      const runs = JSON.parse(localStorage.getItem(key) as string);
+      runs[0].receipts = "broken";
+      runs[0].demo = 7;
+      localStorage.setItem(key, JSON.stringify(runs));
+    }, RUNS_KEY);
+    await page.reload();
+    await expect(page.getByTestId("saved-run")).toHaveCount(1);
+  });
+
+  test("screens: the desk at desktop and phone width, light and dark, with no sideways scroll", async ({
+    page,
+  }) => {
+    await startFirstFlat(page, "Look");
+    await carryOn(page);
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      for (const [name, size] of [
+        ["desktop", { width: 1280, height: 900 }],
+        ["phone", { width: 390, height: 844 }],
+      ] as const) {
+        await page.setViewportSize(size);
+        expect(await noHorizontalScroll(page), `${name} ${scheme}`).toBeLessThanOrEqual(0);
+        await page.screenshot({ path: `${SHOTS}/desk-${name}-${scheme}.png` });
+      }
+    }
   });
 
   test("the end of year 1 shows the year review: story, net worth, and the transfer question", async ({

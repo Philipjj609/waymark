@@ -3,6 +3,7 @@ import { isWeekStart, RUN_HORIZON_DAY } from "./clock.js";
 import { scenario as scenarioById } from "./content/scenarios.js";
 import { applyEffects } from "./effects.js";
 import { systems } from "./systems/index.js";
+import { netWorthOf } from "./systems/learning.js";
 import {
   type Command,
   type Refusal,
@@ -105,6 +106,9 @@ export function startRun(runId: string, seed: string, scenarioId: string): RunSt
   for (const sys of systems()) sys.init?.(w, sc);
   applyEffects(w, sc.start, { pocket: YOU, slots: {}, path: "start" });
   w.recomputeCommitted();
+  // The year-review baseline: taken before the first bill falls due, so rent due on day 1 is not
+  // already counted against it.
+  s.flags["learning.nw.start.1"] = netWorthOf(s);
   beginDay(w);
   s.stops.unshift({ kind: "RUN_START", text: `Your run begins: ${sc.title}.`, ref: null });
   return s;

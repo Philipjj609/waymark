@@ -9,7 +9,7 @@ export const TEMPLATES: Readonly<Record<string, readonly string[]>> = {
     "You paid {label} through PayPal Sandbox: {amount}. Test money, verified by the server.",
   ],
   "core.transfer": ["You moved {amount} from {from} to {to}."],
-  "core.card.expired": ["You let it pass: {title}."],
+  "core.card.expired": ["Expired: {title}.", "{title} has expired."],
   "core.month.end": ["Month {month} is over."],
   "core.year.end": ["Year {year} is over."],
   "core.low.cash": ["Your cash is down to {amount}."],
