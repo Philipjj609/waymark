@@ -7,5 +7,6 @@ export { allCards, cardDef, optionLabel, optionStatus } from "./systems/cards.js
 export { systems } from "./systems/index.js";
 export type { EffectCtx, RunSystem } from "./systems/types.js";
 export * from "./types.js";
+export { runView } from "./view.js";
 export type * from "./view-types.js";
 export { euros, World } from "./world.js";
