@@ -10,9 +10,6 @@ import { eq, sql } from "drizzle-orm";
 import type { Db } from "./migrate.js";
 import { providerOperations } from "./schema.js";
 
-// #125 adds this optional field to the payment port; no shared wire contract changes.
-type TimedOperation = OperationRecord & { readonly createStartedAt?: number };
-
 const STEPS = new Set<StepState>([
   "NOT_STARTED",
   "STARTED",
@@ -35,7 +32,7 @@ function requestId(value: string | null): string {
 }
 
 /** Parse at the database boundary; a legacy row must never gain a fabricated capture retry id. */
-function record(row: typeof providerOperations.$inferSelect): TimedOperation {
+function record(row: typeof providerOperations.$inferSelect): OperationRecord {
   if (
     row.paypalOrderId !== null &&
     (typeof row.paypalOrderId !== "string" || !/^[A-Za-z0-9]+$/.test(row.paypalOrderId))
@@ -63,7 +60,7 @@ function record(row: typeof providerOperations.$inferSelect): TimedOperation {
   };
 }
 
-function values(input: TimedOperation) {
+function values(input: OperationRecord) {
   const row = {
     operationId: input.operationId,
     worldId: input.worldId,
@@ -83,7 +80,7 @@ function values(input: TimedOperation) {
   return row;
 }
 
-function assertBinding(before: TimedOperation, after: TimedOperation): void {
+function assertBinding(before: OperationRecord, after: OperationRecord): void {
   if (
     before.operationId !== after.operationId ||
     before.worldId !== after.worldId ||
