@@ -63,6 +63,8 @@ export default defineConfig({
       APP_ORIGINS: BASE_URL,
       APP_BASE_URL: BASE_URL,
       WORLD_STORE: "memory",
+      WAYMARK_LAB: "1",
+      LAB_SECRET: "e2e".repeat(12),
       DATABASE_URL: "",
       AI_PROVIDER: "fake",
       NEBIUS_API_KEY: "",

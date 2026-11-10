@@ -1,0 +1,22 @@
+{
+  "name": "@fle/month-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SPIKE (#110): a playable, branching month compiled onto the pure engine. Rules live above the ledger; every cent still posts through @fle/simulation.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./scenario": "./src/scenario.ts"
+  },
+  "dependencies": {
+    "@fle/contracts": "workspace:*",
+    "@fle/domain": "workspace:*",
+    "@fle/learning": "workspace:*",
+    "@fle/simulation": "workspace:*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@fle/ai": "workspace:*",
+    "fast-check": "4.10.2"
+  }
+}
