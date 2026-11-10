@@ -104,9 +104,21 @@ export const checkoutStart = (req: Request, worldId: string) =>
     });
     if (!result.ok) return json({ error: result.error }, result.httpStatus);
     const current = await getStore().load(ctx.world, ctx.owner);
-    const operation = current?.reservations[obligation.data]?.operationId;
+    // Completed checkouts have no reservation. Recover the original operation from the
+    // recorded result when the first response was lost, rather than creating another one.
+    const started = current?.events.find(
+      (event) =>
+        event.eventType === "PROVIDER_CHECKOUT_STARTED" &&
+        result.result.eventIds.includes(event.eventId) &&
+        event.payload.obligationId === obligation.data,
+    );
+    const original = ProviderOperationIdSchema.safeParse(started?.payload.operationId);
+    const operation = original.success
+      ? original.data
+      : current?.reservations[obligation.data]?.operationId;
     if (!operation) return json({ result: result.result, snapshot: result.snapshot }, 409);
-    await runtime.service.run(operation, true);
+    const known = await runtime.service.status(ctx.owner, ctx.world, operation);
+    if (known?.phase !== "FINISHED") await runtime.service.run(operation, true);
     const view = await getWorld(getStore(), ctx.owner, ctx.world);
     return json({
       checkout: await runtime.service.status(ctx.owner, ctx.world, operation),

@@ -38,16 +38,38 @@ matched the public snapshot hash. SQL checked every journal's balance per curren
 Screenshot: the harness writes `verified-checkout.png` into ignored `apps/web/test-results/sandbox/`.
 Traces, video and cookie exports are disabled. No secrets appear in this evidence.
 
+## Lost initial response regression
+
+A final route inspection found that retrying START after settlement could not find its removed
+reservation. The route now recovers the original operation from the command result's recorded
+checkout-start event, and does not run a finished job again. A direct HTTP test and the real
+browser harness replay the exact original START request after settlement.
+
+The production build and real browser run passed again: **1 passed (10.5s)**. This second run
+retained one settlement, five commands and the same world version across the START retry,
+repeated CAPTURE requests, forged return parameters and an application process restart.
+
+| Evidence                       | Value                                                              |
+| ------------------------------ | ------------------------------------------------------------------ |
+| World                          | `wld_957e4027db246b0a5d3896e61164efe5`                             |
+| Operation                      | `pop_5f60764cc07602ddf3ddcab940af5717`                             |
+| Sandbox order                  | `3NA72391S9980521R`                                                |
+| GET-verified completed capture | `3DK57043HW4996257`                                                |
+| Mapped Sandbox test amount     | 3000 minor units, EUR                                              |
+| Replayed head hash             | `d8d45f0916d70e9a77815deecb6cf336fb9132f93c8a63ce91b827135c8065c3` |
+
+The screenshot in the harness output now corresponds to this second run.
+
 ## Regression evidence
 
-- `pnpm verify`, with isolated `TEST_DATABASE_URL`: **39 files passed; 584 passed, 1 skipped**;
+- `pnpm verify`, with isolated `TEST_DATABASE_URL`: **39 files passed; 585 passed, 1 skipped**;
   lint/typecheck passed; generated contract schemas current.
 - Checkout integration tests: **26 passed**, covering both PGlite and PostgreSQL, ownership,
   server command IDs, approval without settlement, capture/cancel exclusion, lost response and
   restart, initial GET outage, expired capture lease, unknown refund totals, stale reads after an
   uncertain capture, crashes on either side of economic commit, atomic rollback and queued intent.
-- HTTP tests: **4 passed**, covering CSRF/ownership, read-only status, historical-operation
-  cancellation and strict/capped request bodies.
+- HTTP tests: **5 passed**, covering CSRF/ownership, read-only status, historical-operation
+  cancellation, strict/capped request bodies and recovery of a finished START.
 - `pnpm --filter @fle/web build`: passed, including checkout and return routes.
 
 ## Remaining limits

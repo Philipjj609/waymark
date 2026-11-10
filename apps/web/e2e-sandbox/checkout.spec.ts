@@ -89,7 +89,13 @@ test("real Sandbox checkout persists a verified settlement across app restart", 
     expect((await advance.json()).result.status).toBe("ACCEPTED");
     await page.goto(`${origin}/checkout?${new URLSearchParams({ worldId, obligationId: PHONE })}`);
     await expect(page.getByRole("heading", { name: "PayPal Sandbox checkout" })).toBeVisible();
+    const intent = page.waitForRequest(
+      (req) =>
+        req.method() === "POST" &&
+        new URL(req.url()).pathname === `/api/worlds/${worldId}/checkout`,
+    );
     await page.getByRole("button", { name: "Start Sandbox checkout" }).click();
+    const startBody = (await intent).postDataJSON();
     await expect(page.getByTestId("checkout-status")).toContainText(
       "Paid — Sandbox capture verified",
       { timeout: 90_000 },
@@ -102,6 +108,16 @@ test("real Sandbox checkout persists a verified settlement across app restart", 
     const api = `${origin}/api/worlds/${worldId}/checkout/${operation}`;
     const before = (await (await page.request.get(api)).json()).checkout;
     expect(before).toMatchObject({ settled: true, phase: "FINISHED", realm: "PAYPAL_SANDBOX" });
+    const retriedStart = await page.request.post(`${origin}/api/worlds/${worldId}/checkout`, {
+      headers,
+      data: startBody,
+    });
+    expect(retriedStart.status()).toBe(200);
+    expect((await retriedStart.json()).checkout).toMatchObject({
+      operationId: operation,
+      settled: true,
+      worldVersion: before.worldVersion,
+    });
     const untrusted = await browser.newContext();
     try {
       expect((await untrusted.request.get(api)).status()).toBe(404);
