@@ -2,6 +2,7 @@
 
 import type { Command, RunView } from "@fle/run";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { SiteHeader } from "../ui/site-nav";
 import { AdvisorPanel } from "./advisor-panel";
 import { callRun, type RunBody, type SaveToken } from "./api";
 import { Businesses } from "./business-panel";
@@ -57,8 +58,12 @@ interface Active {
   readonly demo?: boolean;
 }
 
-const FONTS_HREF =
-  "https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Literata:opsz,wght@7..72,400;7..72,600;7..72,700&display=swap";
+/** Where the player came from: the landing page ("Try the demo", "Continue"), or a lesson's "Practise this". */
+export interface RunEntry {
+  readonly demo: boolean;
+  readonly resume: string | null;
+  readonly highlight: string | null;
+}
 
 /**
  * What changed, for the screen-reader live region: the date and the money, in short sentences
@@ -85,8 +90,10 @@ function describeChange(prev: RunView | null, next: RunView): string {
 export function RunGame({
   scenarios,
   paypalSandbox,
+  entry,
 }: {
   scenarios: readonly ScenarioSummary[];
+  entry: RunEntry;
   /** True when the server has PayPal Sandbox configured; shows the sandbox pay button on bills. */
   paypalSandbox: boolean;
 }) {
@@ -120,20 +127,13 @@ export function RunGame({
     writeRuns(next);
   }, []);
 
-  // Storage and the web fonts are browser-only, so both are set up after mount: the server and
-  // first client render agree, and a missing font or blocked storage changes nothing but looks.
+  // Storage is browser-only, so it is read after mount: the server and first client render agree,
+  // and blocked storage changes nothing but the saved list. (Fonts are loaded by the root layout.)
   useEffect(() => {
     const found = loadRuns(titleOf);
     runsRef.current = found;
     setRuns(found);
     setLoaded(true);
-    if (!document.querySelector("link[data-run-fonts]")) {
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = FONTS_HREF;
-      link.dataset.runFonts = "1";
-      document.head.appendChild(link);
-    }
   }, [titleOf]);
 
   // After an update, put keyboard focus somewhere sensible: "What needs you now" after time
@@ -323,6 +323,25 @@ export function RunGame({
     });
   };
 
+  // "Try the demo" and "Continue" from the landing page: one click there, then this runs once.
+  const entered = useRef(false);
+  const doEntry = useRef<() => void>(() => {});
+  doEntry.current = () => {
+    if (entered.current || !loaded) return;
+    entered.current = true;
+    const clean = () => window.history.replaceState(null, "", "/run");
+    if (entry.resume && runsRef.current.some((r) => r.id === entry.resume)) {
+      clean();
+      resume(entry.resume);
+    } else if (entry.demo && scenarios.some((s) => s.id === DEMO_SCENARIO)) {
+      clean();
+      start(DEMO_SCENARIO, DEMO_NAME, true);
+    }
+  };
+  useEffect(() => {
+    if (loaded) doEntry.current();
+  }, [loaded]);
+
   const leave = () => {
     viewRef.current = null;
     activeRef.current = null;
@@ -365,6 +384,7 @@ export function RunGame({
       >
         {onDesk ? "Skip to what needs you" : "Skip to the main part of the page"}
       </a>
+      <SiteHeader compact />
       <div className="run-page">
         <header className="run-top">
           <h1 className="run-brand">The Run</h1>
@@ -399,6 +419,7 @@ export function RunGame({
               scenarios={scenarios}
               runs={runs}
               loaded={loaded}
+              highlight={entry.highlight}
               onStart={start}
               onDemo={() => start(DEMO_SCENARIO, DEMO_NAME, true)}
               onContinue={resume}
@@ -680,6 +701,9 @@ function Desk({
           close={view.learning.monthClose}
           act={act}
           questions={view.learning.questions}
+          concepts={view.learning.notes
+            .slice(-3)
+            .map((n) => ({ conceptId: n.conceptId, label: n.label }))}
           onDismiss={onDismissMonth}
           onAsk={askWhy}
         />

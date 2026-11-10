@@ -4,6 +4,8 @@ import type { BillView, RunView } from "@fle/run";
 import { useState } from "react";
 import type { PayPalReceipt } from "../../lib/run-paypal";
 import type { SaveToken } from "../../lib/run-save";
+import { SandboxBadge } from "../ui/money-amount";
+import { Receipt } from "../ui/receipt";
 import { euros } from "./format";
 
 export type { PayPalReceipt };
@@ -101,6 +103,7 @@ export function PayWithPayPal({ save, bill, primary, where, onSettled }: PayWith
           ? "Paying through PayPal Sandbox…"
           : "Pay with PayPal Sandbox (test money)"}
       </button>
+      <SandboxBadge />
       {phase === "failed" ? (
         <p className="small" role="alert">
           {message}
@@ -136,32 +139,17 @@ export function PayPalReceiptCard({
     },
   ];
   return (
-    <section
-      className="run-receipt"
-      aria-label="PayPal Sandbox receipt"
-      data-testid="paypal-receipt"
-    >
-      <header className="run-receipt-head">
-        <h3>PayPal Sandbox receipt</h3>
-        <p className="small">Test money in PayPal&apos;s Sandbox. Nothing real moved.</p>
-      </header>
-      <ol className="run-receipt-steps">
-        {steps.map((s) => (
-          <li key={s.label}>
-            <span className="run-receipt-tick" aria-hidden="true">
-              ✓
-            </span>
-            <span>
-              <strong>{s.label}</strong>
-              <span className="small muted run-receipt-detail">{s.detail}</span>
-            </span>
-          </li>
-        ))}
-      </ol>
-      <p className="small muted run-receipt-evidence">Evidence: {receipt.evidence}</p>
-      <button type="button" className="btn btn-quiet" onClick={onClose}>
-        Close receipt
-      </button>
-    </section>
+    <Receipt
+      testId="paypal-receipt"
+      title="PayPal Sandbox receipt"
+      note="Test money in PayPal's Sandbox. Nothing real moved."
+      steps={steps}
+      evidence={receipt.evidence}
+      actions={
+        <button type="button" className="btn btn-quiet" onClick={onClose}>
+          Close receipt
+        </button>
+      }
+    />
   );
 }

@@ -2,6 +2,7 @@
 
 import type { LearningView, MonthClose, RunView, YearReview } from "@fle/run";
 import { useEffect, useId, useRef, useState } from "react";
+import { ConceptChip, ConceptRow } from "../ui/concept-chip";
 import { type AskWhy, AskWhyButton } from "./extras";
 import { euros, inDaysText, parseEuros } from "./format";
 import type { Act } from "./ui";
@@ -50,6 +51,12 @@ export function Asks({
           <QuestionSlip key={q.id} question={q} act={act} />
         ))}
       </ul>
+      <ConceptRow
+        concepts={view.learning.notes
+          .slice(-3)
+          .map((n) => ({ conceptId: n.conceptId, label: n.label }))}
+        label="Learn the idea behind these"
+      />
     </section>
   );
 }
@@ -138,12 +145,15 @@ export function MonthCloseSheet({
   close,
   act,
   questions,
+  concepts = [],
   onDismiss,
   onAsk,
 }: {
   close: MonthClose;
   act: Act;
   questions: readonly Question[];
+  /** Ideas this run has touched, linked to their lessons. */
+  concepts?: readonly { conceptId: string; label: string }[];
   onDismiss: () => void;
   onAsk: AskWhy;
 }) {
@@ -234,6 +244,7 @@ export function MonthCloseSheet({
                 <QuestionSlip key={q.id} question={q} act={act} />
               ))}
             </ul>
+            <ConceptRow concepts={concepts} label="Learn the idea" />
           </div>
         ) : null}
         <div className="run-sheet-foot">
@@ -394,6 +405,10 @@ export function Notes({ view }: { view: RunView }) {
             </p>
             <p className="mb-0" style={{ marginTop: 0 }}>
               {n.text}
+            </p>
+            <p className="concept-row">
+              <ConceptChip conceptId={n.conceptId} label={n.label} />
+              <span className="concept-row-label">Open the lesson</span>
             </p>
           </li>
         ))}
