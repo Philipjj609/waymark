@@ -5,6 +5,7 @@ import {
   type PaymentAttemptState,
   type ProviderOperationId,
   type VerifiedProviderEvent,
+  VerifiedProviderEventSchema,
   type WorldId,
 } from "@fle/contracts";
 
@@ -189,6 +190,52 @@ export type VerificationOutcome =
     };
 
 /**
+ * Internal proof of a matched capture. Target association belongs to the durable
+ * operation and its adapter; a proof never pretends that a Run is a World.
+ */
+export type MatchedCaptureProof = Pick<
+  VerifiedProviderEvent,
+  "provider" | "providerEventId" | "operationId" | "orderId" | "amount" | "verification"
+> & { readonly eventType: "CAPTURE_COMPLETED" };
+
+export type CaptureProofOutcome =
+  | { readonly ok: true; readonly proof: MatchedCaptureProof }
+  | Extract<VerificationOutcome, { readonly ok: false }>;
+
+const CAPTURE_PROOF_KEYS = [
+  "provider",
+  "providerEventId",
+  "operationId",
+  "orderId",
+  "eventType",
+  "amount",
+  "verification",
+] as const;
+
+/** Parse the persisted internal proof without manufacturing a World mapping. */
+export function parseMatchedCaptureProof(input: unknown): MatchedCaptureProof {
+  if (!input || typeof input !== "object" || Array.isArray(input))
+    throw new Error("invalid capture proof");
+  const row = input as Record<string, unknown>;
+  if (
+    Object.keys(row).length !== CAPTURE_PROOF_KEYS.length ||
+    CAPTURE_PROOF_KEYS.some((key) => !Object.hasOwn(row, key)) ||
+    row.eventType !== "CAPTURE_COMPLETED"
+  )
+    throw new Error("invalid capture proof fields");
+  const shape = VerifiedProviderEventSchema.shape;
+  return {
+    provider: shape.provider.parse(row.provider),
+    providerEventId: shape.providerEventId.parse(row.providerEventId),
+    operationId: shape.operationId.parse(row.operationId),
+    orderId: shape.orderId.parse(row.orderId),
+    eventType: "CAPTURE_COMPLETED",
+    amount: shape.amount.parse(row.amount),
+    verification: shape.verification.parse(row.verification),
+  };
+}
+
+/**
  * Decide whether server-observed PayPal state proves settlement of the mapped
  * obligation. Pure, so every rule is unit-tested without a network.
  */
@@ -198,6 +245,25 @@ export function verifyCapture(
   verifiedAt: string,
   method: VerifiedProviderEvent["verification"]["method"] = "ORDER_LOOKUP",
 ): VerificationOutcome {
+  const result = verifyCaptureProof(op, observed, verifiedAt, method);
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    event: {
+      schemaVersion: "provider.event.v1",
+      ...result.proof,
+      mapping: { worldId: op.worldId, obligationId: op.obligationId },
+    },
+  };
+}
+
+/** Same verification rules for every target, with no target-specific identifiers. */
+export function verifyCaptureProof(
+  op: Pick<ProviderOperation, "operationId" | "expected" | "paypalOrderId">,
+  observed: ObservedCapture,
+  verifiedAt: string,
+  method: VerifiedProviderEvent["verification"]["method"] = "ORDER_LOOKUP",
+): CaptureProofOutcome {
   const attemptState = attemptStateFrom(observed.orderStatus, observed.captureStatus);
   if (observed.paypalOrderId !== op.paypalOrderId)
     return { ok: false, reason: "ORDER_MISMATCH", attemptState };
@@ -220,15 +286,13 @@ export function verifyCapture(
     return { ok: false, reason: "AMOUNT_MISMATCH", attemptState };
   return {
     ok: true,
-    event: {
-      schemaVersion: "provider.event.v1",
+    proof: {
       provider: "PAYPAL_SANDBOX",
       providerEventId: observed.captureId,
       operationId: op.operationId,
       orderId: observed.paypalOrderId,
       eventType: "CAPTURE_COMPLETED",
       amount,
-      mapping: { worldId: op.worldId, obligationId: op.obligationId },
       verification: {
         method,
         verifiedAt,
