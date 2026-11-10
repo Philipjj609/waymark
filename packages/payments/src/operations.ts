@@ -7,14 +7,15 @@ import {
   type PayPalResult,
   type PayPalSandboxClient,
 } from "./client.js";
-import { type VerificationOutcome, verifyCapture } from "./paypal.js";
+import { parsePayPalAmount, type VerificationOutcome, verifyCapture } from "./paypal.js";
 
 /**
  * Provider operations (#21 D1a): the server's durable memory of what it asked PayPal to do.
  *
  * Rule: the record, including the PayPal-Request-Ids, is stored BEFORE any network call. A retry
  * after a crash, timeout or double click therefore reuses the same ids, and PayPal returns the
- * original order/capture instead of creating a second one (Sandbox evidence, P3/Q4).
+ * original order/capture within PayPal's retention window (Sandbox evidence, P3/Q4).
+ * Known orders are resumed by GET, never by another create POST.
  *
  * This module never touches the world: `verify` returns a `VerificationOutcome`; applying it
  * (APPLY_VERIFIED_PROVIDER_EVENT, reservation release, #81) is D1b. NO step state below means
@@ -44,6 +45,8 @@ export interface OperationRecord {
   readonly obligationId: ObligationId;
   readonly expected: Money;
   readonly createRequestId: string;
+  /** Epoch ms, persisted before the first create attempt. Absent on legacy records. */
+  readonly createStartedAt?: number;
   /** Rotated (and persisted before use) only after a DEFINITE capture refusal (#95 review H2). */
   readonly captureRequestId: string;
   readonly paypalOrderId: string | null;
@@ -138,6 +141,42 @@ const DEFINITE_CAPTURE_REFUSALS = new Set(["NOT_APPROVED", "DECLINED", "REJECTED
 /** Answers that mean money was, or may have been, captured. */
 const MONEY_SIGNALS = new Set(["OK", "PENDING", "ALREADY_CAPTURED", "UNCERTAIN"]);
 
+// PayPal documents six-hour create id retention. Stop an hour earlier to leave room for
+// bounded HTTP retries and clock skew. Unknown/legacy attempt ages require reconciliation.
+const CREATE_RETRY_WINDOW_MS = 5 * 60 * 60 * 1000;
+const retryWindowOpen = (first: number | undefined, now: number): boolean =>
+  first !== undefined &&
+  Number.isSafeInteger(first) &&
+  Number.isSafeInteger(now) &&
+  first >= 0 &&
+  now >= first &&
+  now - first < CREATE_RETRY_WINDOW_MS;
+const expiredCreate = (): PayPalResult<never> => ({
+  kind: "UNCERTAIN",
+  cause: "CREATE_RETRY_WINDOW_EXPIRED",
+  attempts: 0,
+  httpStatus: null,
+  debugId: null,
+});
+
+function matchesOperation(order: ObservedOrder, rec: OperationRecord): boolean {
+  if (
+    order.orderId !== rec.paypalOrderId ||
+    (order.referenceId !== rec.operationId && order.customId !== rec.operationId) ||
+    order.amountValue === null ||
+    order.currencyCode === null
+  )
+    return false;
+  try {
+    const amount = parsePayPalAmount(order.amountValue, order.currencyCode);
+    return (
+      amount.amountMinor === rec.expected.amountMinor && amount.currency === rec.expected.currency
+    );
+  } catch {
+    return false;
+  }
+}
+
 export type VerifyResult =
   | VerificationOutcome
   | {
@@ -155,7 +194,21 @@ export class SandboxCheckout {
     private readonly client: PayPalSandboxClient,
     private readonly store: ProviderOperationStore,
     private readonly newRequestId: () => string = randomUUID,
+    private readonly now: () => number = Date.now,
   ) {}
+
+  private async resume(rec: OperationRecord): Promise<PayPalResult<ObservedOrder>> {
+    if (!rec.paypalOrderId) return expiredCreate();
+    const result = await this.client.getOrder(rec.paypalOrderId);
+    if (result.kind !== "OK") return result;
+    if (!matchesOperation(result.value, rec))
+      return {
+        kind: "CONFLICT",
+        detail: "stored order does not match operation",
+        order: result.value,
+      };
+    return result;
+  }
 
   /** Creates (or, on retry, re-reads) the PayPal order for one operation. */
   async start(input: {
@@ -186,12 +239,20 @@ export class SandboxCheckout {
       rec.expected.currency !== input.amount.currency
     )
       return { kind: "NOT_SENT", cause: "operation id already used for a different payment" };
+    if (rec.paypalOrderId) return this.resume(rec);
     if (rec.createState === "REFUSED")
       return { kind: "NOT_SENT", cause: "PayPal refused this operation; start a new operation" };
-    await this.store.update(rec.operationId, (c) => ({
-      ...c,
-      createState: merge(c.createState, "STARTED"),
-    }));
+    const started = await this.store.update(rec.operationId, (c) => {
+      if (c.paypalOrderId || c.createState === "REFUSED") return c;
+      const first = c.createStartedAt ?? (c.createState === "NOT_STARTED" ? this.now() : undefined);
+      if (!retryWindowOpen(first, this.now())) return c;
+      return { ...c, createStartedAt: first, createState: merge(c.createState, "STARTED") };
+    });
+    // A concurrent start may already have bound the order while we waited for the row lock.
+    if (started.paypalOrderId) return this.resume(started);
+    if (started.createState === "REFUSED")
+      return { kind: "NOT_SENT", cause: "PayPal refused this operation; start a new operation" };
+    if (!retryWindowOpen(started.createStartedAt, this.now())) return expiredCreate();
     const r = await this.client.createOrder({
       requestId: rec.createRequestId,
       amount: rec.expected,
@@ -201,17 +262,28 @@ export class SandboxCheckout {
       ...(input.sandboxTestCard ? { sandboxTestCard: input.sandboxTestCard } : {}),
     });
     const order = orderOf(r);
-    await this.store.update(rec.operationId, (c) => ({
+    const recorded = await this.store.update(rec.operationId, (c) => ({
       ...c,
       // NOT_SENT: nothing reached PayPal, so only our STARTED marker is undone.
       createState:
         r.kind === "NOT_SENT"
           ? unsent(c.createState, rec.createState)
           : merge(c.createState, stepState(r)),
-      lastResult: summary(r),
+      lastResult:
+        order && c.paypalOrderId && c.paypalOrderId !== order.orderId
+          ? "UNCERTAIN:ORDER_MAPPING_CONFLICT"
+          : summary(r),
       // An order id, once known, is never replaced.
       paypalOrderId: c.paypalOrderId ?? order?.orderId ?? null,
     }));
+    if (order && recorded.paypalOrderId !== order.orderId)
+      return {
+        kind: "UNCERTAIN",
+        cause: "ORDER_MAPPING_CONFLICT",
+        attempts: 0,
+        httpStatus: null,
+        debugId: null,
+      };
     return r;
   }
 
