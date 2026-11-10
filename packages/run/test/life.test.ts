@@ -187,7 +187,8 @@ describe("rent escalation", () => {
     expect(s.person.reputation).toBeLessThanOrEqual(35);
 
     const recurringRent = s.recurring.find((r) => r.billKind === "RENT");
-    expect(recurringRent?.amountMinor).toBe(45_500);
+    // A worse room is not a cheaper one: rent stays the same after an eviction.
+    expect(recurringRent?.amountMinor).toBe(65_000);
     const moving = s.bills.find((b) => b.label === "Moving costs");
     expect(moving?.amountMinor).toBeGreaterThanOrEqual(30_000);
     expect(moving?.dueDay).toBe(47);
@@ -195,7 +196,7 @@ describe("rent escalation", () => {
     const rents = rentBills(s);
     expect(rents[0]?.status).toBe("LATE");
     expect(rents[0]?.amountMinor).toBe(69_000);
-    expect(rents.at(-1)?.amountMinor).toBeLessThan(65_000);
+    expect(rents.at(-1)?.amountMinor).toBe(65_000);
     assertBooksBalance(s);
   });
 
@@ -226,10 +227,13 @@ describe("hours and wellbeing", () => {
     expect(kinds(s, "WORN_OUT")).toHaveLength(1);
     expect(kinds(s, "WORN_OUT")[0]?.day).toBe(21);
     expect(s.person.workedStreak).toBe(0);
-    expect(s.person.wornOutWeeks).toBe(1);
-    expect(s.hours.budget).toBe(45);
+    expect(s.person.wornOutWeeks).toBe(2);
+    expect(s.hours.budget).toBe(35);
 
     while (s.day < 29) s = step(s, WEEK);
+    expect(s.person.wornOutWeeks).toBe(1);
+    expect(s.hours.budget).toBe(35);
+    while (s.day < 36) s = step(s, WEEK);
     expect(s.person.wornOutWeeks).toBe(0);
     expect(s.hours.budget).toBe(60);
     expect(kinds(s, "RECOVERED")).toHaveLength(1);

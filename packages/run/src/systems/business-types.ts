@@ -85,9 +85,11 @@ export const SERVICE_BASE_JOBS_X100 = 450;
 
 export type PriceLevel = "LOW" | "STANDARD" | "PREMIUM";
 export const SERVICE_PRICE: Record<PriceLevel, { minor: Minor; demandPct: number }> = {
-  LOW: { minor: 18_000, demandPct: 130 },
-  STANDARD: { minor: 25_000, demandPct: 100 },
-  PREMIUM: { minor: 38_000, demandPct: 60 },
+  // Tuned by the R9 sweep: at €250 a job the studio paid about €42 an hour and beat every other
+  // path by 3x. These give roughly €20-25 an hour before marketing, still above a starting wage.
+  LOW: { minor: 11_000, demandPct: 130 },
+  STANDARD: { minor: 15_000, demandPct: 100 },
+  PREMIUM: { minor: 23_000, demandPct: 60 },
 };
 
 /** Waiting for payment is a kindness to clients, so longer terms win a little more work. */
@@ -157,7 +159,8 @@ export const BULK_DISCOUNT_PCT = 10;
 export const STALL_FEE_MINOR: Minor = 6_000;
 export const SPOIL_PCT = 3;
 /** Units a week at 50% markup, 4 days open, no marketing, reputation 50, in hundredths. */
-export const STOCK_BASE_UNITS_X100 = 7_000;
+/** Tuned by the R9 sweep: at 70 the stall could not cover rent whatever the levers. */
+export const STOCK_BASE_UNITS_X100 = 14_000;
 export const HOURS_PER_DAY_OPEN = 6;
 
 export const STOCK_LEVERS: readonly LeverSpec[] = [

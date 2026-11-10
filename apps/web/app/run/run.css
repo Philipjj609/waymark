@@ -1,0 +1,600 @@
+/*
+ * The Run (#112 / R8). Reuses the tokens in globals.css and adds only what the Run needs. A
+ * notebook feel: warm paper, one green accent, a serif for the headings that carry the story.
+ * Dark mode lives here because globals.css has no dark palette yet; it is scoped to pages that
+ * contain .run so it can never recolour the other screens.
+ */
+@media (prefers-color-scheme: dark) {
+  body:has(.run) {
+    --color-bg: #15181b;
+    --color-surface: #1d2125;
+    --color-ink: #ebe7dd;
+    --color-ink-muted: #aaa89f;
+    --color-line: #333a40;
+    --color-accent: #6fc2a6;
+    --color-accent-ink: #0d1f19;
+    --color-focus: #8ab4ff;
+    --color-control-border: #8a8d90;
+    --tone-upcoming-ink: #c9d1da;
+    --tone-upcoming-bg: #2a3036;
+    --tone-due-ink: #f0c987;
+    --tone-due-bg: #3b3020;
+    --tone-overdue-ink: #f5b3ad;
+    --tone-overdue-bg: #43211f;
+    --tone-paid-ink: #9fdcc5;
+    --tone-paid-bg: #1f3a31;
+    --tone-other-ink: #c9d1da;
+    --tone-other-bg: #2a3036;
+    --fiction-bg: #3d3414;
+    --fiction-ink: #f1e2a6;
+    --shadow: none;
+  }
+}
+
+.run {
+  --run-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --run-danger: var(--tone-overdue-ink);
+  min-height: 100dvh;
+}
+
+.run-page {
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: var(--space-4);
+  overflow-wrap: anywhere;
+}
+
+.run[data-busy="true"] .btn,
+.run[data-busy="true"] .run-segment,
+.run[data-busy="true"] .run-switch {
+  cursor: progress;
+}
+
+.run-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- frame */
+.run-top {
+  margin-bottom: var(--space-3);
+}
+.run-brand {
+  margin: 0 0 var(--space-2);
+  font-family: var(--run-serif);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.run-banner {
+  margin-bottom: 0;
+}
+
+.run-panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  min-width: 0;
+}
+.run-panel:focus {
+  outline: none;
+}
+.run-panel:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.run-h {
+  margin: 0 0 var(--space-3);
+  font-family: var(--run-serif);
+  font-size: var(--text-lg);
+  font-weight: 650;
+}
+.run-h-big {
+  font-size: var(--text-xl);
+  line-height: 1.2;
+}
+.run-h-type {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+.run-h-sub {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-md);
+  font-weight: 650;
+}
+.run-h-sub-lg {
+  margin: var(--space-5) 0 var(--space-3);
+}
+
+/* ---- the desk header */
+.run-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-5);
+  margin-bottom: var(--space-3);
+}
+.run-date {
+  margin: 0;
+  font-family: var(--run-serif);
+  font-size: var(--text-xl);
+  line-height: 1.2;
+}
+.run-advance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.run-tabs {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-line);
+}
+.run-tab {
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: none;
+  color: var(--color-ink-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.run-tab[aria-current="page"] {
+  color: var(--color-ink);
+  border-bottom-color: var(--color-accent);
+}
+
+/* ---- buttons: the shared .btn comes from globals.css; these are the Run's variants */
+.btn-quiet {
+  border-color: var(--color-line);
+  background: transparent;
+  font-weight: 500;
+  color: var(--color-ink-muted);
+}
+.btn-danger {
+  border-color: var(--run-danger);
+  color: var(--run-danger);
+}
+
+/* ---- why time stopped */
+.run-stops {
+  border-left: 5px solid var(--color-accent);
+}
+.run-stop-list {
+  font-size: var(--text-md);
+}
+
+/* ---- money strip */
+.run-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: var(--space-3) var(--space-4);
+  margin: 0;
+}
+.run-stat dt {
+  color: var(--color-ink-muted);
+  font-size: var(--text-sm);
+}
+.run-stat dd {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 650;
+}
+.run-note {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--tone-due-bg);
+  color: var(--tone-due-ink);
+  font-size: var(--text-sm);
+}
+
+.run-hours {
+  margin-top: var(--space-4);
+}
+.run-hours-label {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+.run-bar {
+  display: flex;
+  height: 14px;
+  overflow: hidden;
+  border: 1px solid var(--color-control-border);
+  border-radius: 999px;
+  background: var(--tone-upcoming-bg);
+}
+.run-bar-committed {
+  background: var(--color-accent);
+  transition: width 0.25s ease;
+}
+.run-bar-used {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--tone-due-ink),
+    var(--tone-due-ink) 4px,
+    var(--tone-due-bg) 4px,
+    var(--tone-due-bg) 8px
+  );
+  transition: width 0.25s ease;
+}
+.run-legend {
+  margin: var(--space-2) 0 0;
+}
+.run-key {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  margin-right: 2px;
+  vertical-align: -2px;
+  border-radius: 3px;
+}
+.run-key-committed {
+  background: var(--color-accent);
+}
+.run-key-used {
+  background: var(--tone-due-ink);
+}
+
+/* ---- layout */
+.run-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 var(--space-4);
+  align-items: start;
+}
+.run-col {
+  min-width: 0;
+}
+@media (max-width: 820px) {
+  .run-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- lists and cards */
+.run-list,
+.run-options,
+.run-quiet,
+.run-starts,
+.run-timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.run-list {
+  display: grid;
+  gap: var(--space-3);
+}
+.run-quiet {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--color-ink-muted);
+}
+.run-card {
+  padding: var(--space-3);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+}
+.run-card-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.run-card-title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-md);
+  font-weight: 650;
+}
+.run-card-body {
+  margin: var(--space-2) 0 var(--space-3);
+}
+.run-options {
+  display: grid;
+  gap: var(--space-2);
+}
+.run-options .btn {
+  width: 100%;
+  text-align: left;
+}
+.run-why {
+  display: block;
+  margin: var(--space-1) 0 0 var(--space-1);
+}
+.run-hours-need {
+  font-weight: 500;
+  color: var(--color-ink-muted);
+}
+
+.run-bill {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+}
+.run-bill-name {
+  margin: 0;
+  font-weight: 600;
+}
+.run-bill-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+}
+.run-amount {
+  font-weight: 650;
+}
+.run-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* ---- forms */
+.run-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.run-inline label {
+  font-size: var(--text-sm);
+}
+.run-input {
+  min-height: 44px;
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--space-2);
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+}
+input.run-input {
+  width: 7rem;
+}
+.run-problem {
+  margin: var(--space-2) 0 0;
+  color: var(--tone-overdue-ink);
+}
+.run-problem-box,
+.run-refusal {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--tone-overdue-bg);
+  color: var(--tone-overdue-ink);
+}
+.run-confirm {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 2px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+/* ---- levers */
+.run-levers {
+  display: grid;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.run-lever {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.run-lever legend,
+.run-lever > label,
+.run-lever > span {
+  padding: 0;
+  font-weight: 600;
+}
+.run-lever input[type="range"] {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: var(--space-1) 0;
+  accent-color: var(--color-accent);
+}
+.run-segments {
+  display: flex;
+  flex-wrap: wrap;
+  margin: var(--space-2) 0;
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.run-segment {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 5.5rem;
+  cursor: pointer;
+}
+.run-segment + .run-segment {
+  border-left: 1px solid var(--color-control-border);
+}
+.run-segment input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+.run-segment span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  text-align: center;
+}
+.run-segment input:checked + span {
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  font-weight: 650;
+}
+.run-segment input:focus-visible + span {
+  outline: 3px solid var(--color-focus);
+  outline-offset: -3px;
+}
+.run-lever-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+.run-lever-help {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.run-switch {
+  min-width: 4.5rem;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-control-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.run-switch[aria-checked="true"] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-ink);
+}
+
+.run-pairs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-3);
+}
+.run-pairs dt {
+  color: var(--color-ink-muted);
+  font-size: var(--text-sm);
+}
+.run-pairs dd {
+  margin: 0;
+  font-weight: 600;
+}
+.run-pairs-stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ---- timeline: fixed money is solid, hoped-for money is dashed and italic */
+.run-timeline {
+  display: grid;
+  gap: var(--space-2);
+}
+.run-tl {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr) auto;
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-line);
+  border-left-width: 5px;
+  border-radius: var(--radius-sm);
+}
+.run-tl[data-certainty="KNOWN"] {
+  border-left-style: solid;
+  border-left-color: var(--color-ink);
+}
+.run-tl[data-certainty="EXPECTED"] {
+  border-style: dashed;
+  border-left-width: 5px;
+  border-color: var(--color-control-border);
+  font-style: italic;
+  background: transparent;
+}
+.run-tl-amount {
+  font-weight: 650;
+  text-align: right;
+}
+.run-tl .chip {
+  grid-column: 2 / -1;
+  justify-self: start;
+  font-style: normal;
+}
+@media (max-width: 480px) {
+  .run-tl {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .run-tl-when {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ---- start screen */
+.run-intro p {
+  max-width: 60ch;
+}
+.run-starts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--space-4);
+}
+.run-start {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+}
+.run-start .btn {
+  margin-top: auto;
+}
+
+/* ---- sheets: month close and year review */
+.run-sheet {
+  border: 2px solid var(--color-accent);
+}
+
+.run-foot {
+  margin: var(--space-5) 0 var(--space-4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-bar-committed,
+  .run-bar-used {
+    transition: none;
+  }
+}
+
+fieldset.run-confirm {
+  min-width: 0;
+  margin-inline: 0;
+  margin-bottom: 0;
+}

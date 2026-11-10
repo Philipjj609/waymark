@@ -8,6 +8,8 @@ export const DAYS_PER_MONTH = DAYS_PER_WEEK * WEEKS_PER_MONTH; // 28
 export const MONTHS_PER_YEAR = 12;
 export const DAYS_PER_YEAR = DAYS_PER_MONTH * MONTHS_PER_YEAR; // 336
 export const MAX_DAY = 100_000;
+/** A run ends after ten years: long enough for a life chapter, short enough to replay quickly. */
+export const RUN_HORIZON_DAY = DAYS_PER_YEAR * 10;
 
 export interface Calendar {
   readonly day: number;

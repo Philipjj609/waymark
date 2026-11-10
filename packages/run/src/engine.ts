@@ -1,5 +1,5 @@
 import { Ledger } from "@fle/domain";
-import { isWeekStart, MAX_DAY } from "./clock.js";
+import { isWeekStart, RUN_HORIZON_DAY } from "./clock.js";
 import { scenario as scenarioById } from "./content/scenarios.js";
 import { applyEffects } from "./effects.js";
 import { systems } from "./systems/index.js";
@@ -119,9 +119,11 @@ function handler(cmd: Command) {
 }
 
 function advance(w: World, mode: "NEXT_STOP" | "WEEK"): Refusal | undefined {
-  if (w.day >= MAX_DAY) return { code: "RUN_OVER", message: "This run has reached its last day." };
+  if (w.day >= RUN_HORIZON_DAY) {
+    return { code: "RUN_OVER", message: "This run has reached its last day: ten years." };
+  }
   w.s.stops = [];
-  for (let i = 0; i < MAX_DAYS_PER_ADVANCE && w.day < MAX_DAY; i++) {
+  for (let i = 0; i < MAX_DAYS_PER_ADVANCE && w.day < RUN_HORIZON_DAY; i++) {
     endDay(w);
     w.s.day += 1;
     beginDay(w);

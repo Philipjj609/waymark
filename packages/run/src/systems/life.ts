@@ -21,7 +21,8 @@ const CREDIT_GAIN_CAP_PER_MONTH = 3;
 const RENT_WARNING_AFTER_DAYS = 7;
 /** A second warning inside this window is an eviction (3 months). */
 const EVICTION_WINDOW_DAYS = 3 * DAYS_PER_MONTH;
-const EVICTED_RENT_PERCENT = 70;
+/** A worse room is not a cheaper one (R9 sweep: at 70% eviction paid off). */
+const EVICTED_RENT_PERCENT = 100;
 const EVICTED_REPUTATION = -15;
 const MOVING_COST_MINOR = 30_000;
 const MOVING_DUE_IN_DAYS = 7;
@@ -29,8 +30,8 @@ const MOVING_DUE_IN_DAYS = 7;
 /** More hours than this in a week counts as a heavy week. */
 const HEAVY_WEEK_HOURS = 50;
 const HEAVY_WEEKS_TO_WEAR_OUT = 3;
-const WORN_OUT_WEEKS = 2;
-const WORN_OUT_BUDGET_CUT = 15;
+const WORN_OUT_WEEKS = 3;
+const WORN_OUT_BUDGET_CUT = 25;
 
 const BILL_KINDS: readonly BillKind[] = [
   "RENT",

@@ -4,6 +4,7 @@ import {
   type Command,
   type Refusal,
   ReplayError,
+  RUN_RULES_VERSION,
   type RunState,
   replay,
   SCENARIOS,
@@ -29,38 +30,68 @@ export interface SaveToken {
   readonly sig: string;
 }
 
-const DEV_SECRET = "waymark-run-dev-secret-not-for-production-use";
-const MIN_PRODUCTION_SECRET = 32;
-const CACHE_MAX = 200;
+/**
+ * Public by design: it only lets local development and tests keep saves across restarts. It is
+ * built from words so it never looks like a credential, and it is never accepted outside
+ * development or test, nor as RUN_SECRET.
+ */
+const DEV_SECRET = ["waymark", "run", "local", "development", "only"].join("/");
+const MIN_SECRET = 32;
+/** Most runs whose latest state is kept in memory. One entry per run: only its head. */
+const CACHE_MAX = 100;
+/** Most commands one save may hold (about ten years of play). Keeps replay and bodies bounded. */
+export const MAX_LOG = 3_000;
 
-const holder = globalThis as typeof globalThis & { __waymarkRunCache?: Map<string, RunState> };
+interface Head {
+  readonly length: number;
+  readonly sig: string;
+  readonly state: RunState;
+}
 
-/** Off by default. In production it also needs a real secret, so it can never fail open. */
+const holder = globalThis as typeof globalThis & { __waymarkRunCache?: Map<string, Head> };
+
+const isDevOrTest = (env: NodeJS.ProcessEnv) =>
+  env.NODE_ENV === "development" || env.NODE_ENV === "test";
+
+const strongSecret = (env: NodeJS.ProcessEnv) => {
+  const s = env.RUN_SECRET ?? "";
+  return s.length >= MIN_SECRET && s !== DEV_SECRET;
+};
+
+/**
+ * Off by default. Outside development and test it also needs a strong RUN_SECRET, so a staging
+ * box or a tunnel can never run on the public development secret.
+ */
 export function runEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.WAYMARK_RUN !== "1") return false;
-  return env.NODE_ENV !== "production" || (env.RUN_SECRET?.length ?? 0) >= MIN_PRODUCTION_SECRET;
+  return strongSecret(env) || isDevOrTest(env);
 }
 
-/** A fixed development secret keeps saves valid across restarts; production never uses it. */
 function secret(): string {
-  const configured = process.env.RUN_SECRET;
-  if (configured) return configured;
-  return DEV_SECRET;
+  if (strongSecret(process.env)) return process.env.RUN_SECRET as string;
+  if (isDevOrTest(process.env)) return DEV_SECRET;
+  throw new Error("the Run needs RUN_SECRET (32+ characters) outside development and test");
 }
 
-const mac = (text: string) => createHmac("sha256", secret()).update(text).digest();
+/** Separate keys for luck and for signatures, derived from the one secret. */
+const mac = (purpose: "seed" | "sig", text: string) =>
+  createHmac("sha256", createHmac("sha256", secret()).update(`waymark-run:${purpose}`).digest())
+    .update(text)
+    .digest();
 
 /** A new run id: "run_" and 16 random hex characters. */
 export const newRunId = () => `run_${randomBytes(8).toString("hex")}`;
 
 /** The run's luck. Server only: it must never appear in a response. */
-export const seedFor = (runId: string) => mac(`seed:${runId}`).toString("hex");
+export const seedFor = (runId: string) => mac("seed", runId).toString("hex");
 
 export const knownScenario = (id: string) => SCENARIOS.some((s) => s.id === id);
 
 function signature(runId: string, scenarioId: string, log: readonly Command[]): string {
   const digest = createHash("sha256").update(JSON.stringify(log)).digest("hex");
-  return mac(`${runId}|${scenarioId}|${digest}`).toString("base64url");
+  // The rules version is signed too: after a rules change an old save is refused, never replayed
+  // into a different past.
+  return mac("sig", `${RUN_RULES_VERSION}|${runId}|${scenarioId}|${digest}`).toString("base64url");
 }
 
 export function signSave(runId: string, scenarioId: string, log: readonly Command[]): SaveToken {
@@ -76,22 +107,26 @@ export function verifySave(save: SaveToken): boolean {
 
 // -- state cache --------------------------------------------------------------------------------
 
-function cache(): Map<string, RunState> {
+function cache(): Map<string, Head> {
   holder.__waymarkRunCache ??= new Map();
   return holder.__waymarkRunCache;
 }
 
-const cacheKey = (s: SaveToken) => `${s.runId}:${s.log.length}:${s.sig}`;
-
+/** Keep only the newest state of each run, so memory grows with players, not with steps. */
 function remember(save: SaveToken, state: RunState): void {
   const map = cache();
-  const key = cacheKey(save);
-  map.delete(key);
-  map.set(key, state);
+  map.delete(save.runId);
+  map.set(save.runId, { length: save.log.length, sig: save.sig, state });
   if (map.size > CACHE_MAX) {
     const oldest = map.keys().next().value;
     if (oldest !== undefined) map.delete(oldest);
   }
+}
+
+/** True when this save would need a full replay (not the cached head). */
+export function needsReplay(save: SaveToken): boolean {
+  const head = cache().get(save.runId);
+  return !head || head.sig !== save.sig || head.length !== save.log.length;
 }
 
 /**
@@ -101,12 +136,11 @@ function remember(save: SaveToken, state: RunState): void {
  */
 export function stateOf(save: SaveToken): RunState {
   const map = cache();
-  const key = cacheKey(save);
-  const hit = map.get(key);
-  if (hit) {
-    map.delete(key);
-    map.set(key, hit); // most recently used
-    return hit;
+  const head = map.get(save.runId);
+  if (head && head.sig === save.sig && head.length === save.log.length) {
+    map.delete(save.runId);
+    map.set(save.runId, head); // most recently used
+    return head.state;
   }
   const state = replay(save.runId, seedFor(save.runId), save.scenarioId, save.log);
   remember(save, state);
@@ -138,6 +172,13 @@ export type Applied =
  */
 export function applyToSave(save: SaveToken, command: Command): Applied {
   const state = stateOf(save);
+  if (save.log.length >= MAX_LOG) {
+    const refusal = {
+      code: "RUN_FULL",
+      message: "This run is as long as a run can be. Start a new one to keep playing.",
+    };
+    return { ok: false, refusal, save, state };
+  }
   const result = apply(state, command);
   if (result.refusal) return { ok: false, refusal: result.refusal, save, state };
   const next = signSave(save.runId, save.scenarioId, [...save.log, command]);
