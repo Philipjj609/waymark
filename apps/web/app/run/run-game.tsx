@@ -2,28 +2,36 @@
 
 import type { Command, RunView } from "@fle/run";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  callRun,
-  clearStoredSave,
-  type RunBody,
-  readStoredSave,
-  type SaveToken,
-  writeStoredSave,
-} from "./api";
+import { AdvisorPanel } from "./advisor-panel";
+import { callRun, type RunBody, type SaveToken } from "./api";
 import { Businesses } from "./business-panel";
 import { Borrowing, Transfer } from "./finance-panels";
 import { euros } from "./format";
 import { Bills, Inbox, Invoices } from "./inbox";
 import { Asks, MonthCloseSheet, Notes, YearReviewPage } from "./learning-panels";
 import { MoneyStrip } from "./money-strip";
+import { NeedsYou, type Pane } from "./needs-you";
 import { type ScenarioSummary, StartScreen } from "./start-screen";
+import { loadRuns, type StoredRun, sortRuns, writeRuns } from "./storage";
 import { Feed, Timeline } from "./timeline";
 import type { Act } from "./ui";
+import { WeekStrip } from "./week-strip";
 import "./run.css";
 
 export type { ScenarioSummary };
 
-type Problem = { kind: "unverified" } | { kind: "failed"; message: string };
+type Problem =
+  | { kind: "unverified"; message: string; runId: string | null; runName: string | null }
+  | { kind: "failed"; message: string };
+
+interface Active {
+  readonly id: string;
+  readonly name: string;
+  readonly scenarioId: string;
+}
+
+const FONTS_HREF =
+  "https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Literata:opsz,wght@7..72,400;7..72,600;7..72,700&display=swap";
 
 /** What changed, in a sentence or two, for the screen-reader live region. */
 function describeChange(prev: RunView | null, next: RunView, command: Command | null): string {
@@ -38,32 +46,66 @@ function describeChange(prev: RunView | null, next: RunView, command: Command | 
       parts.push(`Your cash is now ${euros(after)}.`);
     }
   }
-  if (command?.kind === "ADVANCE" && next.stops.length > 0) {
-    parts.push(`Time stopped: ${next.stops.map((s) => s.text).join(" ")}`);
+  if (command?.kind === "ADVANCE") {
+    const needs = next.stops.filter((s) => s.kind !== "RUN_START");
+    if (needs.length > 0) parts.push(`What needs you now: ${needs.map((s) => s.text).join(" ")}`);
   }
   return parts.join(" ");
 }
 
-export function RunGame({ scenarios }: { scenarios: readonly ScenarioSummary[] }) {
+export function RunGame({
+  scenarios,
+  paypalSandbox,
+}: {
+  scenarios: readonly ScenarioSummary[];
+  /** True when the server has PayPal Sandbox configured; shows the sandbox pay button on bills. */
+  paypalSandbox: boolean;
+}) {
   const [view, setView] = useState<RunView | null>(null);
   const [save, setSave] = useState<SaveToken | null>(null);
-  const [stored, setStored] = useState<SaveToken | null>(null);
+  const [active, setActive] = useState<Active | null>(null);
+  const [runs, setRuns] = useState<readonly StoredRun[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [announce, setAnnounce] = useState("");
-  const [page, setPage] = useState<"desk" | "notes">("desk");
   const [dismissed, setDismissed] = useState<readonly string[]>([]);
   const busyRef = useRef(false);
   const pendingFocus = useRef<string | null>(null);
+  const runsRef = useRef<readonly StoredRun[]>([]);
+  const activeRef = useRef<Active | null>(null);
+  const viewRef = useRef<RunView | null>(null);
 
-  // Storage is read after mount so the server and first client render agree.
-  useEffect(() => {
-    setStored(readStoredSave());
+  const titleOf = useCallback(
+    (id: string) => scenarios.find((s) => s.id === id)?.title ?? id,
+    [scenarios],
+  );
+
+  const commitRuns = useCallback((next: readonly StoredRun[]) => {
+    runsRef.current = next;
+    setRuns(next);
+    writeRuns(next);
   }, []);
 
-  // After an update, put keyboard focus somewhere sensible: the "why time stopped" list after
-  // time moves, or the section the player was in if the button they pressed has gone.
+  // Storage and the web fonts are browser-only, so both are set up after mount: the server and
+  // first client render agree, and a missing font or blocked storage changes nothing but looks.
+  useEffect(() => {
+    const found = loadRuns(titleOf);
+    runsRef.current = found;
+    setRuns(found);
+    setLoaded(true);
+    if (!document.querySelector("link[data-run-fonts]")) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = FONTS_HREF;
+      link.dataset.runFonts = "1";
+      document.head.appendChild(link);
+    }
+  }, [titleOf]);
+
+  // After an update, put keyboard focus somewhere sensible: "What needs you now" after time
+  // moves, or the section the player was in if the button they pressed has gone.
   useEffect(() => {
     const target = pendingFocus.current;
     if (!target || !view) return;
@@ -75,22 +117,50 @@ export function RunGame({ scenarios }: { scenarios: readonly ScenarioSummary[] }
     }
   }, [view]);
 
+  /** Takes a view and save the server vouched for, and remembers the run in this browser. */
+  const adopt = useCallback(
+    (nextSave: SaveToken, nextView: RunView, who: Active, command: Command | null) => {
+      setAnnounce(describeChange(viewRef.current, nextView, command));
+      viewRef.current = nextView;
+      activeRef.current = who;
+      setActive(who);
+      setView(nextView);
+      setSave(nextSave);
+      setRefusal(null);
+      setProblem(null);
+      const entry: StoredRun = {
+        id: who.id,
+        name: who.name,
+        scenarioId: who.scenarioId,
+        save: nextSave,
+        calendarLabel: nextView.calendar.label,
+        updatedAt: Date.now(),
+      };
+      commitRuns(sortRuns([entry, ...runsRef.current.filter((r) => r.id !== who.id)]));
+    },
+    [commitRuns],
+  );
+
   /** One request at a time: a click that arrives while another is in flight is ignored. */
   const request = useCallback(
-    async (body: RunBody, command: Command | null): Promise<boolean> => {
+    async (
+      body: RunBody,
+      command: Command | null,
+      opening: { name: string; scenarioId: string; id?: string } | null,
+    ): Promise<boolean> => {
       if (busyRef.current) return false;
       busyRef.current = true;
       setBusy(true);
       try {
         const out = await callRun(body);
+        const who = (id: string): Active | null =>
+          opening
+            ? { id: opening.id ?? id, name: opening.name, scenarioId: opening.scenarioId }
+            : activeRef.current;
         if (out.kind === "ok") {
-          setAnnounce(describeChange(view, out.view, command));
-          setView(out.view);
-          setSave(out.save);
-          writeStoredSave(out.save);
-          setStored(out.save);
-          setRefusal(null);
-          setProblem(null);
+          const a = who(out.save.runId);
+          if (!a) return false;
+          adopt(out.save, out.view, a, command);
           return true;
         }
         if (out.kind === "refused") {
@@ -98,17 +168,25 @@ export function RunGame({ scenarios }: { scenarios: readonly ScenarioSummary[] }
           setAnnounce(out.message);
           return false;
         }
-        setProblem(out.kind === "unverified" ? { kind: "unverified" } : out);
-        setAnnounce(
-          out.kind === "unverified" ? "This saved run could not be verified." : out.message,
-        );
+        if (out.kind === "unverified") {
+          const a = opening ?? activeRef.current;
+          setProblem({
+            kind: "unverified",
+            message: out.message,
+            runId: opening?.id ?? activeRef.current?.id ?? null,
+            runName: a?.name ?? null,
+          });
+        } else {
+          setProblem(out);
+        }
+        setAnnounce(out.message);
         return false;
       } finally {
         busyRef.current = false;
         setBusy(false);
       }
     },
-    [view],
+    [adopt],
   );
 
   const act: Act = useCallback(
@@ -116,76 +194,118 @@ export function RunGame({ scenarios }: { scenarios: readonly ScenarioSummary[] }
       if (!save) return Promise.resolve(false);
       const home = (document.activeElement as HTMLElement | null)?.closest("[data-focus-home]")?.id;
       pendingFocus.current = command.kind === "ADVANCE" ? "run-stops" : (home ?? "run-stops");
-      return request({ action: "command", save, command }, command);
+      return request({ action: "command", save, command }, command, null);
     },
     [save, request],
   );
 
-  const start = (scenarioId: string) => {
-    pendingFocus.current = "run-stops";
+  const resetScreen = () => {
     setDismissed([]);
-    setPage("desk");
-    void request({ action: "start", scenarioId }, null);
+    setRefusal(null);
+    setProblem(null);
   };
 
-  const resume = () => {
-    if (!stored) return;
+  const start = (scenarioId: string, name: string) => {
     pendingFocus.current = "run-stops";
-    setDismissed([]);
-    setPage("desk");
-    void request({ action: "view", save: stored }, null);
+    resetScreen();
+    void request({ action: "start", scenarioId }, null, { name, scenarioId });
   };
 
-  const startOver = () => {
-    clearStoredSave();
-    setStored(null);
+  const resume = (id: string) => {
+    const run = runsRef.current.find((r) => r.id === id);
+    if (!run) return;
+    pendingFocus.current = "run-stops";
+    resetScreen();
+    viewRef.current = null;
+    void request({ action: "view", save: run.save }, null, {
+      name: run.name,
+      scenarioId: run.scenarioId,
+      id: run.id,
+    });
+  };
+
+  const leave = () => {
+    viewRef.current = null;
+    activeRef.current = null;
+    setActive(null);
     setView(null);
     setSave(null);
-    setProblem(null);
-    setRefusal(null);
-    setAnnounce("Back at the start.");
+    resetScreen();
+    setAnnounce("Back at your runs.");
+  };
+
+  const removeRun = (id: string) => {
+    commitRuns(runsRef.current.filter((r) => r.id !== id));
+    if (activeRef.current?.id === id) leave();
+    setProblem((p) => (p?.kind === "unverified" && p.runId === id ? null : p));
+    setAnnounce("Run deleted from this device.");
   };
 
   const monthKey = view?.learning.monthClose ? `m${view.learning.monthClose.monthIndex}` : null;
   const yearKey = view?.learning.yearReview ? `y${view.learning.yearReview.year}` : null;
-  const dismiss = (key: string) => setDismissed((d) => [...d, key]);
+  const dismiss = (key: string) => setDismissed((d) => (d.includes(key) ? d : [...d, key]));
+  const reopen = (key: string) => setDismissed((d) => d.filter((k) => k !== key));
+  const playing = view !== null && save !== null && active !== null;
 
   return (
     <div className="run" data-testid="run-root" data-busy={busy}>
       <div className="run-page">
         <header className="run-top">
           <p className="run-brand">The Run</p>
-          <p className="fiction-banner run-banner">
+          <p className="run-banner">
             <strong>Practice money, not real.</strong> Every amount here is made up. This is a
             learning game, not financial advice.
           </p>
+          {playing ? (
+            <button type="button" className="btn btn-quiet" data-testid="leave-run" onClick={leave}>
+              Your runs
+            </button>
+          ) : null}
         </header>
 
         <div className="run-sr" role="status" aria-live="polite" aria-atomic="true">
           {announce}
         </div>
 
-        {problem ? <ProblemNotice problem={problem} onStartOver={startOver} /> : null}
+        {problem ? (
+          <ProblemNotice
+            problem={problem}
+            onRemove={removeRun}
+            onClose={() => setProblem(null)}
+            onLeave={leave}
+            playing={playing}
+          />
+        ) : null}
 
-        {!view || !save ? (
+        {!playing || !view || !save || !active ? (
           <StartScreen
             scenarios={scenarios}
-            canContinue={stored !== null}
+            runs={runs}
+            loaded={loaded}
             onStart={start}
             onContinue={resume}
+            onDelete={removeRun}
           />
         ) : view.learning.yearReview && yearKey && !dismissed.includes(yearKey) ? (
-          <YearReviewPage review={view.learning.yearReview} onDismiss={() => dismiss(yearKey)} />
+          <YearReviewPage
+            review={view.learning.yearReview}
+            act={act}
+            questions={view.learning.questions}
+            onDismiss={() => dismiss(yearKey)}
+          />
         ) : (
           <Desk
             view={view}
+            save={save}
+            runName={active.name}
             act={act}
-            page={page}
-            setPage={setPage}
             refusal={refusal}
-            monthCloseShown={monthKey !== null && !dismissed.includes(monthKey)}
+            paypalSandbox={paypalSandbox}
+            monthSheetOpen={monthKey !== null && !dismissed.includes(monthKey)}
             onDismissMonth={() => monthKey && dismiss(monthKey)}
-            onStartOver={startOver}
+            onOpenMonth={() => monthKey && reopen(monthKey)}
+            onOpenYear={() => yearKey && reopen(yearKey)}
+            onSettled={(next) => adopt(next.save, next.view, active, null)}
           />
         )}
       </div>
@@ -193,173 +313,262 @@ export function RunGame({ scenarios }: { scenarios: readonly ScenarioSummary[] }
   );
 }
 
-function ProblemNotice({ problem, onStartOver }: { problem: Problem; onStartOver: () => void }) {
+function ProblemNotice({
+  problem,
+  playing,
+  onRemove,
+  onClose,
+  onLeave,
+}: {
+  problem: Problem;
+  playing: boolean;
+  onRemove: (id: string) => void;
+  onClose: () => void;
+  onLeave: () => void;
+}) {
+  if (problem.kind === "failed") {
+    return (
+      <div className="run-problem-box" role="alert" data-testid="problem">
+        <p className="mt-0 mb-0">{problem.message}</p>
+      </div>
+    );
+  }
   return (
-    <div className="run-problem-box" data-testid="problem">
-      {problem.kind === "unverified" ? (
-        <>
-          <p className="mt-0">
-            <strong>We could not verify this saved run.</strong> The save may have been changed, or
-            the game's rules may have moved on since you saved. Your run cannot be opened, but you
-            can start a new one.
-          </p>
-          <button type="button" className="btn" data-testid="start-over" onClick={onStartOver}>
-            Start over
+    <div className="run-problem-box" role="alert" data-testid="problem">
+      <p className="mt-0">
+        <strong>
+          We could not verify {problem.runName ? `“${problem.runName}”` : "this saved run"}.
+        </strong>{" "}
+        {problem.message}
+      </p>
+      <div className="run-actions">
+        {problem.runId ? (
+          <button
+            type="button"
+            className="btn btn-danger"
+            data-testid="remove-run"
+            onClick={() => problem.runId && onRemove(problem.runId)}
+          >
+            Delete this run from this device
           </button>
-        </>
-      ) : (
-        <p className="mb-0">{problem.message}</p>
-      )}
+        ) : null}
+        {playing ? (
+          <button type="button" className="btn" onClick={onLeave}>
+            Back to your runs
+          </button>
+        ) : null}
+        <button type="button" className="btn btn-quiet" onClick={onClose}>
+          Keep it for now
+        </button>
+      </div>
     </div>
   );
 }
 
+const TABS: readonly { pane: Pane; label: string }[] = [
+  { pane: "week", label: "Week" },
+  { pane: "business", label: "Business" },
+  { pane: "money", label: "Money" },
+  { pane: "ask", label: "Ask" },
+  { pane: "notes", label: "Notes" },
+];
+
 function Desk({
   view,
+  save,
+  runName,
   act,
-  page,
-  setPage,
   refusal,
-  monthCloseShown,
+  paypalSandbox,
+  monthSheetOpen,
   onDismissMonth,
-  onStartOver,
+  onOpenMonth,
+  onOpenYear,
+  onSettled,
 }: {
   view: RunView;
+  save: SaveToken;
+  runName: string;
   act: Act;
-  page: "desk" | "notes";
-  setPage: (p: "desk" | "notes") => void;
   refusal: string | null;
-  monthCloseShown: boolean;
+  paypalSandbox: boolean;
+  monthSheetOpen: boolean;
   onDismissMonth: () => void;
-  onStartOver: () => void;
+  onOpenMonth: () => void;
+  onOpenYear: () => void;
+  onSettled: (next: { save: SaveToken; view: RunView }) => void;
 }) {
-  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [pane, setPane] = useState<Pane>("week");
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [goTo, setGoTo] = useState<{ id: string; n: number } | null>(null);
+
+  // "Take me there": show the right pane (phones show one at a time), then scroll to the thing
+  // and put keyboard focus on it. The scroll waits a frame so the pane is on screen first.
+  useEffect(() => {
+    if (!goTo) return;
+    const el = document.getElementById(goTo.id);
+    if (!el) return;
+    const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ block: "center", behavior: calm ? "auto" : "smooth" });
+    el.focus({ preventScroll: true });
+  }, [goTo]);
+
+  const go = (target: { id: string; pane: Pane }) => {
+    if (view.loans.some((l) => `ref-${l.id}` === target.id)) setToolsOpen(true);
+    setPane(target.pane);
+    setGoTo((g) => ({ id: target.id, n: (g?.n ?? 0) + 1 }));
+  };
+
+  const choosePane = (p: Pane) => {
+    setPane(p);
+    window.scrollTo({ top: 0 });
+  };
+
   return (
-    <div data-testid="desk">
-      <section className="run-header" aria-label="Time">
-        <div>
+    <div className="run-desk" data-pane={pane} data-testid="desk">
+      <section className="run-time" aria-label="Time">
+        <div className="run-when">
           <h2 className="run-date" data-testid="calendar-label">
             {view.calendar.label}
           </h2>
-          <p className="small muted mt-0">
-            {view.scenario.title} · day {view.day}
+          <p className="run-runname" data-testid="run-name-label">
+            {runName}
           </p>
         </div>
-        <div className="run-advance">
+        <WeekStrip view={view} />
+        <div className="run-go">
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn btn-primary run-continue"
             data-testid="advance-next"
+            aria-describedby="run-go-help"
             onClick={() => act({ kind: "ADVANCE", mode: "NEXT_STOP" })}
           >
-            Run to the next decision
+            Continue
           </button>
-          <button
-            type="button"
-            className="btn"
-            data-testid="advance-week"
-            onClick={() => act({ kind: "ADVANCE", mode: "WEEK" })}
-          >
-            Run one week
-          </button>
+          <p id="run-go-help" className="run-go-help">
+            Time runs until something needs you, and never past next Monday.
+          </p>
         </div>
       </section>
 
-      <nav className="run-tabs" aria-label="Views">
-        <button
-          type="button"
-          className="run-tab"
-          aria-current={page === "desk" ? "page" : undefined}
-          onClick={() => setPage("desk")}
-        >
-          Desk
-        </button>
-        <button
-          type="button"
-          className="run-tab"
-          aria-current={page === "notes" ? "page" : undefined}
-          data-testid="tab-notes"
-          onClick={() => setPage("notes")}
-        >
-          Notes ({view.learning.notes.length})
-        </button>
-      </nav>
-
       {refusal ? (
-        <p className="run-refusal" data-testid="refusal">
+        <p className="run-refusal" role="alert" data-testid="refusal">
           {refusal}
         </p>
       ) : null}
 
-      {page === "notes" ? (
-        <Notes view={view} />
-      ) : (
-        <>
-          <section
-            className="run-panel run-stops"
-            id="run-stops"
-            tabIndex={-1}
-            aria-labelledby="stops-h"
-            data-testid="stops"
-          >
-            <h2 id="stops-h" className="run-h">
-              Why time stopped
-            </h2>
-            {view.stops.length === 0 ? (
-              <p className="empty">Nothing in particular.</p>
-            ) : (
-              <ul className="run-quiet run-stop-list">
-                {view.stops.map((s) => (
-                  <li key={`${s.kind}-${s.ref ?? s.text}`}>{s.text}</li>
-                ))}
-              </ul>
-            )}
-          </section>
+      {monthSheetOpen && view.learning.monthClose ? (
+        <MonthCloseSheet
+          close={view.learning.monthClose}
+          act={act}
+          questions={view.learning.questions}
+          onDismiss={onDismissMonth}
+        />
+      ) : null}
 
-          {monthCloseShown && view.learning.monthClose ? (
-            <MonthCloseSheet close={view.learning.monthClose} onDismiss={onDismissMonth} />
-          ) : null}
-
-          <MoneyStrip view={view} />
-
-          <div className="run-grid">
-            <div className="run-col">
-              <Inbox view={view} act={act} />
-              <Bills view={view} act={act} />
-              <Invoices view={view} act={act} />
-              <Asks view={view} act={act} />
-              <Borrowing view={view} act={act} />
-              <Transfer view={view} act={act} />
-            </div>
-            <div className="run-col">
-              <Businesses view={view} act={act} />
-              <Timeline view={view} />
-              <Feed view={view} />
-            </div>
+      <div className="run-spread">
+        <div className="run-col run-col-left">
+          <div data-p="week">
+            <NeedsYou
+              view={view}
+              runName={runName}
+              onGo={go}
+              onOpenMonth={onOpenMonth}
+              onOpenYear={onOpenYear}
+            />
+            <Inbox view={view} act={act} />
+            <Bills view={view} act={act} paypal={{ enabled: paypalSandbox, save, onSettled }} />
+            <Invoices view={view} act={act} />
+            <Asks view={view} act={act} hideQuestions={monthSheetOpen} />
           </div>
-        </>
-      )}
+        </div>
 
-      <footer className="run-foot">
-        {confirmingReset ? (
-          <fieldset className="run-confirm">
-            <legend className="run-sr">Leave this run?</legend>
-            <p className="mt-0">Leave this run? Your saved run on this device will be removed.</p>
-            <div className="run-actions">
-              <button type="button" className="btn btn-danger" onClick={onStartOver}>
-                Yes, start over
-              </button>
-              <button type="button" className="btn" onClick={() => setConfirmingReset(false)}>
-                Keep playing
-              </button>
-            </div>
-          </fieldset>
-        ) : (
-          <button type="button" className="btn btn-quiet" onClick={() => setConfirmingReset(true)}>
-            Start a different run…
+        <div className="run-col run-col-right">
+          <div data-p="money">
+            <MoneyStrip view={view} />
+          </div>
+          <div data-p="business">
+            <Businesses view={view} act={act} />
+            {view.businesses.length === 0 ? (
+              <p className="empty run-pane-empty">
+                No business yet. When a chance to start one turns up in your inbox, it will appear
+                here.
+              </p>
+            ) : null}
+          </div>
+          <div data-p="money">
+            <Timeline view={view} />
+          </div>
+        </div>
+      </div>
+
+      <div className="run-lower">
+        <div className="run-col run-col-left">
+          <div data-p="ask">
+            <section
+              className="run-section"
+              id="run-ask"
+              tabIndex={-1}
+              aria-labelledby="ask-h"
+              data-testid="ask-area"
+            >
+              <h2 id="ask-h" className="run-h">
+                Ask
+              </h2>
+              <p className="run-hint" style={{ marginTop: 0, marginBottom: 12 }}>
+                Ask about your money in your own words. You decide what to do with the answer.
+              </p>
+              <AdvisorPanel
+                save={save}
+                view={view}
+                onCommand={async (command) => {
+                  await act(command);
+                }}
+              />
+            </section>
+          </div>
+          <div data-p="notes">
+            <Notes view={view} />
+          </div>
+        </div>
+        <div className="run-col run-col-right">
+          <div data-p="money">
+            <details
+              className="run-section run-tools"
+              id="run-tools"
+              open={toolsOpen}
+              onToggle={(e) => setToolsOpen(e.currentTarget.open)}
+              data-testid="money-tools"
+            >
+              <summary>
+                <h2 className="run-h">Money tools</h2>
+                <span className="small muted">Borrow, repay and move money</span>
+              </summary>
+              <div className="run-tools-body">
+                <Borrowing view={view} act={act} />
+                <Transfer view={view} act={act} />
+              </div>
+            </details>
+            <Feed view={view} />
+          </div>
+        </div>
+      </div>
+
+      <nav className="run-tabs" aria-label="Sections">
+        {TABS.map((t) => (
+          <button
+            key={t.pane}
+            type="button"
+            className="run-tab"
+            aria-current={pane === t.pane ? "page" : undefined}
+            data-testid={`tab-${t.pane}`}
+            onClick={() => choosePane(t.pane)}
+          >
+            {t.label}
           </button>
-        )}
-      </footer>
+        ))}
+      </nav>
     </div>
   );
 }

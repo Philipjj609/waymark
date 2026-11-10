@@ -1,5 +1,6 @@
 import { SCENARIOS } from "@fle/run";
 import { notFound } from "next/navigation";
+import { paypalSandboxConfigured } from "../../lib/run-paypal";
 import { runEnabled } from "../../lib/run-save";
 import { RunGame } from "./run-game";
 import type { ScenarioSummary } from "./start-screen";
@@ -23,5 +24,5 @@ export default function RunPage() {
     cashMinor: s.cashMinor,
     teaches: [...s.teaches],
   }));
-  return <RunGame scenarios={scenarios} />;
+  return <RunGame scenarios={scenarios} paypalSandbox={paypalSandboxConfigured()} />;
 }

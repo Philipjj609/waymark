@@ -11,7 +11,7 @@ export function Borrowing({ view, act }: { view: RunView; act: Act }) {
   const loans = view.loans.filter((l) => l.status === "ACTIVE");
   return (
     <section
-      className="run-panel"
+      className="run-section"
       id="run-borrowing"
       tabIndex={-1}
       data-focus-home
@@ -153,7 +153,7 @@ function LoanRow({ loan, view, act }: { loan: LoanView; view: RunView; act: Act 
   const amount = parseEuros(text);
   const valid = amount !== null && amount >= 1 && amount <= loan.balanceMinor;
   return (
-    <li className="run-card" data-testid="loan">
+    <li className="run-card" id={`ref-${loan.id}`} tabIndex={-1} data-testid="loan">
       <h4 className="run-card-title">{loan.label}</h4>
       <p className="small mt-0">
         {pocketName(view, loan.pocket)} owes{" "}
@@ -218,7 +218,7 @@ export function Transfer({ view, act }: { view: RunView; act: Act }) {
 
   return (
     <section
-      className="run-panel"
+      className="run-section"
       id="run-transfer"
       tabIndex={-1}
       data-focus-home

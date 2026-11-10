@@ -32,6 +32,15 @@ const HEAVY_WEEK_HOURS = 50;
 const HEAVY_WEEKS_TO_WEAR_OUT = 3;
 const WORN_OUT_WEEKS = 3;
 const WORN_OUT_BUDGET_CUT = 25;
+/**
+ * Burning out costs real money (R9 round two, #121): you miss shifts and see a doctor. Without
+ * this the sweep showed players who ran a job, a stall and every side job being worn out all the
+ * time and still finishing far ahead. The cost is a share of a month's pay, with a floor so it
+ * also bites people who have no salary.
+ */
+const WORN_OUT_COST_PERCENT_OF_PAY = 24;
+const WORN_OUT_COST_FLOOR_MINOR = 8_000;
+const WORN_OUT_BILL_DUE_IN_DAYS = 5;
 
 const BILL_KINDS: readonly BillKind[] = [
   "RENT",
@@ -226,8 +235,22 @@ export const lifeSystem: RunSystem = {
       p.workedStreak = 0;
       p.wornOutWeeks = WORN_OUT_WEEKS;
       applyBudget(w);
-      const text = w.t("life.worn.out");
-      w.emit("WORN_OUT", text, { concepts: ["cpt_cash_balance"] });
+      const cost = Math.max(
+        WORN_OUT_COST_FLOOR_MINOR,
+        percentOf(p.salaryMinor, WORN_OUT_COST_PERCENT_OF_PAY),
+      );
+      addBill(w, {
+        pocket: "you",
+        kind: "OTHER",
+        label: "Doctor and missed shifts",
+        payee: "Clinic and payroll",
+        amountMinor: cost,
+        account: "EXPENSE:Health",
+        inDays: WORN_OUT_BILL_DUE_IN_DAYS,
+        graceDays: 7,
+      });
+      const text = w.t("life.worn.out", { cost: euros(cost) });
+      w.emit("WORN_OUT", text, { concepts: ["cpt_cash_balance"], amountMinor: cost });
       w.stop("SETBACK", text, `life.wornout.${w.day}`);
     }
   },
@@ -272,12 +295,12 @@ export const lifeSystem: RunSystem = {
       "A warning from your landlord: {label} is still unpaid.",
     ],
     "life.evicted": [
-      "You lost your room. You move to a cheaper shared room at {rent} a month. Moving costs {moving}. The old rent is still owed.",
+      "You lost your room. You move to a shared room at {rent} a month. Moving costs {moving}. The old rent is still owed.",
       "The landlord ended your lease. Your new shared room costs {rent} a month and moving costs {moving}. The old rent is still owed.",
     ],
     "life.worn.out": [
-      "Too many long weeks in a row. You are worn out and have fewer free hours for now.",
-      "Three heavy weeks have caught up with you. You need rest, so you have fewer free hours.",
+      "Too many long weeks in a row. You are worn out, miss some shifts and see a doctor: {cost} to pay. You also have fewer free hours for now.",
+      "Three heavy weeks have caught up with you. You need rest, so you have fewer free hours, and missed shifts plus the doctor cost {cost}.",
     ],
     "life.recovered": ["You feel rested. Your free hours are back."],
     "life.recurring.adjusted": [

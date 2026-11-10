@@ -80,6 +80,7 @@ const range = (min: number, max: number, step = 1) => ({ kind: "RANGE", min, max
 const cash = (min: number): Condition => ({ kind: "CASH", pocket: "you", min });
 const cashAtMost = (max: number): Condition => ({ kind: "CASH", pocket: "you", max });
 const freeHours = (min: number): Condition => ({ kind: "FREE_HOURS", min });
+const notWornOut: Condition = { kind: "WORN_OUT", not: true };
 const afterDay = (day: number): Condition => ({ kind: "AFTER_DAY", day });
 const scenarioIs = (...ids: string[]): Condition => ({ kind: "SCENARIO", ids });
 
@@ -98,7 +99,8 @@ const SIDE_JOBS: readonly CardDef[] = [
     title: "card.side_job_moving.title",
     body: "card.side_job_moving.body",
     draw: "WEEKLY",
-    eligible: [freeHours(6)],
+    // Heavy lifting is not for someone who is worn out.
+    eligible: [freeHours(6), notWornOut],
     weight: 10,
     cooldownDays: 21,
     expiresInDays: 4,
@@ -143,7 +145,7 @@ const SIDE_JOBS: readonly CardDef[] = [
     body: "card.side_job_delivery.body",
     draw: "WEEKLY",
     // Shown to people who are short of cash; with a comfortable balance the hours are worth more.
-    eligible: [freeHours(8), cashAtMost(100_000)],
+    eligible: [freeHours(8), cashAtMost(100_000), notWornOut],
     weight: 8,
     cooldownDays: 14,
     expiresInDays: 3,
@@ -196,7 +198,7 @@ const SIDE_JOBS: readonly CardDef[] = [
     title: "card.side_weekend_event.title",
     body: "card.side_weekend_event.body",
     draw: "WEEKLY",
-    eligible: [freeHours(12)],
+    eligible: [freeHours(12), notWornOut],
     weight: 5,
     cooldownDays: 35,
     expiresInDays: 5,
@@ -249,7 +251,7 @@ const SIDE_JOBS: readonly CardDef[] = [
     title: "card.overtime_offer.title",
     body: "card.overtime_offer.body",
     draw: "WEEKLY",
-    eligible: [{ kind: "HAS_JOB" }, freeHours(8), { kind: "WORN_OUT", not: true }],
+    eligible: [{ kind: "HAS_JOB" }, freeHours(8), notWornOut],
     weight: 6,
     cooldownDays: 28,
     expiresInDays: 4,
@@ -533,7 +535,17 @@ const LIFE_EVENTS: readonly CardDef[] = [
         id: "appeal",
         label: "Appeal it: 3 hours, and it might be dropped",
         hours: 3,
-        effects: [chance(40, [], [pay("fineMinor", "EXPENSE:Fees", "Travel fine")])],
+        // A lost appeal adds an admin fee, so the gamble costs more than paying on the day.
+        effects: [
+          chance(
+            35,
+            [],
+            [
+              pay("fineMinor", "EXPENSE:Fees", "Travel fine"),
+              payFixed(1_500, "EXPENSE:Fees", "Appeal fee"),
+            ],
+          ),
+        ],
       },
     ],
     onExpire: "pay",
@@ -580,6 +592,9 @@ const RENT_RISES: readonly (readonly [string, number, number])[] = [
   ["fresh-start", 60_000, 64_000],
 ];
 
+/** What a landlord adds when you ask for a discount and they say no: €15 a month. */
+const PUSH_BACK_MINOR = 1_500;
+
 const rentNotices: readonly CardDef[] = RENT_RISES.map(([scenario, now, next]) => {
   const extra = next - now;
   const halfway = now + Math.floor(extra / 2);
@@ -609,9 +624,11 @@ const rentNotices: readonly CardDef[] = RENT_RISES.map(([scenario, now, next]) =
       { id: "accept", label: "card.rent_notice.accept", effects: [adjust(next)] },
       {
         id: "negotiate",
-        label: "Ask to keep it lower: 2 hours, it may or may not work",
+        label: "Ask to keep it lower: 2 hours. It might work, or the landlord might push back",
         hours: 2,
-        effects: [chance(40, [adjust(halfway)], [adjust(next)])],
+        // A push-back costs more than saying yes (expected value below accepting), so asking is
+        // a real choice and not a free roll (#121).
+        effects: [chance(35, [adjust(halfway)], [adjust(next + PUSH_BACK_MINOR), rep(-1)])],
       },
     ],
     onExpire: "accept",
@@ -722,7 +739,8 @@ const jobPaths: readonly CardDef[] = JOB_PATHS.flatMap((p) => {
         id: "ask_more",
         label: "card.pay_rise.ask_more",
         requires: [{ kind: "HAS_JOB" }],
-        effects: [chance(40, [setJob(p.askPayMinor), rep(1)], [setJob(p.newPayMinor), rep(-1)])],
+        // Asking can lose the offer altogether: the expected pay stays below the one on the table.
+        effects: [chance(40, [setJob(p.askPayMinor), rep(1)], [rep(-1)])],
       },
     ],
     onExpire: "accept",
@@ -992,7 +1010,7 @@ const SERVICE_CARDS: readonly CardDef[] = [
         hours: 3,
         effects: [
           chance(
-            55,
+            50,
             [receive("fullMinor", "REVENUE:Sales", "Project at full price", "card", 14)],
             [rep(-1, "card")],
           ),
@@ -1067,7 +1085,7 @@ const STOCK_CARDS: readonly CardDef[] = [
         effects: [
           pay("stockMinor", "EXPENSE:Supplies", "Festival stock", "card"),
           chance(
-            60,
+            50,
             [receive("goodMinor", "REVENUE:Sales", "Festival sales", "card")],
             [receive("rainMinor", "REVENUE:Sales", "Festival sales (rainy)", "card")],
           ),
@@ -1110,7 +1128,7 @@ const STOCK_CARDS: readonly CardDef[] = [
         label: "Look for another supplier: 5 hours, it may save the extra",
         hours: 5,
         effects: [
-          chance(50, [], [pay("extraMinor", "EXPENSE:Supplies", "Supplier price rise", "card")]),
+          chance(35, [], [pay("extraMinor", "EXPENSE:Supplies", "Supplier price rise", "card")]),
         ],
       },
       {

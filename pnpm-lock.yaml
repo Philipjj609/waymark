@@ -38,6 +38,9 @@ importers:
       '@fle/learning':
         specifier: workspace:*
         version: link:../../packages/learning
+      '@fle/payments':
+        specifier: workspace:*
+        version: link:../../packages/payments
       '@fle/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence

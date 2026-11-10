@@ -1,32 +1,46 @@
 import type { RunView } from "@fle/run";
 import { euros } from "./format";
 
-/** The numbers that frame every choice: where the cash is, what is owed each way, and the hours. */
+/**
+ * Where you stand, written like the first page of a notebook ledger: the cash you hold large,
+ * the rest as ruled lines. Integer cents only; every figure is practice money.
+ */
 export function MoneyStrip({ view }: { view: RunView }) {
+  const you = view.pockets.find((p) => p.kind === "YOU");
+  const others = view.pockets.filter((p) => p.kind !== "YOU");
   return (
-    <section className="run-panel" aria-label="Your money" data-testid="money-strip">
-      <dl className="run-stats">
-        {view.pockets.map((p) => (
-          <div className="run-stat" key={p.id}>
-            <dt>{p.kind === "YOU" ? "Cash you hold" : `Cash in ${p.label}`}</dt>
-            <dd className="figure" data-testid={p.kind === "YOU" ? "cash-you" : undefined}>
-              {euros(p.cashMinor)}
-            </dd>
+    <section className="run-summary" aria-labelledby="sum-h" data-testid="money-strip">
+      <h2 id="sum-h" className="run-h">
+        Your money
+      </h2>
+      {you ? (
+        <p className="run-cash">
+          <span className="run-cash-label">Cash you hold</span>
+          <span className="run-cash-figure figure" data-testid="cash-you">
+            {euros(you.cashMinor)}
+          </span>
+        </p>
+      ) : null}
+      <dl className="run-ruled">
+        {others.map((p) => (
+          <div key={p.id}>
+            <dt>Cash in {p.label}</dt>
+            <dd className="figure">{euros(p.cashMinor)}</dd>
           </div>
         ))}
-        <div className="run-stat">
+        <div>
           <dt>Owed to you</dt>
           <dd className="figure">{euros(view.owedToYouMinor)}</dd>
         </div>
-        <div className="run-stat">
+        <div>
           <dt>You owe</dt>
           <dd className="figure">{euros(view.youOweMinor)}</dd>
         </div>
-        <div className="run-stat">
+        <div className="run-ruled-total">
           <dt>Net worth</dt>
           <dd className="figure">{euros(view.netWorthMinor)}</dd>
         </div>
-        <div className="run-stat">
+        <div>
           <dt>Credit record</dt>
           <dd className="figure">{view.person.creditRecord} out of 100</dd>
         </div>
@@ -48,16 +62,16 @@ function HoursBar({ hours }: { hours: RunView["hours"] }) {
   return (
     <div className="run-hours" data-testid="hours">
       <p className="run-hours-label">
-        <strong>Hours this week</strong>: {hours.committed} committed, {hours.used} used, {spare}{" "}
+        <strong>Hours this week</strong> {hours.committed} committed, {hours.used} used, {spare}{" "}
         <span className="muted">(of {hours.budget})</span>
       </p>
       <div className="run-bar" role="img" aria-label={words}>
         <span className="run-bar-committed" style={{ width: pct(hours.committed) }} />
         <span className="run-bar-used" style={{ width: pct(hours.used) }} />
       </div>
-      <p className="run-legend small muted" aria-hidden="true">
-        <span className="run-key run-key-committed" /> committed to work and your levers{" "}
-        <span className="run-key run-key-used" /> spent on one-off things
+      <p className="run-legend" aria-hidden="true">
+        <span className="run-key run-key-committed" /> work and your levers{" "}
+        <span className="run-key run-key-used" /> one-off things
       </p>
     </div>
   );

@@ -5,6 +5,7 @@ import type { SaveToken } from "../../lib/run-save";
  * The browser's side of POST /api/run (route.ts). The save is a signed log the server hands out;
  * we only carry it. Every outcome is folded into one small union so the screen never inspects a
  * status code. Same-origin fetch with a JSON body is what the CSRF gate (lib/csrf.ts) accepts.
+ * Where saves live in this browser is storage.ts.
  */
 
 export type { SaveToken };
@@ -18,11 +19,22 @@ export type RunOutcome =
   | { kind: "ok"; view: RunView; save: SaveToken }
   /** 422: the rules said no. The save is unchanged. */
   | { kind: "refused"; message: string; view: RunView; save: SaveToken }
-  /** 403 / 409: the server will not replay this save. */
-  | { kind: "unverified" }
+  /** 403 / 409: the server will not replay this save. `message` says which of the two it is. */
+  | { kind: "unverified"; message: string }
   | { kind: "failed"; message: string };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+
+/** The server's error body is {error:{code,message}}; only the code is trusted for wording. */
+function errorCode(json: unknown): string | null {
+  if (!isObject(json) || !isObject(json.error)) return null;
+  return typeof json.error.code === "string" ? json.error.code : null;
+}
+
+export const UNVERIFIED_MESSAGE =
+  "We could not verify this saved run. The save may have been changed, or the game's rules may have moved on since you saved.";
+const STALE_MESSAGE =
+  "This save is older than your latest progress, or the game's rules have changed since you saved it. Reload the page and open the run again.";
 
 export async function callRun(body: RunBody): Promise<RunOutcome> {
   let res: Response;
@@ -46,12 +58,23 @@ export async function callRun(body: RunBody): Promise<RunOutcome> {
   } catch {
     json = null;
   }
-  if (res.status === 403 || res.status === 409) return { kind: "unverified" };
+  const code = errorCode(json);
+  if (res.status === 403 && code === "CSRF_ORIGIN_REJECTED") {
+    return { kind: "failed", message: "This page is not allowed to reach the game server." };
+  }
+  if (res.status === 403) return { kind: "unverified", message: UNVERIFIED_MESSAGE };
+  if (res.status === 409) return { kind: "unverified", message: STALE_MESSAGE };
   if (res.status === 429) {
     return {
       kind: "failed",
-      message: "That was a lot of clicks in a short time. Wait a minute and try again.",
+      message: "That was a lot of clicks in a short time. Slow down for a minute and try again.",
     };
+  }
+  if (res.status === 413) {
+    return { kind: "failed", message: "This run has grown too large to send to the game." };
+  }
+  if (res.status === 404) {
+    return { kind: "failed", message: "The Run is not switched on in this version of the app." };
   }
   if ((res.status === 200 || res.status === 422) && isObject(json) && json.view && json.save) {
     const view = json.view as RunView;
@@ -65,50 +88,14 @@ export async function callRun(body: RunBody): Promise<RunOutcome> {
       save,
     };
   }
+  if (res.status === 400) {
+    return {
+      kind: "failed",
+      message: "The game did not understand that request. Reload the page and try again.",
+    };
+  }
   return {
     kind: "failed",
     message: "Something went wrong on our side. Your run is safe; try again.",
   };
-}
-
-// -- the save in this browser. Every access is guarded: storage can be blocked or full. ----------
-
-export const SAVE_KEY = "waymark.run.save.v1";
-
-function looksLikeSave(v: unknown): v is SaveToken {
-  return (
-    isObject(v) &&
-    v.v === 1 &&
-    typeof v.runId === "string" &&
-    typeof v.scenarioId === "string" &&
-    Array.isArray(v.log) &&
-    typeof v.sig === "string"
-  );
-}
-
-export function readStoredSave(): SaveToken | null {
-  try {
-    const raw = window.localStorage.getItem(SAVE_KEY);
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    return looksLikeSave(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-export function writeStoredSave(save: SaveToken): void {
-  try {
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify(save));
-  } catch {
-    // The run still works this session; it just cannot be continued after a reload.
-  }
-}
-
-export function clearStoredSave(): void {
-  try {
-    window.localStorage.removeItem(SAVE_KEY);
-  } catch {
-    // nothing to clear
-  }
 }

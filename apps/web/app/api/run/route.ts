@@ -3,6 +3,7 @@ import { z } from "zod";
 import { rejectUnsafeWrite } from "../../../lib/csrf";
 import { errorResponse, guarded, json, worldNotFound } from "../../../lib/http";
 import { clientIp, hit, type Limit } from "../../../lib/rate-limit";
+import { staleSaveResponse } from "../../../lib/run-paypal";
 import {
   applyToSave,
   knownScenario,
@@ -118,6 +119,10 @@ export async function POST(req: Request): Promise<Response> {
     if (!knownScenario(save.scenarioId)) {
       return errorResponse(400, "INVALID_REQUEST", "unknown starting point");
     }
+
+    // A verified PayPal payment newer than this save wins over the save (lib/run-paypal.ts).
+    const stale = staleSaveResponse(save);
+    if (stale) return stale;
 
     if (needsReplay(save) && (!hit(REPLAYS_PER_RUN, save.runId) || !hit(REPLAYS, "all"))) {
       return tooMany();

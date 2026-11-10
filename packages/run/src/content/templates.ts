@@ -164,7 +164,9 @@ export const TEMPLATES: Readonly<Record<string, readonly string[]>> = {
     "Your manager says the course made a difference. They offer a new salary of {newPay} a month.",
   ],
   "card.pay_rise.accept": ["Accept {newPay} a month"],
-  "card.pay_rise.ask_more": ["Ask for more: it might work, or you might get the same offer"],
+  "card.pay_rise.ask_more": [
+    "Ask for more: it might work, or the offer might be withdrawn and your pay stays as it is",
+  ],
 
   "card.studio_idea.title": ["An idea for a small studio", "Could you work for yourself?"],
   "card.studio_idea.body": [

@@ -239,6 +239,16 @@ describe("hours and wellbeing", () => {
     expect(kinds(s, "RECOVERED")).toHaveLength(1);
   });
 
+  it("charges a doctor and missed-shifts bill when you wear out (#121)", () => {
+    let s = withJobHours(startRun("run_life", "seed-cost", "first-flat"), 55);
+    while (s.day < 22) s = step(s, WEEK);
+    const owed = s.bills.filter((b) => b.label === "Doctor and missed shifts");
+    expect(owed).toHaveLength(1);
+    // 24% of the first-flat salary of EUR 1,450 a month.
+    expect(owed[0]?.amountMinor).toBe(34_800);
+    expect(kinds(s, "WORN_OUT")[0]?.amountMinor).toBe(34_800);
+  });
+
   it("raises a SETBACK stop at the moment you wear out", () => {
     let s = withJobHours(startRun("run_life", "seed-stop", "first-flat"), 55);
     let seen = false;

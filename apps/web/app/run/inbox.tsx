@@ -1,11 +1,21 @@
 import type { BillView, CardView, InvoiceView, RunView } from "@fle/run";
+import type { SaveToken } from "../../lib/run-save";
 import { daysLeftText, euros, inDaysText, plural } from "./format";
+import { PayWithPayPal } from "./pay-with-paypal";
 import { type Act, pocketName } from "./ui";
+
+const KIND_WORDS: Record<CardView["kind"], string> = {
+  OPPORTUNITY: "A chance",
+  EVENT: "Something happened",
+  OFFER: "An offer",
+  REQUEST: "A request",
+  NOTICE: "A notice",
+};
 
 export function Inbox({ view, act }: { view: RunView; act: Act }) {
   return (
     <section
-      className="run-panel"
+      className="run-section"
       id="run-inbox"
       tabIndex={-1}
       data-focus-home
@@ -18,7 +28,7 @@ export function Inbox({ view, act }: { view: RunView; act: Act }) {
       {view.cards.length === 0 ? (
         <p className="empty">Nothing is waiting for an answer.</p>
       ) : (
-        <ul className="run-list">
+        <ul className="run-letters">
           {view.cards.map((c) => (
             <CardItem key={c.id} card={c} view={view} act={act} />
           ))}
@@ -28,18 +38,30 @@ export function Inbox({ view, act }: { view: RunView; act: Act }) {
   );
 }
 
+/** The engine's option labels sometimes already say "6 hours"; say it once, not twice. */
+const mentionsHours = (label: string) => /\bhours?\b/i.test(label);
+
 function CardItem({ card, view, act }: { card: CardView; view: RunView; act: Act }) {
   const where = card.pocket === "you" ? null : pocketName(view, card.pocket);
   return (
-    <li className="run-card" data-testid="card" data-card-kind={card.kind}>
-      <div className="run-card-top">
-        <h3 className="run-card-title">{card.title}</h3>
+    <li
+      className="run-letter"
+      id={`ref-${card.id}`}
+      tabIndex={-1}
+      data-testid="card"
+      data-card-kind={card.kind}
+    >
+      <div className="run-letter-top">
+        <p className="run-letter-kind">
+          {KIND_WORDS[card.kind]}
+          {where ? ` for ${where}` : ""}
+        </p>
         <span className="chip" data-tone={card.expiresInDays <= 1 ? "due" : "other"}>
           {daysLeftText(card.expiresInDays)}
         </span>
       </div>
-      {where ? <p className="small muted mt-0">About {where}</p> : null}
-      <p className="run-card-body">{card.body}</p>
+      <h3 className="run-letter-title">{card.title}</h3>
+      <p className="run-letter-body">{card.body}</p>
       <ul className="run-options">
         {card.options.map((o) => {
           const whyId = `why-${card.id}-${o.id}`;
@@ -47,7 +69,7 @@ function CardItem({ card, view, act }: { card: CardView; view: RunView; act: Act
             <li key={o.id}>
               <button
                 type="button"
-                className="btn"
+                className="btn run-option"
                 disabled={!o.available}
                 aria-describedby={!o.available && o.why ? whyId : undefined}
                 data-testid="card-option"
@@ -55,8 +77,8 @@ function CardItem({ card, view, act }: { card: CardView; view: RunView; act: Act
                 onClick={() => act({ kind: "CHOOSE", cardId: card.id, optionId: o.id })}
               >
                 {o.label}
-                {o.hours > 0 ? (
-                  <span className="run-hours-need"> · {plural(o.hours, "hour")}</span>
+                {o.hours > 0 && !mentionsHours(o.label) ? (
+                  <span className="run-option-hours"> · {plural(o.hours, "hour")}</span>
                 ) : null}
               </button>
               {!o.available && o.why ? (
@@ -77,12 +99,19 @@ const dueText = (b: BillView): string => {
   return b.dueInDays === 0 ? "due today" : `due ${inDaysText(b.dueInDays)}`;
 };
 
-export function Bills({ view, act }: { view: RunView; act: Act }) {
+export interface PayPalSlot {
+  /** True when the server has PayPal Sandbox configured (page prop paypalSandbox). */
+  readonly enabled: boolean;
+  readonly save: SaveToken;
+  readonly onSettled: (next: { save: SaveToken; view: RunView }) => void;
+}
+
+export function Bills({ view, act, paypal }: { view: RunView; act: Act; paypal: PayPalSlot }) {
   const open = view.bills.filter((b) => b.status === "DUE" || b.status === "LATE");
   const later = view.bills.filter((b) => b.status === "UPCOMING" || b.status === "DEFAULTED");
   return (
     <section
-      className="run-panel"
+      className="run-section"
       id="run-bills"
       tabIndex={-1}
       data-focus-home
@@ -93,25 +122,30 @@ export function Bills({ view, act }: { view: RunView; act: Act }) {
         Bills
       </h2>
       {open.length === 0 ? <p className="empty">No bill is waiting to be paid.</p> : null}
-      <ul className="run-list">
+      <ul className="run-ledger">
         {open.map((b) => (
-          <li className="run-bill" key={b.id} data-testid="bill" data-status={b.status}>
-            <div>
-              <p className="run-bill-name">
+          <li
+            className="run-line"
+            key={b.id}
+            id={`ref-${b.id}`}
+            tabIndex={-1}
+            data-testid="bill"
+            data-status={b.status}
+          >
+            <div className="run-line-main">
+              <p className="run-line-name">
                 {b.label} <span className="muted">to {b.payee}</span>
               </p>
-              <p className="small muted mt-0">
-                {pocketName(view, b.pocket)} · {dueText(b)}
-                {b.autopay ? " · set to pay itself" : ""}
+              <p className="run-line-meta">
+                <span className="chip" data-tone={b.status === "LATE" ? "overdue" : "due"}>
+                  {b.status === "LATE" ? "Late" : "Due"}
+                </span>{" "}
+                {pocketName(view, b.pocket)}, {dueText(b)}
+                {b.autopay ? ", set to pay itself" : ""}
               </p>
             </div>
-            <div className="run-bill-side">
-              <span className="figure run-amount">{euros(b.amountMinor)}</span>
-              <span className="chip" data-tone={b.status === "LATE" ? "overdue" : "due"}>
-                {b.status === "LATE" ? "Late" : "Due"}
-              </span>
-            </div>
-            <div className="run-actions">
+            <span className="figure run-line-amount">{euros(b.amountMinor)}</span>
+            <div className="run-actions run-line-actions">
               <button
                 type="button"
                 className="btn"
@@ -121,6 +155,12 @@ export function Bills({ view, act }: { view: RunView; act: Act }) {
               >
                 Pay {euros(b.amountMinor)}
               </button>
+              {!b.canPay ? (
+                <span className="small muted">Not enough cash to pay this yet.</span>
+              ) : null}
+              {paypal.enabled && b.canPay && b.pocket === "you" ? (
+                <PayWithPayPal save={paypal.save} bill={b} onSettled={paypal.onSettled} />
+              ) : null}
             </div>
           </li>
         ))}
@@ -130,7 +170,7 @@ export function Bills({ view, act }: { view: RunView; act: Act }) {
           <h3 className="run-h-sub">Coming up</h3>
           <ul className="run-quiet">
             {later.map((b) => (
-              <li key={b.id} className="small">
+              <li key={b.id} id={`ref-${b.id}`} tabIndex={-1} className="small">
                 {b.label} to {b.payee}: <span className="figure">{euros(b.amountMinor)}</span>,{" "}
                 {b.status === "DEFAULTED" ? "went unpaid" : dueText(b)}
                 {b.autopay && b.status === "UPCOMING" ? ", set to pay itself" : ""}
@@ -148,7 +188,7 @@ export function Invoices({ view, act }: { view: RunView; act: Act }) {
   if (open.length === 0) return null;
   return (
     <section
-      className="run-panel"
+      className="run-section"
       id="run-invoices"
       tabIndex={-1}
       data-focus-home
@@ -157,27 +197,31 @@ export function Invoices({ view, act }: { view: RunView; act: Act }) {
       <h2 id="inv-h" className="run-h">
         Invoices owed to you
       </h2>
-      <p className="small muted mt-0">
+      <p className="run-hint">
         These are promised, not received. Clients can pay late, so a due date is a hope.
       </p>
-      <ul className="run-list">
+      <ul className="run-ledger">
         {open.map((i) => (
-          <li className="run-bill" key={i.id} data-testid="invoice">
-            <div>
-              <p className="run-bill-name">
+          <li
+            className="run-line"
+            key={i.id}
+            id={`ref-${i.id}`}
+            tabIndex={-1}
+            data-testid="invoice"
+          >
+            <div className="run-line-main">
+              <p className="run-line-name">
                 {i.client} <span className="muted">for {i.label}</span>
               </p>
-              <p className="small muted mt-0">
-                {pocketName(view, i.pocket)} ·{" "}
+              <p className="run-line-meta">
+                {pocketName(view, i.pocket)},{" "}
                 {i.dueInDays < 0
                   ? `${plural(-i.dueInDays, "day")} past the due date`
                   : `due ${inDaysText(i.dueInDays)}`}
               </p>
             </div>
-            <div className="run-bill-side">
-              <span className="figure run-amount">{euros(i.amountMinor)}</span>
-            </div>
-            <div className="run-actions">
+            <span className="figure run-line-amount">{euros(i.amountMinor)}</span>
+            <div className="run-actions run-line-actions">
               <button
                 type="button"
                 className="btn"

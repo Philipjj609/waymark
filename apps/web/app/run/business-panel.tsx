@@ -35,9 +35,13 @@ function BusinessPanel({ business: b, act }: { business: BusinessView; act: Act 
         <p className="empty">This business is closed.</p>
       ) : (
         <>
-          <p className="small mt-0">
-            Cash in the business <span className="figure">{euros(b.cashMinor)}</span> · Reputation{" "}
-            <span className="figure">{b.reputation}</span> out of 100
+          <p className="run-bizstats mt-0">
+            <span>
+              Cash in the business <strong className="figure">{euros(b.cashMinor)}</strong>
+            </span>
+            <span>
+              Reputation <strong className="figure">{b.reputation}</strong> out of 100
+            </span>
           </p>
 
           {b.levers.length > 0 ? (

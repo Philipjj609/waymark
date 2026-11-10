@@ -3,8 +3,13 @@ import { euros, inDaysText } from "./format";
 import { pocketName } from "./ui";
 
 const WEEK_TITLES = ["This week", "Next week", "In two weeks", "In three weeks"];
+const WEEKDAYS = ["M", "T", "W", "T", "F", "S", "S"];
 
-/** The next four weeks of money. Fixed amounts and hoped-for ones look different on purpose. */
+/**
+ * The page of the planner for the next four weeks: a calendar of marks (money in, money out,
+ * fixed or hoped for) with the same facts written out below it, so nothing depends on colour or
+ * on seeing the grid.
+ */
 export function Timeline({ view }: { view: RunView }) {
   const weeks = new Map<number, TimelineItem[]>();
   for (const item of view.timeline) {
@@ -12,11 +17,12 @@ export function Timeline({ view }: { view: RunView }) {
     weeks.set(w, [...(weeks.get(w) ?? []), item]);
   }
   return (
-    <section className="run-panel" aria-labelledby="tl-h" data-testid="timeline">
+    <section className="run-section" aria-labelledby="tl-h" data-testid="timeline">
       <h2 id="tl-h" className="run-h">
         Next 4 weeks
       </h2>
-      <p className="small muted mt-0">
+      <PlannerGrid view={view} />
+      <p className="run-hint">
         <strong>Fixed</strong> money is certain. <strong>Hoped for</strong> money is promised but
         can arrive late.
       </p>
@@ -34,13 +40,13 @@ export function Timeline({ view }: { view: RunView }) {
                   data-certainty={t.certainty}
                   data-direction={t.direction}
                 >
-                  <span className="run-tl-when small muted">{inDaysText(t.inDays)}</span>
+                  <span className="run-tl-when">{inDaysText(t.inDays)}</span>
                   <span className="run-tl-label">
                     {t.label}
                     {t.pocket === "you" ? "" : ` (${pocketName(view, t.pocket)})`}
                   </span>
                   <span className="figure run-tl-amount">
-                    {t.direction === "IN" ? "Coming in " : "Going out "}
+                    {t.direction === "IN" ? "In " : "Out "}
                     {euros(t.amountMinor)}
                   </span>
                   <span className="chip" data-tone={t.certainty === "KNOWN" ? "paid" : "other"}>
@@ -55,6 +61,52 @@ export function Timeline({ view }: { view: RunView }) {
   );
 }
 
+/** Seven columns Monday to Sunday; the first row starts on the Monday of this week. */
+function PlannerGrid({ view }: { view: RunView }) {
+  const lead = view.calendar.dayOfWeek - 1;
+  const cells = Math.ceil((lead + 28) / 7) * 7;
+  const byOffset = new Map<number, TimelineItem[]>();
+  for (const t of view.timeline) {
+    const at = lead + Math.max(t.inDays, 0);
+    byOffset.set(at, [...(byOffset.get(at) ?? []), t]);
+  }
+  return (
+    <div className="run-planner" aria-hidden="true" data-testid="planner">
+      {WEEKDAYS.map((d, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: seven fixed weekday headers
+        <span key={i} className="run-planner-head">
+          {d}
+        </span>
+      ))}
+      {Array.from({ length: cells }, (_, i) => {
+        const items = byOffset.get(i) ?? [];
+        const state = i < lead ? "past" : i === lead ? "today" : i >= lead + 28 ? "after" : "ahead";
+        const mondayStart = i % 7 === 0;
+        return (
+          <span
+            // biome-ignore lint/suspicious/noArrayIndexKey: cells are positional by definition
+            key={i}
+            className="run-planner-day"
+            data-state={state}
+            data-week-start={mondayStart || undefined}
+          >
+            <span className="run-planner-marks">
+              {items.map((t) => (
+                <span
+                  key={`${t.label}-${t.direction}-${t.pocket}`}
+                  className="run-mark"
+                  data-direction={t.direction}
+                  data-certainty={t.certainty}
+                />
+              ))}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 const SHOWN = 10;
 
 export function Feed({ view }: { view: RunView }) {
@@ -65,7 +117,7 @@ export function Feed({ view }: { view: RunView }) {
     </li>
   );
   return (
-    <section className="run-panel" aria-labelledby="feed-h" data-testid="feed">
+    <section className="run-section" aria-labelledby="feed-h" data-testid="feed">
       <h2 id="feed-h" className="run-h">
         What has happened
       </h2>

@@ -71,6 +71,17 @@ describe("balance sweep (4 seeds, 1 year)", () => {
     expect(careful).toBeGreaterThan(passive);
   });
 
+  it("taking every side job is a trade-off: a hustler ends ahead of careful, but not by far (#121)", () => {
+    // Worn-out weeks cost a doctor's bill and lost shifts. Before that cost existed a hustler ended
+    // about 2x a careful player in first-flat and fresh-start; the bound below is the tuned gap.
+    for (const sc of ["first-flat", "fresh-start"]) {
+      const careful = median(play(sc, "careful").worth);
+      const hustler = median(play(sc, "hustler").worth);
+      expect(hustler, sc).toBeGreaterThan(careful);
+      expect(hustler / careful, sc).toBeLessThan(1.6);
+    }
+  });
+
   it("no single strategy is the best in every scenario", () => {
     const best = SCENARIOS.map((sc) => {
       const ranked = STRATEGIES.map((st) => ({ st, m: median(play(sc.id, st).worth) })).sort(
