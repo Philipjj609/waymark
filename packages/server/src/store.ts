@@ -18,6 +18,8 @@ export type SessionHash = string & { readonly __brand: "SessionHash" };
  *   (I-007). The Postgres store may load via replay or via snapshots, but not differently.
  */
 export interface WorldStore {
+  /** Atomic checkout scheduling/cancel interlock; memory-only stores must not claim durability. */
+  readonly supportsCheckout?: true;
   create(input: { owner: SessionHash; config: WorldConfig; state: WorldState }): Promise<void>;
   load(worldId: WorldId, owner: SessionHash): Promise<WorldState | null>;
   commit(input: CommitInput): Promise<CommitOutcome>;

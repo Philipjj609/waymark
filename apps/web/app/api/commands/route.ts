@@ -1,4 +1,5 @@
 import { submitPlayerCommand } from "@fle/server";
+import { checkoutRequestAllowed } from "../../../lib/checkout-http";
 import { rejectUnsafeWrite } from "../../../lib/csrf";
 import { errorResponse, guarded, json, SERVICE_STATUS, worldNotFound } from "../../../lib/http";
 import { hit, LIMITS } from "../../../lib/rate-limit";
@@ -42,6 +43,14 @@ export async function POST(req: Request): Promise<Response> {
       return errorResponse(400, "INVALID_COMMAND", "body is not valid JSON");
     }
 
+    if (
+      body &&
+      typeof body === "object" &&
+      "kind" in body &&
+      (body.kind === "START_PROVIDER_CHECKOUT" || body.kind === "REQUEST_CHECKOUT_CANCEL") &&
+      !checkoutRequestAllowed(session.hash)
+    )
+      return errorResponse(429, "RATE_LIMITED", "too many checkout requests");
     const r = await submitPlayerCommand(getStore(), session.hash, body);
     if (!r.ok) return errorResponse(SERVICE_STATUS[r.error.code], r.error.code, r.error.message);
     return json({ result: r.result, duplicate: r.duplicate, snapshot: r.snapshot });
