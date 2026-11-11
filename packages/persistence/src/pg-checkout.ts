@@ -368,6 +368,31 @@ export class PgCheckoutQueue implements CheckoutQueue {
   async applied(event: CheckoutFact) {
     // Run facts are acknowledged only by PgRunCheckoutGateway's atomic economic commit.
     if (!("mapping" in event)) throw new Error("Run facts require atomic target commit");
+    const operation = await this.operations.get(event.operationId);
+    if (!operation || isRunOperation(operation))
+      throw new Error("Run facts require atomic target commit");
+    const parsed = VerifiedProviderEventSchema.parse(event);
+    if (
+      operation.worldId !== parsed.mapping.worldId ||
+      operation.obligationId !== parsed.mapping.obligationId ||
+      operation.paypalOrderId !== parsed.orderId
+    )
+      throw new Error("provider fact binding conflict");
+    const [stored] = await this.db
+      .select()
+      .from(checkoutFacts)
+      .where(
+        and(
+          eq(checkoutFacts.operationId, parsed.operationId),
+          eq(checkoutFacts.eventType, parsed.eventType),
+          eq(checkoutFacts.eventId, parsed.providerEventId),
+        ),
+      );
+    if (!stored) throw new Error("provider fact missing");
+    const { verification: _a, ...before } = parseFact(stored.payload);
+    const { verification: _b, ...after } = parsed;
+    if (canonicalJson(before) !== canonicalJson(after))
+      throw new Error("provider fact binding conflict");
     await this.db
       .update(checkoutFacts)
       .set({ applied: 1 })
