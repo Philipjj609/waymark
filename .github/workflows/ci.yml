@@ -57,7 +57,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec vitest run packages/persistence apps/web/test/persistence.test.ts
+      - run: pnpm exec vitest run packages/persistence apps/web/test/persistence.test.ts apps/web/test/run-checkout-target.test.ts apps/web/test/run-paypal.test.ts
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       # Render's preDeployCommand (#28): a fresh database migrates, a second run is a no-op.
