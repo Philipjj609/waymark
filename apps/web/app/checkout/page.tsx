@@ -2,8 +2,6 @@ import Link from "next/link";
 import { runEnabled } from "../../lib/run-save";
 import { CheckoutPanel } from "./checkout-panel";
 
-export const metadata = { title: "PayPal Sandbox checkout" };
-
 export default async function Page({
   searchParams,
 }: {

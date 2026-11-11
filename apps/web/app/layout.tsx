@@ -1,14 +1,11 @@
 import type { ReactNode } from "react";
-import { APP_NAME } from "../lib/brand";
 import "./globals.css";
 import "./ui/ui.css";
 import { AppShell } from "./ui/app-shell";
 
 export const metadata = {
-  title: {
-    default: `${APP_NAME}: learn money by studying it, then by living it`,
-    template: `%s | ${APP_NAME}`,
-  },
+  // The browser tab shows the product name only, on every route (owner decision, #149).
+  title: "Waymark",
   description:
     "Financial education in two halves: lessons with an adaptive AI tutor, and a practice money life played week by week. All game money is fictional; payments use PayPal Sandbox test money.",
 };
