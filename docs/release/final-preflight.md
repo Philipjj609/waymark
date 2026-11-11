@@ -1,10 +1,24 @@
 # Final release preflight — 11 November 2026
 
+## Verified release outcome
+
+**GO:** deployed application `9c886a9bf89c22c8f03a20e2e14ac921c9e8bcfb` is live at [Waymark](https://waymark-web-vwsd.onrender.com/). All six [main CI checks](https://github.com/Philipjj609/waymark/actions/runs/43082294490) passed. Render deployment `dep-dbqbmh3ncjis73927d50` became live at 19:03:35 UTC. The repository is [public](https://github.com/Philipjj609/waymark); unauthenticated API/raw assets and a credential-helper-disabled clone passed. The owner explicitly authorized both phases and accepted the temporary process request ceiling, DRAFT curriculum and reviewed metadata disclosure.
+
+Hosted browser acceptance passed: curriculum navigation, real AI-selected teaching panels, deterministic arithmetic and exercise scoring, editable note, knowledge map, durable Run, actual €750 Sandbox capture, receipt recovery after service restart, and return to the saved Learn note. The Run's model prose displayed tentative wording without a Checked badge. The legacy interpretation limitation remains; [request ceiling and label correction](ai-release-safeguard.md) describe the narrow safeguard.
+
+Read-only hosted evidence: migrations `0000–0005`; existing 12 worlds/31 commands preserved; one applied capture fact and one settlement; FINISHED checkout. Canonical Run head and replay match; three journals balance, cash is 125,000 EUR minor units, and rent debt is zero. Restart changed instance `km6ds` to `ggl9w`, retaining the same history, receipt and checklist. A foreign HTTP session cannot read the Run/receipt (404) or learning note; foreign Origin is refused (403), and the HTTPS session cookie is Secure/HttpOnly/SameSite=Lax. [Evidence](https://github.com/Philipjj609/waymark/issues/147#issuecomment-6805004606).
+
+Live-head publication scan: 59 current remote heads, 235 reachable commits, approximately 9.97 MB, no secrets. The four deliberate fake-token findings on stale deleted remote-tracking scanner-test refs are not current GitHub heads. Hosted third-party notice bytes match the audited source. No Live PayPal, webhook registration, new paid resource or plan increase occurred; the existing $13.30/month configuration remains. Private credentials, rollback configuration and backup data remain outside Git with restricted access. The hosted URL is ready for Devpost; video upload and submission remain the owner's actions.
+
+## Historical pre-deployment record
+
+All remaining sections are the historical pre-deployment record, not current release instructions or status. The verified release outcome above supersedes their pending decisions and access snapshots.
+
 **Current deployment candidate:** `47b19dfcd453b5554a38657102f5a8d2d74140dd`, the owner-authorized squash merge of PR #150 (approved branding and README screenshots). [Current main CI](https://github.com/Philipjj609/waymark/actions/runs/43075526003) is green on all six checks, including Windows. Its parent is `88d0d85b3b46d62f07b1443c44a60958b73a2ec9`, the authorized #148 squash at exact reviewed head `5f0f6aa38591f81b8e7ca86cca274070c5d1eed9`. The backup/migration/replay evidence below was produced at `88d0d85`; #150 changes no persistence, migrations, payments or AI code. Render configuration, live deployment and private backup checksum were rechecked after #150 and remain unchanged.
 
 **Decision:** code/restore readiness GO; public promotion requires the authorizations and remaining gates below. No public deployment, hosted migration, restart, environment update, webhook registration, Live payment or repository publication was performed. No paid resources or upgrades were created. A logical backup export used the existing paid database's recovery capability.
 
-## Current hosting facts
+## Historical hosting facts
 
 The recovered Render API and dashboard were audited directly, replacing the earlier inaccessible-hosting snapshot in [readiness.md](readiness.md).
 
@@ -62,7 +76,7 @@ Located `Desktop/waymark-demo-final.mp4`, matching the approved approximately 2:
 - SHA256 **`7e2d8fbc69d37a229d9ce5db8457d6a212ddae0654bf223b63d6b5f28c7faa64`**, unchanged on a second check.
 - Verification used `ffprobe` and read-only hashing. Approval was supplied by the owner; this check preserves the master rather than redoing its content approval. Do not commit the master or modify it for a UI-label change.
 
-## Remaining decisions
+## Historical remaining decisions
 
 1. Owner verifies Nebius balance, top-up and usage/spending limits or selects a bounded demo posture. Billing permission was not expanded.
 2. Owner accepts the explicitly documented advisor limitation for the prototype or authorizes the tiny Run-owned label/badge qualification described in #151. No new forecasting feature is proposed.

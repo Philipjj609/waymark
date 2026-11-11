@@ -51,9 +51,9 @@ Setup and safety details are in [Optional PayPal Sandbox checkout](#optional-pay
 
 ## Try the release candidate
 
-[Judge demo and setup instructions](docs/release/judge-demo.md) describe the Learn → Run → PayPal Sandbox → Learn journey, keyboard access and a local alternative. A hosted release-candidate URL is pending deployment verification; an older hosted build must not be treated as the current demo.
+[Open the live Waymark demo](https://waymark-web-vwsd.onrender.com/). Start in **Learn**, or choose **Practise → Quick demo (3 minutes)** for the Sandbox checkout. No API credentials or PayPal buyer account are needed. [Judge demo and setup instructions](docs/release/judge-demo.md) cover the full journey, keyboard access and a local alternative.
 
-The integrated candidate is `c48d23687d0951a1c41bf48a4415148da5c07f71`. Its [acceptance evidence](https://github.com/Philipjj609/waymark/issues/140#issuecomment-6796137800) records production-build browser tests, real PostgreSQL tests and actual Sandbox payments, including restart and lost-response recovery. A local passing test does not claim a hosted deployment has been verified.
+The deployed application is `9c886a9bf89c22c8f03a20e2e14ac921c9e8bcfb`, verified on 11 November 2026. [Hosted acceptance evidence](https://github.com/Philipjj609/waymark/issues/147#issuecomment-6805004606) records Learn → real AI → durable Run → €750 PayPal Sandbox capture → restart → recovered receipt → Learn with the saved note intact. All six source CI checks passed. The shared AI guard permits at most 30 paid completion attempts per minute and 300 per 24-hour window in the single server process; restart resets this temporary request allowance. AI advice remains tentative, and curriculum content remains **DRAFT**.
 
 ## Run locally without API credentials
 
@@ -66,7 +66,7 @@ corepack enable
 pnpm install --frozen-lockfile
 ```
 
-Before repository publication, cloning requires access to the private repository. Create a gitignored `.env` in the repository root with this credential-free development configuration:
+Create a gitignored `.env` in the repository root with this credential-free development configuration:
 
 ```dotenv
 WORLD_STORE=memory

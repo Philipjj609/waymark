@@ -1,4 +1,6 @@
-// Diagnostic for issue151 at release88d0d85. Synthetic fictional view/provider only; no network or economic writes.
+// Diagnostic for issue151's restricted-wording gate. The deployed UI now qualifies AI prose;
+// this preserves the semantic-gap fixture, not a claim that the misleading badge still exists.
+// Synthetic fictional view/provider only; no network or economic writes.
 
 import { askAdvisor, proseIssues } from "../../apps/web/lib/run-advisor.ts";
 import { type RunView, runView, startRun } from "../../packages/run/src/index.ts";
