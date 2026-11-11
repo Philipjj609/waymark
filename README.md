@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/readme/waymark-hero.jpg" alt="Waymark. Learn money by living it." width="720">
+</p>
+
 # Waymark
 
 **Learn money by studying it, then by living it.** Waymark combines a standalone financial curriculum with a practice life you play one week at a time.
@@ -6,6 +10,44 @@
 - **PayPal Sandbox:** selected payments use a real Sandbox API integration. The server verifies a matching completed capture before settling a bill, using durable reservations, idempotency and reconciliation.
 
 Simulation amounts are **fictional**. PayPal payments are **Sandbox test money**; Live payments are disabled. This is educational software, not financial advice or a bank. Starter curriculum content remains **DRAFT**, pending editorial approval. AI interpretations of reasoning are tentative evidence, never proof of mastery.
+
+<p align="center">
+  <a href="docs/release/judge-demo.md"><b>Judge demo</b></a> ·
+  <a href="#a-quick-tour">Tour</a> ·
+  <a href="#how-a-paypal-sandbox-payment-works">PayPal Sandbox flow</a> ·
+  <a href="#run-locally-without-api-credentials">Run locally</a> ·
+  <a href="#architecture-and-tools">Architecture</a> ·
+  <a href="#current-limitations">Limitations</a>
+</p>
+
+## A quick tour
+
+Screenshots from the integrated release build, in a guest session with fictional money and PayPal Sandbox test money. The curriculum shown is **DRAFT**.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/readme/01-landing.jpg" alt="Waymark home page with two paths: Learn the ideas, and Live them in a Run."><br><b>Two paths.</b> Study an idea, then live it in a Run.</td>
+    <td width="50%"><img src="docs/assets/readme/02-lesson-liquidity.jpg" alt="The Liquidity lesson with its DRAFT curriculum notice, prerequisites and learning goals."><br><b>Lessons.</b> Short, numeric and labelled DRAFT until editorial approval.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/readme/03-ai-tutor-reasoning.jpg" alt="A learner's free-text explanation and the tutor's tentative reply, quoting the learner and asking which assumption to check."><br><b>An AI tutor that reads your reasoning.</b> It quotes you exactly, treats a possible misconception as tentative and chooses from pre-written, validated teaching panels.</td>
+    <td><img src="docs/assets/readme/04-knowledge-map.jpg" alt="Knowledge map cards; Liquidity shows one evidence source and the note that understanding is still being explored."><br><b>Knowledge map.</b> Evidence of what was observed, never a mastery score.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/readme/05-run-dashboard.jpg" alt="A Run dashboard in week 1: rent of 650 euros due today, cash of 1,850 euros, offers in the inbox and the next four weeks."><br><b>A Run.</b> A money life one week at a time: bills, offers, hours and a four-week outlook.</td>
+    <td><img src="docs/assets/readme/06-paypal-sandbox-receipt.jpg" alt="PayPal Sandbox receipt: order created, paid with the Sandbox test card, money captured, read back as COMPLETED for 650 euros, rent marked paid."><br><b>PayPal Sandbox receipt.</b> Rent settles only after the server reads back a matching completed capture.</td>
+  </tr>
+</table>
+
+## How a PayPal Sandbox payment works
+
+1. In a Run, the player chooses **Pay with PayPal Sandbox** on a due bill. The server holds that amount in the Run so nothing else can spend it while the payment is in progress.
+2. The server creates an order through PayPal's Sandbox Orders API and pays it with PayPal's published Sandbox test card, so no buyer login or card details are needed.
+3. PayPal captures the test-card payment, and the server reads the capture back from PayPal. It asks PayPal to capture explicitly only if the order is still waiting for capture.
+4. The bill is marked paid only when that capture is `COMPLETED` and its amount and currency match the bill exactly. Each capture can settle at most once.
+5. The receipt shows the PayPal order and capture references. Payment records and the Run history are stored durably, and restarts or lost responses are reconciled against PayPal rather than guessed.
+
+Setup and safety details are in [Optional PayPal Sandbox checkout](#optional-paypal-sandbox-checkout).
 
 ## Try the release candidate
 
@@ -136,5 +178,7 @@ The AI proposes explanations; deterministic code owns economic truth. World and 
 ## Contributing and licensing
 
 Read [AGENTS.md](AGENTS.md), [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) before contributing. Architecture decisions live in [docs/adr](docs/adr); GitHub issues are the task and handoff source of truth.
+
+The Waymark name, logo and README artwork identify the project. The code licenses below do not grant trademark rights (see Apache-2.0 section 6).
 
 Project-authored code is offered under [MIT](LICENSE-MIT) **OR** [Apache-2.0](LICENSE-APACHE), at your option. Third-party dependencies, fonts, assets and source material retain their own licenses and attribution requirements; the root license does not relicense them. See [third-party notices](THIRD_PARTY_NOTICES.md), also available in plain text at `/third-party-notices.txt`, and the [license-template provenance review](docs/release/graphrag-provenance.md). Publication retains its separate review and owner-authorization gates. No code from the AGPL-licensed `learnharness` reference is included by design; its architecture informed research only.
