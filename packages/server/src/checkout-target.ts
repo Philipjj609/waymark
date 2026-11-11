@@ -37,6 +37,8 @@ export interface CheckoutTarget<Tx> {
     expectedVersion: number,
   ): Promise<Money>;
   bind(tx: Tx, owner: SessionHash, record: OperationRecord): Promise<void>;
+  /** Only the gateway may call after proving a definite create refusal, no order/capture/fact. */
+  releaseUncreated(tx: Tx, owner: SessionHash, record: OperationRecord): Promise<void>;
   /** Check exact operation/bill/amount/order/capture binding before treating any duplicate as applied. */
   commitVerifiedFact(
     tx: Tx,
@@ -58,6 +60,12 @@ export interface CheckoutTarget<Tx> {
 /** Transaction-owning persistence bridge consumed by the provider coordinator. */
 export interface RunCheckoutGateway {
   bind(owner: SessionHash, record: OperationRecord): Promise<void>;
+  /** False means evidence is ambiguous or money may exist; keep the reservation. */
+  releaseUncreated(
+    owner: SessionHash,
+    record: OperationRecord,
+    leaseToken: string,
+  ): Promise<boolean>;
   commitVerifiedFact(
     owner: SessionHash,
     record: OperationRecord,

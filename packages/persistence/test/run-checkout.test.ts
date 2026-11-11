@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { VerifiedProviderEventSchema, WorldIdSchema } from "@fle/contracts";
-import { isRunOperation, type MatchedCaptureProof } from "@fle/payments";
+import { isRunOperation, type MatchedCaptureProof, type OperationRecord } from "@fle/payments";
 import type { CheckoutTarget, SessionHash } from "@fle/server";
 import { PHONE } from "@fle/simulation";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -33,6 +33,7 @@ class ProviderFixture {
   captures = 0;
   loseCapture = true;
   failReads = 0;
+  createOutcomes: Array<"DECLINED" | "UNCERTAIN"> = [];
   order: {
     id: string;
     status: string;
@@ -50,6 +51,10 @@ class ProviderFixture {
       return response(200, { access_token: "fixture-token", expires_in: 3600 });
     if (path === "/v2/checkout/orders" && init?.method === "POST") {
       this.creates++;
+      const outcome = this.createOutcomes.shift();
+      if (outcome === "DECLINED")
+        return response(422, { details: [{ issue: "INSTRUMENT_DECLINED" }] });
+      if (outcome === "UNCERTAIN") throw new TypeError("lost create response");
       const body = JSON.parse(String(init.body));
       const id = `ORDER${randomBytes(8).toString("hex").toUpperCase()}`;
       this.order = {
@@ -125,6 +130,7 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
         });
         let failReserve = false;
         let failCommit = false;
+        let failRelease = false;
         let commits = 0;
         const append = async (tx: SqlExecutor, command: unknown) => {
           const record = await loadRunTx(tx, runId, { forUpdate: true });
@@ -149,6 +155,21 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
             return { amountMinor: 3000, currency: "EUR" };
           },
           async bind() {},
+          async releaseUncreated(tx, _owner, record) {
+            const head = await loadRunTx(tx, runId, { forUpdate: true });
+            if (
+              head?.commands.some((input) => {
+                const c = input as { kind: string; operationId: string };
+                return c.kind === "RELEASE_EXTERNAL" && c.operationId === record.operationId;
+              })
+            )
+              return;
+            await append(tx, {
+              kind: "RELEASE_EXTERNAL",
+              operationId: record.operationId,
+            });
+            if (failRelease) throw new Error("fault after reservation release");
+          },
           async commitVerifiedFact(tx, _owner, record, proof) {
             commits++;
             await append(tx, {
@@ -181,6 +202,17 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
         const operations = new PgOperationStore(db);
         const queue = new PgCheckoutQueue(db);
         const gateway = new PgRunCheckoutGateway(db, target);
+        const releaseTokens = new Map<string, string>();
+        const releaseUncreated = async (input: OperationRecord, owner = OWNER) => {
+          let token = releaseTokens.get(input.operationId);
+          if (!token) {
+            const lease = await queue.lease(input.operationId, true);
+            if (!lease) throw new Error("fixture release lease unavailable");
+            token = lease.token;
+            releaseTokens.set(input.operationId, token);
+          }
+          return gateway.releaseUncreated(owner, input, token);
+        };
         const prepare = async () => {
           const operationId = await start();
           const before = await operations.get(operationId);
@@ -220,11 +252,15 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
           operations,
           queue,
           gateway,
+          releaseUncreated,
           failReserve: (value: boolean) => {
             failReserve = value;
           },
           failCommit: (value: boolean) => {
             failCommit = value;
+          },
+          failRelease: (value: boolean) => {
+            failRelease = value;
           },
           commits: () => commits,
         };
@@ -357,6 +393,214 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
         expect(await t.queue.requestRun(OWNER, t.runId, p.operationId, "CANCEL")).toBe(false);
         expect((await new PgRunStore(db).load(t.runId))?.version).toBe(1);
       });
+
+      it("a definitive create decline releases promptly and once, survives restart, and permits a new attempt", async () => {
+        const t = await setup();
+        const provider = new ProviderFixture();
+        provider.createOutcomes = ["DECLINED"];
+        const config = {
+          clientId: "fixture-id",
+          clientSecret: "fixture-secret",
+          fetch: provider.fetch,
+          maxAttempts: 1,
+          returnOrigin: "http://localhost:3000",
+        };
+        const runtime = createPgCheckout(db, config, t.target);
+        const operation = await runtime.startRun(OWNER, t.ref, 0);
+        await runtime.service.run(operation, true);
+        expect(await runtime.service.statusRun(OWNER, t.runId, operation)).toMatchObject({
+          phase: "FINISHED",
+          settled: false,
+          orderId: null,
+          captureId: null,
+        });
+        expect((await t.operations.get(operation))?.createState).toBe("REFUSED");
+        const history = await new PgRunStore(db).load(t.runId);
+        expect(history?.commands).toHaveLength(2);
+        expect(history?.commands[1]).toMatchObject({
+          kind: "RELEASE_EXTERNAL",
+          operationId: operation,
+        });
+        expect(provider.creates).toBe(1);
+        expect(provider.captures).toBe(0);
+        const restarted = createPgCheckout(db, config, t.target);
+        await restarted.service.run(operation, true);
+        expect((await new PgRunStore(db).load(t.runId))?.commands).toHaveLength(2);
+        const next = await restarted.startRun(OWNER, t.ref, 2);
+        expect(next).not.toBe(operation);
+        await restarted.service.run(operation, true);
+        expect((await new PgRunStore(db).load(t.runId))?.commands).toHaveLength(3);
+        expect(provider.creates).toBe(1);
+      });
+
+      it.each(["UNCERTAIN", "PENDING", "STARTED", "CONFIRMED"] as const)(
+        "a no-order %s create remains reserved",
+        async (createState) => {
+          const t = await setup();
+          const operation = await t.start();
+          const input = await t.operations.update(operation, (r) => ({ ...r, createState }));
+          expect(await t.releaseUncreated(input)).toBe(false);
+          expect((await new PgRunStore(db).load(t.runId))?.commands).toHaveLength(1);
+          expect((await t.queue.read(operation))?.phase).not.toBe("FINISHED");
+        },
+      );
+
+      it.each([
+        "UNCERTAIN",
+        "PENDING",
+        "STARTED",
+        "CONFIRMED",
+        "REFUSED",
+        "CAPTURED_ELSEWHERE",
+      ] as const)(
+        "a refused create with %s capture evidence cannot release",
+        async (captureState) => {
+          const t = await setup();
+          const operation = await t.start();
+          const input = await t.operations.update(operation, (r) => ({
+            ...r,
+            createState: "REFUSED",
+            captureState,
+          }));
+          expect(await t.releaseUncreated(input)).toBe(false);
+          expect((await new PgRunStore(db).load(t.runId))?.commands).toHaveLength(1);
+        },
+      );
+
+      it("a clean refusal after an uncertain create does not erase uncertainty or release the hold", async () => {
+        const t = await setup();
+        const provider = new ProviderFixture();
+        provider.createOutcomes = ["UNCERTAIN", "DECLINED"];
+        const runtime = createPgCheckout(
+          db,
+          {
+            clientId: "fixture-id",
+            clientSecret: "fixture-secret",
+            fetch: provider.fetch,
+            maxAttempts: 1,
+            returnOrigin: "http://localhost:3000",
+          },
+          t.target,
+        );
+        const operation = await runtime.startRun(OWNER, t.ref, 0);
+        await runtime.service.run(operation, true);
+        await runtime.service.run(operation, true);
+        expect(provider.creates).toBe(2);
+        expect((await t.operations.get(operation))?.createState).toBe("UNCERTAIN");
+        expect((await t.queue.read(operation))?.phase).toBe("RECONCILING");
+        expect((await new PgRunStore(db).load(t.runId))?.commands).toHaveLength(1);
+      });
+
+      it("known orders or any durable fact prevent uncreated release", async () => {
+        const known = await setup();
+        const p = await known.prepare();
+        const input = await known.operations.update(p.operationId, (r) => ({
+          ...r,
+          createState: "REFUSED",
+        }));
+        expect(await known.releaseUncreated(input)).toBe(false);
+        expect((await new PgRunStore(db).load(known.runId))?.version).toBe(1);
+
+        const unknown = await setup();
+        const op = await unknown.start();
+        const record = await unknown.operations.update(op, (r) => ({
+          ...r,
+          createState: "REFUSED",
+        }));
+        // Defensive storage boundary: even an inconsistent/legacy fact must prevent release.
+        await db.insert(checkoutFacts).values({
+          operationId: op,
+          eventType: "CAPTURE_COMPLETED",
+          eventId: `CAP${randomBytes(6).toString("hex")}`,
+          payload: { legacy: "unresolved provider evidence" },
+        });
+        expect(await unknown.releaseUncreated(record)).toBe(false);
+        expect((await new PgRunStore(db).load(unknown.runId))?.version).toBe(1);
+      });
+
+      it("uncreated release and finished job roll back together, and only the owner may retry", async () => {
+        const t = await setup();
+        const operation = await t.start();
+        const input = await t.operations.update(operation, (r) => ({
+          ...r,
+          createState: "REFUSED",
+        }));
+        await expect(t.releaseUncreated(input, FOREIGN)).rejects.toThrow(
+          "Run checkout unavailable",
+        );
+        t.failRelease(true);
+        await expect(t.releaseUncreated(input)).rejects.toThrow("fault after reservation release");
+        expect((await new PgRunStore(db).load(t.runId))?.version).toBe(1);
+        expect((await t.queue.read(operation))?.phase).toBe("IN_FLIGHT");
+        t.failRelease(false);
+        expect(await t.releaseUncreated(input)).toBe(true);
+        expect((await new PgRunStore(db).load(t.runId))?.version).toBe(2);
+        expect((await t.queue.read(operation))?.phase).toBe("FINISHED");
+      });
+
+      it("expired and replaced creation leases cannot release a reservation", async () => {
+        const t = await setup();
+        const operation = await t.start();
+        const input = await t.operations.update(operation, (r) => ({
+          ...r,
+          createState: "REFUSED",
+        }));
+        const old = await t.queue.lease(operation, true);
+        if (!old) throw new Error("fixture lease missing");
+        await db
+          .update(checkoutWork)
+          .set({ leaseUntil: sql`now() - interval '1 second'` })
+          .where(eq(checkoutWork.operationId, operation));
+        expect(await t.gateway.releaseUncreated(OWNER, input, old.token)).toBe(false);
+        const current = await t.queue.lease(operation, true);
+        if (!current) throw new Error("fixture replacement lease missing");
+        expect(current.token).not.toBe(old.token);
+        expect(await t.gateway.releaseUncreated(OWNER, input, old.token)).toBe(false);
+        expect((await new PgRunStore(db).load(t.runId))?.version).toBe(1);
+        expect(await t.gateway.releaseUncreated(OWNER, input, current.token)).toBe(true);
+        expect((await new PgRunStore(db).load(t.runId))?.version).toBe(2);
+      });
+
+      it.each(["expired", "cleared"] as const)(
+        "a started create with a %s lease stays uncertain after a declined retry",
+        async (leaseState) => {
+          const t = await setup();
+          const operation = await t.start();
+          const abandoned = await t.queue.lease(operation, true);
+          if (!abandoned) throw new Error("fixture lease missing");
+          await t.operations.update(operation, (r) => ({
+            ...r,
+            createState: "STARTED",
+            createStartedAt: Date.now(),
+          }));
+          await db
+            .update(checkoutWork)
+            .set(
+              leaseState === "expired"
+                ? { leaseUntil: sql`now() - interval '1 second'` }
+                : { leaseToken: null, leaseUntil: null },
+            )
+            .where(eq(checkoutWork.operationId, operation));
+          const provider = new ProviderFixture();
+          provider.createOutcomes = ["DECLINED"];
+          const runtime = createPgCheckout(
+            db,
+            {
+              clientId: "fixture-id",
+              clientSecret: "fixture-secret",
+              fetch: provider.fetch,
+              maxAttempts: 1,
+              returnOrigin: "http://localhost:3000",
+            },
+            t.target,
+          );
+          await runtime.service.run(operation, true);
+          expect(provider.creates).toBe(1);
+          expect((await t.operations.get(operation))?.createState).toBe("UNCERTAIN");
+          expect((await t.queue.read(operation))?.phase).toBe("RECONCILING");
+          expect((await new PgRunStore(db).load(t.runId))?.version).toBe(1);
+        },
+      );
 
       it("the unified coordinator recovers a lost capture and failed lookup after restart without another order or capture", async () => {
         const t = await setup();
