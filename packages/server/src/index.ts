@@ -1,12 +1,20 @@
 /** @fle/server: the server application seam (#74). Server-only: never import from browser code. */
 
 export {
+  type CheckoutFact,
   type CheckoutLease,
   type CheckoutPhase,
   type CheckoutQueue,
   CheckoutService,
   type CheckoutWork,
 } from "./checkout.js";
+export type {
+  CheckoutTarget,
+  RunCheckoutGateway,
+  RunCheckoutRef,
+  RunPaymentState,
+  TargetReconciliation,
+} from "./checkout-target.js";
 export { InMemoryWorldStore, recorded } from "./memory-store.js";
 export { newProviderCommandId, submitProviderCommand } from "./provider-command.js";
 export {

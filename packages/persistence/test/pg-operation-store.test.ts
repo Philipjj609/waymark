@@ -42,6 +42,7 @@ describe("PgOperationStore on PGlite (storage semantics, not cross-connection lo
 
   it("begin returns the stored winner without rebinding another world or overwriting ids", async () => {
     const input = operation(2);
+    if (input.worldId === null) throw new Error("World fixture expected");
     const candidates = [input, { ...input, worldId: "wld_foreign" as WorldId }];
     const [first, second] = await Promise.all(candidates.map((c) => store.begin(c)));
     expect(first).toEqual(input);
@@ -85,7 +86,7 @@ describe("PgOperationStore on PGlite (storage semantics, not cross-connection lo
     for (const change of [
       { operationId: "pop_other" as ProviderOperationId },
       { worldId: "wld_other" as WorldId },
-      { obligationId: operation(9).obligationId.replace("phone", "rent") },
+      { obligationId: operation(9).obligationId?.replace("phone", "rent") },
       { expected: { amountMinor: 1, currency: "EUR" } },
       { expected: { amountMinor: 3000, currency: "USD" } },
       { createRequestId: "another-create" },
@@ -137,11 +138,13 @@ describe("PgOperationStore on PGlite (storage semantics, not cross-connection lo
     ).rejects.toThrow();
     expect(await store.get(operation(7).operationId)).toBeNull();
     await store.begin(operation(8));
-    await db
-      .update(schema.providerOperations)
-      .set({ amountMinor: Number.MAX_SAFE_INTEGER + 1 })
-      .where(eq(schema.providerOperations.operationId, operation(8).operationId));
-    await expect(store.get(operation(8).operationId)).rejects.toThrow();
+    await expect(
+      db
+        .update(schema.providerOperations)
+        .set({ amountMinor: Number.MAX_SAFE_INTEGER + 1 })
+        .where(eq(schema.providerOperations.operationId, operation(8).operationId)),
+    ).rejects.toThrow();
+    expect(await store.get(operation(8).operationId)).toEqual(operation(8));
     await expect(
       db.execute(
         sql`UPDATE provider_operations SET capture_state = 'PAID' WHERE operation_id = ${operation(8).operationId}`,

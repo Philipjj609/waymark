@@ -7,4 +7,5 @@
 export * from "./client.js";
 export * from "./operations.js";
 export * from "./paypal.js";
+export * from "./targets.js";
 export * from "./webhooks.js";

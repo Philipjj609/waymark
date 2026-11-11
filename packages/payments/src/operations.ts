@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Money, ObligationId, ProviderOperationId, WorldId } from "@fle/contracts";
+import type { Money, ProviderOperationId } from "@fle/contracts";
 import {
   type CreateOrderInput,
   type ObservedOrder,
@@ -8,6 +8,7 @@ import {
   type PayPalSandboxClient,
 } from "./client.js";
 import { parsePayPalAmount, type VerificationOutcome, verifyCapture } from "./paypal.js";
+import { isRunOperation, type PaymentTargetBinding, sameTarget } from "./targets.js";
 
 /**
  * Provider operations (#21 D1a): the server's durable memory of what it asked PayPal to do.
@@ -39,10 +40,8 @@ export type StepState =
   | "REFUSED"
   | "UNCERTAIN";
 
-export interface OperationRecord {
+export type OperationRecord = PaymentTargetBinding & {
   readonly operationId: ProviderOperationId;
-  readonly worldId: WorldId;
-  readonly obligationId: ObligationId;
   readonly expected: Money;
   readonly createRequestId: string;
   /** Epoch ms, persisted before the first create attempt. Absent on legacy records. */
@@ -54,7 +53,7 @@ export interface OperationRecord {
   readonly captureState: StepState;
   /** Last PayPal answer as kind[:issue] only; no payloads, no secrets. */
   readonly lastResult: string | null;
-}
+};
 
 /**
  * Port; the Postgres implementation lands with D1b. Implementations MUST make `begin` an atomic
@@ -183,6 +182,7 @@ export type VerifyResult =
       readonly ok: false;
       readonly reason:
         | "UNKNOWN_OPERATION"
+        | "TARGET_NOT_WORLD"
         | "NO_ORDER"
         | "MULTIPLE_CAPTURES"
         | "OPERATION_MISMATCH";
@@ -211,19 +211,20 @@ export class SandboxCheckout {
   }
 
   /** Creates (or, on retry, re-reads) the PayPal order for one operation. */
-  async start(input: {
-    readonly operationId: ProviderOperationId;
-    readonly worldId: WorldId;
-    readonly obligationId: ObligationId;
-    readonly amount: Money;
-    readonly returnUrl?: string;
-    readonly cancelUrl?: string;
-    readonly sandboxTestCard?: CreateOrderInput["sandboxTestCard"];
-  }): Promise<PayPalResult<ObservedOrder>> {
+  async start(
+    input: PaymentTargetBinding & {
+      readonly operationId: ProviderOperationId;
+      readonly amount: Money;
+      readonly returnUrl?: string;
+      readonly cancelUrl?: string;
+      readonly sandboxTestCard?: CreateOrderInput["sandboxTestCard"];
+    },
+  ): Promise<PayPalResult<ObservedOrder>> {
     const rec = await this.store.begin({
       operationId: input.operationId,
-      worldId: input.worldId,
-      obligationId: input.obligationId,
+      ...(isRunOperation(input)
+        ? { worldId: null, obligationId: null, runId: input.runId, billId: input.billId }
+        : { worldId: input.worldId, obligationId: input.obligationId }),
       expected: input.amount,
       createRequestId: this.newRequestId(),
       captureRequestId: this.newRequestId(),
@@ -233,8 +234,7 @@ export class SandboxCheckout {
       lastResult: null,
     });
     if (
-      rec.worldId !== input.worldId ||
-      rec.obligationId !== input.obligationId ||
+      !sameTarget(rec, input) ||
       rec.expected.amountMinor !== input.amount.amountMinor ||
       rec.expected.currency !== input.amount.currency
     )
@@ -337,6 +337,7 @@ export class SandboxCheckout {
   async verify(operationId: ProviderOperationId, verifiedAt: string): Promise<VerifyResult> {
     const rec = await this.store.get(operationId);
     if (!rec) return { ok: false, reason: "UNKNOWN_OPERATION" };
+    if (isRunOperation(rec)) return { ok: false, reason: "TARGET_NOT_WORLD" };
     if (!rec.paypalOrderId) return { ok: false, reason: "NO_ORDER" };
     const r = await this.client.getOrder(rec.paypalOrderId);
     if (r.kind !== "OK")
