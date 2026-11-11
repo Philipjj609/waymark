@@ -21,7 +21,6 @@ verification and public contracts remain unchanged; the legacy World verifier re
 
 The server owns operation and provider retry identifiers. `CheckoutTarget<Tx>` delegates economic
 decisions to the Run owner using the caller's transaction. The PostgreSQL gateway:
-
 - locks and authorizes the canonical Run before reserving its bill;
 - commits reservation, operation identifiers and work scheduling together;
 - persists server-verified provider facts before economic application;
