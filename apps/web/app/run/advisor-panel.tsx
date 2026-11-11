@@ -412,10 +412,10 @@ function AskOut({
         source={answer.source === "model" ? "model" : "game"}
         wordingLabel={
           answer.source === "model"
-            ? "Wording: AI, checked against the facts"
+            ? "AI interpretation; advice may be wrong. Compare with the facts above."
             : "Wording: written by the game"
         }
-        checked={answer.checked}
+        checked={false}
         wordingTestId="advisor-wording"
         checkedTestId="advisor-checked"
         facts={
