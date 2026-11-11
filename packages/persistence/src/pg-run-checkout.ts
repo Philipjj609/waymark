@@ -83,7 +83,10 @@ export class PgRunCheckoutGateway implements RunCheckoutGateway {
       if (
         record.createState !== "REFUSED" ||
         record.paypalOrderId !== null ||
-        record.captureState !== "NOT_STARTED"
+        record.captureState !== "NOT_STARTED" ||
+        // A mapping CONFLICT also becomes REFUSED, but may contain an existing provider
+        // order that could not safely be bound. Missing metadata is not proof of no money.
+        !/^(DECLINED|REJECTED|NOT_APPROVED)(?::|$)/.test(record.lastResult ?? "")
       )
         return false;
       const [fact] = await tx
