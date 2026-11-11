@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { ConceptRow } from "../ui/concept-chip";
 import { DEMO_NAME, DEMO_SCENARIO } from "./extras";
-import { conceptWords, euros } from "./format";
+import { euros } from "./format";
 import { defaultName, lastPlayed, NAME_MAX, type StoredRun } from "./storage";
 
 export interface ScenarioSummary {
@@ -22,6 +23,7 @@ export function StartScreen({
   scenarios,
   runs,
   loaded,
+  highlight = null,
   onStart,
   onDemo,
   onContinue,
@@ -31,6 +33,8 @@ export function StartScreen({
   runs: readonly StoredRun[];
   /** False until storage has been read, so the page does not flash an empty list. */
   loaded: boolean;
+  /** A starting point to point out ("Suggested after your lesson"), from the end of a lesson. */
+  highlight?: string | null;
   onStart: (scenarioId: string, name: string) => void;
   /** Starts the three-minute judge demo (Side studio, named "Demo run"). */
   onDemo: () => void;
@@ -87,16 +91,27 @@ export function StartScreen({
         </h2>
         <ul className="run-starts">
           {scenarios.map((s) => (
-            <li key={s.id} className="run-start" data-testid={`scenario-${s.id}`}>
+            <li
+              key={s.id}
+              className="run-start"
+              data-testid={`scenario-${s.id}`}
+              {...(s.id === highlight ? { "data-suggested": "" } : {})}
+            >
               <div className="run-start-main">
+                {s.id === highlight ? (
+                  <p className="run-suggested" data-testid="suggested-start">
+                    Suggested after your lesson: it practises the same idea
+                  </p>
+                ) : null}
                 <h3 className="run-start-title">{s.title}</h3>
                 <p className="run-start-summary">{s.summary}</p>
                 <p className="run-start-hard">
                   <strong>What is hard:</strong> {s.pressure}
                 </p>
-                <p className="run-start-ideas">
-                  Ideas you will meet: {s.teaches.map(conceptWords).join(", ")}
-                </p>
+                <div className="run-start-ideas">
+                  <span>Ideas you will meet</span>
+                  <ConceptRow concepts={s.teaches.map((conceptId) => ({ conceptId }))} label="" />
+                </div>
               </div>
               <div className="run-start-side">
                 <p className="run-start-cash">

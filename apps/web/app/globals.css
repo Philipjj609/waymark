@@ -1,44 +1,89 @@
 /*
- * Today screen v0 (#104). ALL theme values live here as tokens. These are temporary defaults
- * from #23's recommendations (calm "notebook", one accent): NOT a final brand or palette
- * (U1–U9 stay open). Components use only classes and tokens, never raw colours, so a later
- * visual direction replaces this file (or adds a [data-theme] block), not the components.
+ * Waymark, one visual system for Learn, Run and the old FP-30 screens (#143).
+ *
+ * SUBJECT  A young European adult learning money twice: by studying an idea, then by living it
+ *          in a practice life. The product is a trail: lessons are waymarks, a Run is walking it.
+ * PALETTE  light  mist #f3f5f9 (page) / paper #ffffff (surface) / ink #111a2e / slate #4a566e /
+ *                 trail #3a45d8 (the one accent) / test-gold #ffe9a8 on #5c3d00 (PayPal Sandbox only)
+ *          dark   night #0e1424 / panel #161e33 / ink #eef1f8 / slate #a5b0c8 /
+ *                 trail #9aa7ff / test-gold #3d3110 on #ffd978
+ *          status success #17714a, warning #8a5300, danger #b3261e (dark: #7fdcae, #f3c36e, #ff9d94).
+ *          Two kinds of money, always apart: game money is plain figures with a dotted
+ *          "practice" tag; PayPal Sandbox money is a gold, solid-edged "PayPal Sandbox, test money".
+ * TYPE     Bricolage Grotesque (headings, big figures: a bent, friendly grotesque with some
+ *          character) over Instrument Sans (reading and tools, tabular numerals).
+ * LAYOUT   Left-aligned, one column of reading (max 68ch), wide screens add a second column only
+ *          where content is parallel (the two doors, the Run desk).
+ *
+ *  landing 1280                          lesson 1280                 Run desk 1280
+ *  [Waymark  Learn Practise Map  demo]   [bar]                       [bar]
+ *  Learn money by studying it,           Cash balance                Year 1, Week 2 [M T W T F S S][Go]
+ *  then by living it.                    objectives | the idea       +---------------+-------------+
+ *  [continue where you left off]         explain in your words       | needs you now | your money  |
+ *  +--------------+ - - - +------------+ AI tutor block              | inbox, bills  | business    |
+ *  | Learn the    | trail | Live them  | exercises, note             | guesses, ask  | next 4 weeks|
+ *  | ideas        |       | in a Run   | [Practise this in a Run]    +---------------+-------------+
+ *  +--------------+       +------------+
+ *
+ *  390 (phone): bar = name only; content one column; bottom tabs Learn | Practise | Map.
+ *  /run on phone: top bar keeps the three links, the Run keeps its own five-tab bar (Week,
+ *  Business, Money, Ask, Notes) at the bottom, so there is never a double bottom bar.
+ *
+ * THE ONE MEMORABLE THING  The trail: a dashed line with waymark dots that joins the Learn door to
+ *          the Run door on the landing and underlines the active tab. Everything else is quiet.
+ * Tokens only below this block: components never use raw colours (Learn and Run map onto them).
  */
 :root {
-  /* palette (temporary) */
-  --color-bg: #f6f3ec;
-  --color-surface: #fffdf8;
-  --color-ink: #1f2328;
-  --color-ink-muted: #565c66;
-  --color-line: #e2dccf;
-  --color-accent: #2c6a59;
+  color-scheme: light dark;
+  /* palette */
+  --color-bg: #f3f5f9;
+  --color-surface: #ffffff;
+  --color-surface-2: #eaeef6;
+  --color-ink: #111a2e;
+  --color-ink-muted: #4a566e;
+  --color-line: #dbe0ea;
+  --color-accent: #3a45d8;
   --color-accent-ink: #ffffff;
-  --color-focus: #1d5fd1;
-  /* control edges need >= 3:1 against the surface (WCAG 1.4.11) */
-  --color-control-border: #858073;
+  --color-accent-soft: #e6e9fc;
+  --color-accent-text: #2b35b8;
+  --color-focus: #111a2e;
+  --color-control-border: #7a869c;
+  --color-success: #17714a;
+  --color-success-soft: #dcf3e7;
+  --color-warning: #8a5300;
+  --color-warning-soft: #fdecc8;
+  --color-danger: #b3261e;
+  --color-danger-soft: #fbe4e1;
+  /* PayPal Sandbox money (never used for anything else) */
+  --sandbox-bg: #ffe9a8;
+  --sandbox-ink: #5c3d00;
+  --sandbox-edge: #b57c00;
   /* status tones: always paired with a text label, never colour alone */
-  --tone-upcoming-ink: #47505c;
-  --tone-upcoming-bg: #eceff3;
-  --tone-due-ink: #8a4f00;
-  --tone-due-bg: #fcefd8;
-  --tone-overdue-ink: #9c2a2a;
-  --tone-overdue-bg: #fae3e0;
-  --tone-paid-ink: #2c6a59;
-  --tone-paid-bg: #e1f0ea;
-  --tone-other-ink: #47505c;
-  --tone-other-bg: #eceff3;
+  --tone-upcoming-ink: var(--color-ink-muted);
+  --tone-upcoming-bg: var(--color-surface-2);
+  --tone-due-ink: var(--color-warning);
+  --tone-due-bg: var(--color-warning-soft);
+  --tone-overdue-ink: var(--color-danger);
+  --tone-overdue-bg: var(--color-danger-soft);
+  --tone-paid-ink: var(--color-success);
+  --tone-paid-bg: var(--color-success-soft);
+  --tone-other-ink: var(--color-ink-muted);
+  --tone-other-bg: var(--color-surface-2);
   /* explanation provenance badges */
   --badge-standin-bg: #fde68a;
-  --badge-standin-ink: #78350f;
-  --badge-fallback-bg: #dbeafe;
-  --badge-fallback-ink: #1e3a8a;
-  --badge-ai-bg: #dcfce7;
-  --badge-ai-ink: #14532d;
+  --badge-standin-ink: #5c3d00;
+  --badge-fallback-bg: #dde6fb;
+  --badge-fallback-ink: #1e2f78;
+  --badge-ai-bg: #dcf3e7;
+  --badge-ai-ink: #0f4f33;
   /* fictional-money banner */
-  --fiction-bg: #fff3c4;
-  --fiction-ink: #574200;
+  --fiction-bg: var(--color-accent-soft);
+  --fiction-ink: var(--color-ink);
   /* type, space, shape */
-  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display:
+    "Bricolage Grotesque", "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
+  --font-body: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-figures: var(--font-body); /* tabular numerals below keep columns aligned */
   --text-xs: 0.8rem;
   --text-sm: 0.9rem;
@@ -52,10 +97,45 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
-  --radius: 10px;
-  --radius-sm: 6px;
-  --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 2px 8px rgb(0 0 0 / 0.04);
+  --radius: 14px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgb(17 26 46 / 0.06), 0 4px 14px rgb(17 26 46 / 0.05);
   --page-max: 1080px;
+  --bar-h: 56px;
+  --tabbar-h: 60px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #0e1424;
+    --color-surface: #161e33;
+    --color-surface-2: #1f2944;
+    --color-ink: #eef1f8;
+    --color-ink-muted: #a5b0c8;
+    --color-line: #2a3550;
+    --color-accent: #9aa7ff;
+    --color-accent-ink: #0e1424;
+    --color-accent-soft: #232d58;
+    --color-accent-text: #b4beff;
+    --color-focus: #ffffff;
+    --color-control-border: #6b7899;
+    --color-success: #7fdcae;
+    --color-success-soft: #17382b;
+    --color-warning: #f3c36e;
+    --color-warning-soft: #3b2d12;
+    --color-danger: #ff9d94;
+    --color-danger-soft: #44201f;
+    --sandbox-bg: #3d3110;
+    --sandbox-ink: #ffd978;
+    --sandbox-edge: #c99a2e;
+    --badge-standin-bg: #3d3110;
+    --badge-standin-ink: #ffd978;
+    --badge-fallback-bg: #232d58;
+    --badge-fallback-ink: #c9d1ff;
+    --badge-ai-bg: #17382b;
+    --badge-ai-ink: #9be8c3;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 14px rgb(0 0 0 / 0.25);
+  }
 }
 
 *,

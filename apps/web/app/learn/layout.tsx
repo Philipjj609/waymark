@@ -3,10 +3,10 @@ import type { ReactNode } from "react";
 import "./learn.css";
 export default function LearnLayout({ children }: { children: ReactNode }) {
   return (
-    <main className="learn-shell">
+    <main id="main-content" className="learn-shell">
       <header>
         <Link href="/learn" className="learn-brand">
-          Waymark · Learn
+          Learn
         </Link>
         <nav aria-label="Learn navigation">
           <Link href="/learn/modules/foundations">Curriculum</Link>

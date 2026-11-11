@@ -1,112 +1,57 @@
 /*
- * The Run (#112 / #120): design plan, then the styles.
+ * The Run (#112 / #120), restyled onto the shared Waymark tokens (#143).
  *
- * SUBJECT  A young adult's money life, played one week at a time. The world it lives in is a
- *          paper week planner, a notebook ledger, envelopes and receipts.
- * PALETTE  Light, "weekly paper": paper #eef0e9 (page), sheet #fbfbf6 (the notebook page),
- *          ink #18232b, pencil-grey #52616a, rule #d3d9cd, ballpoint #1f4e8c (the only action
- *          colour), highlighter #f4e27e (used ONLY behind "What needs you now"), red pencil
- *          #a8362b (late, owed), green pencil #2f6b4f (paid, in).
- *          Dark, "lamp on the desk": paper #12171b, sheet #1a2127, ink #e8ece6, pencil #a1aeb3,
- *          rule #2f3a41, ballpoint #8db4ef, highlighter #cdb54f (a low-alpha wash), red #f0a198,
- *          green #8fd0b0.
- * TYPE     Literata (a book serif) for the voice: dates, headings, the story. Instrument Sans for
- *          the tools: buttons, lists, figures (tabular numerals so columns line up).
- * LAYOUT   Desktop is an open planner spread. A week strip runs across the top; below it, the left
- *          page is the week (what needs you, inbox, bills, invoices, guesses), the right page is
- *          your money (summary, businesses, the next four weeks). Money tools, history, notes and
- *          the advisor sit on the lower page. Left-aligned throughout, ragged right.
+ * SUBJECT  A young adult's money life, played one week at a time: bills, a small business,
+ *          borrowing, an advisor. It keeps its structure (the week strip, "What needs you now",
+ *          ruled lists) and drops the paper-notebook costume: same palette, type and money
+ *          treatments as Learn (globals.css). Game money carries a dotted "practice" tag;
+ *          PayPal Sandbox money and receipts carry the gold Sandbox badge.
+ * LAYOUT   Desktop is an open spread. A week strip runs across the top; below it the left page
+ *          is the week (what needs you, inbox, bills, invoices, guesses), the right page is your
+ *          money (summary, businesses, the next four weeks). Left-aligned, ragged right.
  *
  *   1280                                           390
  *   +-------------------------------------+      +--------------------+
+ *   | Waymark   Learn Practise Map        |      | W   Learn Pract Map|
  *   | Run name        Practice money      |      | date      Continue |  (sticky)
  *   | Year 1, Week 2  [M T W T F S S]  [Continue]|  [M T W T F S S]    |
  *   +------------------+------------------+      | What needs you now |
  *   | What needs you   | Your money       |      | Inbox, Bills ...   |
- *   | Inbox            | Business         |      |                    |
- *   | Bills            | Next 4 weeks     |      |                    |
- *   | Invoices         +------------------+      +--------------------+
- *   | Worth a thought  | Money tools      |      | Week Biz Money Ask Notes |
- *   +------------------+ History, Notes   |      +--------------------+
- *   | Ask              |                  |
+ *   | Inbox, Bills     | Business         |      +--------------------+
+ *   | Invoices         | Next 4 weeks     |      | Week Biz Money Ask Notes |
+ *   | Worth a thought  | Money tools      |      +--------------------+
+ *   | Ask (AI advisor) | History, Notes   |
  *   +------------------+------------------+
  *
- * THE ONE MEMORABLE THING  The week strip. Seven days, today circled in ballpoint, days gone by
- *          crossed off in pencil, and a heavy line after Sunday: the Monday that time never runs
- *          past. The Continue button sits on the strip, so the rule it follows is the thing you
- *          see. Everything else stays quiet: ruled lines instead of boxes, one accent, one
- *          highlighter used once.
+ * THE ONE MEMORABLE THING  The week strip. Seven days, today circled in the accent, days gone
+ *          by crossed off, and a heavy line after Sunday: the Monday that time never runs past.
  */
 
 body:has(.run) {
-  --paper: #eef0e9;
-  --sheet: #fbfbf6;
-  --ink: #18232b;
-  --pencil: #52616a;
-  --rule: #d3d9cd;
-  --rule-strong: #8b968a;
-  --pen: #1f4e8c;
-  --pen-ink: #ffffff;
-  --pen-wash: #e3ebf6;
-  --marker: #f4e27e;
-  --red: #a8362b;
-  --red-wash: #f6e2de;
-  --green: #2f6b4f;
-  --green-wash: #dfeee6;
-  --amber: #7a4b00;
-  --amber-wash: #f8ecd2;
-  --focus: #1d5fd1;
-  /* The shared tokens (globals.css) that components from other packages read, mapped onto this
-     palette so they follow light and dark with the rest of the page. */
-  --color-bg: var(--paper);
-  --color-surface: var(--sheet);
-  --color-ink: var(--ink);
-  --color-ink-muted: var(--pencil);
-  --color-line: var(--rule);
-  --color-accent: var(--pen);
-  --color-accent-ink: var(--pen-ink);
-  --color-control-border: var(--rule-strong);
-  --color-focus: var(--focus);
-  --tone-due-ink: var(--amber);
-  --tone-due-bg: var(--amber-wash);
-  --tone-overdue-ink: var(--red);
-  --tone-overdue-bg: var(--red-wash);
-  --tone-paid-ink: var(--green);
-  --tone-paid-bg: var(--green-wash);
-  --tone-upcoming-ink: var(--pencil);
-  --tone-upcoming-bg: var(--pen-wash);
-  --tone-other-ink: var(--pencil);
-  --tone-other-bg: var(--pen-wash);
-  --fiction-bg: var(--amber-wash);
-  --fiction-ink: var(--amber);
+  /* The Run's old names, mapped onto the shared tokens so Learn and Run follow one palette. */
+  --paper: var(--color-bg);
+  --sheet: var(--color-surface);
+  --ink: var(--color-ink);
+  --pencil: var(--color-ink-muted);
+  --rule: var(--color-line);
+  --rule-strong: var(--color-control-border);
+  --pen: var(--color-accent);
+  --pen-ink: var(--color-accent-ink);
+  --pen-wash: var(--color-accent-soft);
+  --marker: color-mix(in srgb, var(--color-accent) 24%, transparent);
+  --red: var(--color-danger);
+  --red-wash: var(--color-danger-soft);
+  --green: var(--color-success);
+  --green-wash: var(--color-success-soft);
+  --amber: var(--color-warning);
+  --amber-wash: var(--color-warning-soft);
+  --focus: var(--color-focus);
   background: var(--paper);
 }
 
-@media (prefers-color-scheme: dark) {
-  body:has(.run) {
-    --paper: #12171b;
-    --sheet: #1a2127;
-    --ink: #e8ece6;
-    --pencil: #a1aeb3;
-    --rule: #2f3a41;
-    --rule-strong: #6d7b80;
-    --pen: #8db4ef;
-    --pen-ink: #0d1a2c;
-    --pen-wash: #22303f;
-    --marker: rgb(205 181 79 / 0.38);
-    --red: #f0a198;
-    --red-wash: #3d2422;
-    --green: #8fd0b0;
-    --green-wash: #1f3a31;
-    --amber: #f0c987;
-    --amber-wash: #3b3020;
-    --focus: #a9c7ff;
-  }
-}
-
 .run {
-  --serif: "Literata", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-  --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --serif: var(--font-display);
+  --sans: var(--font-body);
   --gap: 24px;
   min-height: 100dvh;
   color: var(--ink);
@@ -1471,60 +1416,12 @@ dialog.run-sheet::backdrop {
 }
 
 /* PayPal Sandbox receipt: a till slip, so a verified payment reads as a real document. */
-.run-receipt {
-  border: 1px dashed var(--rule-strong);
-  background: var(--color-surface, var(--paper));
-  padding: 16px 18px;
-  margin-block: 12px;
-  display: grid;
-  gap: 10px;
-  max-width: 44rem;
-}
-.run-receipt-head h3 {
-  margin: 0;
-}
-.run-receipt-head p {
-  margin: 4px 0 0;
-}
-.run-receipt-steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-.run-receipt-steps li {
-  display: grid;
-  grid-template-columns: 1.5rem 1fr;
-  gap: 6px;
-  align-items: start;
-}
-.run-receipt-tick {
-  color: var(--green);
-  font-weight: 700;
-}
-.run-receipt-detail {
-  display: block;
-  overflow-wrap: anywhere;
-}
-.run-receipt-evidence {
-  overflow-wrap: anywhere;
-  margin: 0;
-}
-
-/* Last on purpose: its selectors are more specific than the base rules above, so keeping them
-   at the end means no later, weaker rule appears to sit under them. */
-.run[data-busy="true"] .btn,
-.run[data-busy="true"] .run-segment,
-.run[data-busy="true"] .run-switch {
-  cursor: progress;
-}
 
 /* ---------------------------------------------------------------- structure and keyboard */
 html:has(.run) {
   /* The phone's fixed Continue bar and tab bar (about 130px) never cover a focused item. */
   scroll-padding-bottom: 150px;
-  scroll-padding-top: 12px;
+  scroll-padding-top: calc(var(--bar-h) + 12px);
 }
 .run-main {
   display: block;
@@ -1797,4 +1694,39 @@ html:has(.run) {
   .run-sheet-foot .btn-primary {
     flex: 1 1 auto;
   }
+}
+
+/* ---------------------------------------------------------------- PayPal Sandbox control (#143) */
+.run-paypal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.run-paypal > p {
+  flex: 1 1 100%;
+  margin: 0;
+}
+.run-suggested {
+  margin: 0 0 6px;
+  color: var(--color-accent-text);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+.run-start[data-suggested] {
+  border-radius: 12px;
+  outline: 3px solid var(--color-accent);
+  outline-offset: 6px;
+}
+.run-start-ideas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.run-start-ideas .concept-row {
+  margin: 0;
+}
+.run-cash .practice-tag {
+  align-self: center;
 }

@@ -3,6 +3,8 @@
 import type { PlayerCommand, RunView } from "@fle/run";
 import { useEffect, useId, useRef, useState } from "react";
 import type { SaveToken } from "../../lib/run-save";
+import { AiBlock, AiThinking } from "../ui/ai-block";
+import { ConceptRow } from "../ui/concept-chip";
 
 export interface AdvisorPanelProps {
   readonly save: SaveToken;
@@ -297,9 +299,13 @@ export function AdvisorPanel({ save, view, onCommand }: AdvisorPanelProps) {
       </form>
 
       <div className="advisor-out" aria-live="polite" data-testid="advisor-out">
+        {busy ? <AiThinking text="Thinking…" /> : null}
         {answer?.kind === "ask" ? (
           <AskOut
             answer={answer}
+            concepts={view.learning.notes
+              .slice(-3)
+              .map((n) => ({ conceptId: n.conceptId, label: n.label }))}
             sending={sending}
             onConfirm={(command) => confirm(command)}
             onCancel={() => setAnswer(null)}
@@ -335,11 +341,14 @@ export function AdvisorPanel({ save, view, onCommand }: AdvisorPanelProps) {
 
 function AskOut({
   answer,
+  concepts,
   sending,
   onConfirm,
   onCancel,
 }: {
   answer: Extract<Answer, { kind: "ask" }>;
+  /** Ideas this run has touched, as links into Learn. */
+  concepts: readonly { conceptId: string; label: string }[];
   sending: boolean;
   onConfirm(command: PlayerCommand): void;
   onCancel(): void;
@@ -361,32 +370,38 @@ function AskOut({
           advice
         />
       ) : null}
-      <p className="small muted advisor-label-line" data-testid="advisor-wording">
-        {answer.source === "model"
-          ? "Wording: AI, checked against the facts"
-          : "Wording: written by the game"}
-        {answer.checked ? (
-          <span className="advisor-badge" data-testid="advisor-checked">
-            Checked
-          </span>
-        ) : null}
-      </p>
-      <p className="advisor-prose">{answer.answer}</p>
-      <h3 className="run-h-sub">What this is based on</h3>
-      <p className="small muted advisor-hint">Facts: from your run</p>
-      <ul className="advisor-facts" data-testid="advisor-relevant">
-        {answer.relevant.map((f) => (
-          <li key={f}>{f}</li>
-        ))}
-      </ul>
-      <details className="advisor-all">
-        <summary>All facts</summary>
-        <ul className="advisor-facts">
-          {answer.facts.map((f) => (
-            <li key={f}>{f}</li>
-          ))}
-        </ul>
-      </details>
+      <AiBlock
+        factsTitle="Facts from your run, worked out by the game"
+        source={answer.source === "model" ? "model" : "game"}
+        wordingLabel={
+          answer.source === "model"
+            ? "Wording: AI, checked against the facts"
+            : "Wording: written by the game"
+        }
+        checked={answer.checked}
+        wordingTestId="advisor-wording"
+        checkedTestId="advisor-checked"
+        facts={
+          <>
+            <ul className="advisor-facts" data-testid="advisor-relevant">
+              {answer.relevant.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+            <details className="advisor-all">
+              <summary>All facts</summary>
+              <ul className="advisor-facts">
+                {answer.facts.map((f) => (
+                  <li key={f}>{f}</li>
+                ))}
+              </ul>
+            </details>
+          </>
+        }
+      >
+        <p className="advisor-prose ai-prose">{answer.answer}</p>
+      </AiBlock>
+      <ConceptRow concepts={concepts} label="Ideas your run has touched" />
     </div>
   );
 }
@@ -449,12 +464,10 @@ const ADVISOR_CSS = `
 .advisor-facts{margin:0;padding-left:var(--space-4);display:grid;gap:var(--space-1)}
 .advisor-now{width:100%;margin-bottom:var(--space-3)}
 .advisor-lead{margin:0 0 var(--space-3);font-weight:650;line-height:1.45}
-.advisor-label-line{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);margin:0 0 var(--space-1)}
-.advisor-badge{display:inline-block;padding:0 var(--space-2);border:1px solid var(--color-accent);border-radius:999px;font-weight:650}
+.advisor-out .ai-block{margin-top:var(--space-3)}
 .advisor-all{margin-top:var(--space-2)}
 .advisor-all summary{cursor:pointer;min-height:44px;display:flex;align-items:center}
 .advisor-all summary:focus-visible,.advisor-now:focus-visible,.advisor:focus-visible{outline:3px solid var(--color-focus);outline-offset:2px}
-.advisor-prose{margin:0;font-family:var(--run-serif,inherit);line-height:1.5}
 .advisor-note{margin:0;padding:var(--space-3);border:1px solid var(--color-line);border-radius:var(--radius-sm);background:var(--tone-other-bg);color:var(--tone-other-ink)}
 .advisor-error{background:var(--tone-overdue-bg);color:var(--tone-overdue-ink)}
 .advisor-confirm{margin:0;padding:var(--space-3);border:1px solid var(--color-accent);border-radius:var(--radius-sm);min-width:0}
