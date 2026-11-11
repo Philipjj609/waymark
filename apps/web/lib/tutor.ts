@@ -20,6 +20,7 @@ import {
   type SessionHash,
   type WorldStore,
 } from "@fle/server";
+import { hit } from "./rate-limit";
 
 /**
  * Server-only tutor orchestration (#84). A READ model: it loads one owner-scoped world, derives
@@ -85,7 +86,10 @@ export function recentEvents(events: readonly DomainEvent[]): readonly DomainEve
   return events;
 }
 
-const holder = globalThis as typeof globalThis & { __waymarkTutorProvider?: TutorProvider };
+const holder = globalThis as typeof globalThis & {
+  __waymarkTutorProvider?: TutorProvider;
+  __waymarkPaidAiWindow?: { start: number; count: number };
+};
 
 /**
  * The configured provider: the deterministic fake unless AI_PROVIDER=nebius with a real key and
@@ -95,13 +99,40 @@ const holder = globalThis as typeof globalThis & { __waymarkTutorProvider?: Tuto
 export function tutorProvider(env: NodeJS.ProcessEnv = process.env): TutorProvider {
   if (holder.__waymarkTutorProvider) return holder.__waymarkTutorProvider;
   const provider = createTutorProvider(env);
-  if (!provider.testStandIn) holder.__waymarkTutorProvider = provider;
-  return provider;
+  if (provider.testStandIn) return provider;
+  // One existing web process: every paid call, including repairs and Run interpretation,
+  // reserves admission before I/O. New sessions and provider recreation cannot reset it.
+  // This is a request ceiling, not a durable monetary budget: restart resets the windows.
+  const bounded: TutorProvider = {
+    id: provider.id,
+    modelId: provider.modelId,
+    testStandIn: false,
+    async complete(request, options) {
+      const now = Date.now();
+      let day = holder.__waymarkPaidAiWindow;
+      if (!day || now - day.start >= 86_400_000) {
+        day = { start: now, count: 0 };
+        holder.__waymarkPaidAiWindow = day;
+      }
+      if (day.count >= 300 || !hit({ name: "paid-ai-minute", max: 30, windowMs: 60_000 }, "all")) {
+        throw new Error("AI request allowance reached; use the labelled fallback");
+      }
+      day.count += 1;
+      return provider.complete(request, options);
+    },
+  };
+  holder.__waymarkTutorProvider = bounded;
+  return bounded;
 }
 
 /** Test hook: forget the cached real provider. */
 export function resetTutorProviderForTests(): void {
   holder.__waymarkTutorProvider = undefined;
+}
+
+/** Test hook, separate from provider recreation so it cannot renew the allowance. */
+export function resetPaidAiBudgetForTests(): void {
+  holder.__waymarkPaidAiWindow = undefined;
 }
 
 export async function explainWorld(

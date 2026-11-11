@@ -87,6 +87,27 @@ async function tabFromTop(page: Page) {
 }
 
 test.describe("the Run", () => {
+  test("model interpretation is tentative even when the API wording check passed", async ({
+    page,
+  }) => {
+    await startFirstFlat(page, "AI label check");
+    await page.route("**/api/run/advisor", (route) =>
+      route.fulfill({
+        json: {
+          facts: ["Cash and dates are computed by the game."],
+          relevant: ["Cash and dates are computed by the game."],
+          answer: "Think about when the pay and bills arrive.",
+          source: "model",
+          checked: true,
+        },
+      }),
+    );
+    await page.getByTestId("advisor-now").click();
+    await expect(page.getByTestId("advisor-wording")).toContainText("advice may be wrong");
+    await expect(page.getByTestId("advisor-checked")).toHaveCount(0);
+    await expect(page.getByTestId("advisor-relevant")).toContainText("computed by the game");
+  });
+
   test("start, name, play a few decisions, reload and continue", async ({ page }) => {
     await page.goto("/run");
     await expect(page.getByTestId("start-screen")).toBeVisible();
