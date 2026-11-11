@@ -13,9 +13,9 @@ import {
 } from "@fle/payments";
 import type { CheckoutTarget, RunCheckoutGateway, RunCheckoutRef, SessionHash } from "@fle/server";
 import { canonicalJson } from "@fle/simulation";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { Db } from "./migrate.js";
-import { PgOperationStore } from "./pg-operation-store.js";
+import { PgOperationStore, parseOperationRecord } from "./pg-operation-store.js";
 import { loadRunTx, type SqlExecutor } from "./pg-run-store.js";
 import { checkoutFacts, checkoutWork, providerOperations } from "./schema.js";
 
@@ -61,6 +61,64 @@ export class PgRunCheckoutGateway implements RunCheckoutGateway {
       const record = await this.canonical(tx as Db, owner, input);
       if (!record.paypalOrderId) throw new Error("Run checkout order unresolved");
       await this.target.bind(tx, owner, record);
+    });
+  }
+
+  async releaseUncreated(
+    owner: SessionHash,
+    input: OperationRecord,
+    leaseToken: string,
+  ): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      await this.canonical(tx as Db, owner, input);
+      const [row] = await tx
+        .select()
+        .from(providerOperations)
+        .where(eq(providerOperations.operationId, input.operationId))
+        .for("update");
+      if (!row) return false;
+      const record = parseOperationRecord(row);
+      // REFUSED is monotonic: a later refusal cannot hide an earlier uncertain/pending create.
+      // A missing order alone proves nothing. Capture state and persisted facts must agree.
+      if (
+        record.createState !== "REFUSED" ||
+        record.paypalOrderId !== null ||
+        record.captureState !== "NOT_STARTED"
+      )
+        return false;
+      const [fact] = await tx
+        .select({ id: checkoutFacts.eventId })
+        .from(checkoutFacts)
+        .where(eq(checkoutFacts.operationId, record.operationId))
+        .limit(1);
+      if (fact) return false;
+      const [work] = await tx
+        .select()
+        .from(checkoutWork)
+        .where(
+          and(
+            eq(checkoutWork.operationId, record.operationId),
+            eq(checkoutWork.leaseToken, leaseToken),
+            sql`${checkoutWork.leaseUntil} > now()`,
+          ),
+        )
+        .for("update");
+      if (!work) return false;
+      // The target checks the original reservation/release history. Repeating this must not
+      // clear a newer operation's hold. Economic release and terminal scheduling are atomic.
+      await this.target.releaseUncreated(tx, owner, record);
+      await tx
+        .update(checkoutWork)
+        .set({
+          phase: "FINISHED",
+          action: "RECONCILE",
+          approveUrl: null,
+          leaseToken: null,
+          leaseUntil: null,
+          lastError: "CREATE_REFUSED",
+        })
+        .where(eq(checkoutWork.operationId, record.operationId));
+      return true;
     });
   }
 
