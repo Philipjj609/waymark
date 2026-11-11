@@ -46,6 +46,8 @@ If Sandbox checkout is not configured, the checklist says so and offers payment 
 
 ## Revisit and troubleshooting
 
+**Known advisor limitation:** the Run advisor's current **Checked** badge reflects restricted-wording checks only. It does not certify the financial meaning of its advice. It can incorrectly interpret future affordability despite known incoming pay. Compare its prose with the game-generated cash, income and bill dates; treat a conclusion about future rent as tentative. [Issue #151](https://github.com/Philipjj609/waymark/issues/151) records a deterministic synthetic-provider reproduction and the proposed narrow label correction. This limitation does not alter the ledger or verified-payment settlement, and the approved video is preserved unchanged.
+
 - Keep cookies and the signed browser Run pointer. There is no password or cross-device account recovery. A private window is a separate learner, not a way to resume the first session.
 - PostgreSQL preserves data across application restarts; the credential-free memory demo does not. Do not mistake memory-mode data loss for the durable configuration's behavior.
 - If the tutor falls back, the lesson remains usable. Report the provider label and visible error state, not notes or secrets.
@@ -53,3 +55,5 @@ If Sandbox checkout is not configured, the checklist says so and offers payment 
 - `/api/health` confirms the app process responds; it does not verify the database, Nebius or PayPal. A verified release requires the separate deployed acceptance checks.
 
 Judges should not change infrastructure, migrations, credentials, webhook registrations or payment settings. The operator's release checklist is separate from this learner-facing guide.
+
+Latest operator evidence, video checksum, deployment procedure and remaining owner gates: [final release preflight](final-preflight.md). No new hosted success is implied by this document.
