@@ -29,7 +29,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       >
         Skip to the content
       </a>
-      <SiteHeader checkoutLink={path !== "/today"} />
+      <SiteHeader />
       <div className="shell-body">{children}</div>
       <TabBar />
     </>

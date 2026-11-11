@@ -41,15 +41,11 @@ function BrandLogo() {
   );
 }
 
-/** Top bar: name, the three destinations, and a quiet link to the PayPal checkout demo. */
-/** `checkoutLink` is off on the fictional FP-30 screen, which must not mention PayPal at all. */
-export function SiteHeader({
-  compact = false,
-  checkoutLink = true,
-}: {
-  compact?: boolean;
-  checkoutLink?: boolean;
-}) {
+/**
+ * Top bar: name and the three destinations. PayPal Sandbox checkout has no top-level entry: it
+ * starts from a bill inside a Run, which supplies the world and obligation it pays.
+ */
+export function SiteHeader({ compact = false }: { compact?: boolean }) {
   const path = usePathname() ?? "";
   return (
     <header className="site-bar" data-compact={compact ? "" : undefined}>
@@ -64,11 +60,6 @@ export function SiteHeader({
             </Link>
           ))}
         </nav>
-        {checkoutLink ? (
-          <Link href="/checkout" className="site-aside">
-            PayPal checkout demo
-          </Link>
-        ) : null}
       </div>
     </header>
   );

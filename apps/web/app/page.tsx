@@ -87,7 +87,7 @@ export default function Landing() {
         <div className="home-note">
           <h2>PayPal payments are test money</h2>
           <p>
-            Paying a bill goes through PayPal Sandbox and is labelled{" "}
+            Paying a bill inside a Run goes through PayPal Sandbox and is labelled{" "}
             <span className="sandbox-badge">PayPal Sandbox, test money</span>. No real money moves.
           </p>
         </div>
@@ -99,11 +99,6 @@ export default function Landing() {
           </p>
         </div>
       </section>
-
-      <p className="home-foot">
-        Also here: <Link href="/today">the original FP-30 Today screen</Link> and{" "}
-        <Link href="/checkout">the PayPal checkout demo</Link>.
-      </p>
     </main>
   );
 }

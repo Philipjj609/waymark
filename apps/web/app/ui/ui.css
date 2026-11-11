@@ -64,8 +64,7 @@ h3 {
   align-items: stretch;
   gap: var(--space-1);
 }
-.site-nav a,
-.site-aside {
+.site-nav a {
   display: inline-flex;
   align-items: center;
   min-height: 44px;
@@ -75,8 +74,7 @@ h3 {
   font-weight: 600;
   text-decoration: none;
 }
-.site-nav a:hover,
-.site-aside:hover {
+.site-nav a:hover {
   color: var(--color-ink);
   background: var(--color-surface-2);
 }
@@ -85,18 +83,12 @@ h3 {
   background: var(--color-accent-soft);
   box-shadow: inset 0 -3px 0 var(--color-accent);
 }
-.site-aside {
-  font-size: var(--text-sm);
-  font-weight: 500;
-}
-
 .tabbar {
   display: none;
 }
 
 @media (max-width: 760px) {
-  .site-bar .site-nav,
-  .site-bar .site-aside {
+  .site-bar .site-nav {
     display: none;
   }
   /* On /run the top bar keeps the three links (the Run owns the bottom bar). */
@@ -615,15 +607,6 @@ h3 {
   color: var(--color-ink-muted);
   font-size: var(--text-sm);
 }
-.home-foot {
-  margin-top: var(--space-5);
-  color: var(--color-ink-muted);
-  font-size: var(--text-sm);
-}
-.home-foot a {
-  color: var(--color-accent-text);
-}
-
 @media (max-width: 760px) {
   .home {
     padding-top: var(--space-5);
