@@ -1,0 +1,53 @@
+{
+  "method": "All local refs, unique UTF-8 Git blobs; exact identity and 12 consecutive nonempty whitespace-normalized lines >=240characters; no worktree caches/build outputs/private memory",
+  "waymarkTextBlobs": 1258,
+  "graphragTextBlobs": 396,
+  "waymarkGitObjects": 2822,
+  "waymarkBlobs": 1258,
+  "waymarkNontextPaths": [],
+  "graphragBlobs": 398,
+  "graphragNontextPaths": [
+    "crates/graph-truth/tests/fixtures/rs-basic/index.scip",
+    "crates/graph-truth/tests/fixtures/ts-basic/index.scip"
+  ],
+  "graphragGitObjects": 704,
+  "skippedLargeWaymark": [],
+  "skippedLargeGraphRag": [],
+  "exactSharedBlobs": [
+    {
+      "waymark": "LICENSE-APACHE",
+      "graphrag": "LICENSE-APACHE",
+      "blob": "b47fd930652b899ba53a3153aa63ef45e920eb0d"
+    }
+  ],
+  "normalizedBlockMatches": [
+    {
+      "waymark": "LICENSE-APACHE",
+      "graphrag": "LICENSE-APACHE",
+      "blocks": 149,
+      "waymarkFirstLine": 1,
+      "graphragFirstLine": 1
+    },
+    {
+      "waymark": "LICENSE-MIT",
+      "graphrag": "LICENSE-MIT",
+      "blocks": 4,
+      "waymarkFirstLine": 5,
+      "graphragFirstLine": 5
+    },
+    {
+      "waymark": "apps/web/public/third-party-notices.txt",
+      "graphrag": "LICENSE-APACHE",
+      "blocks": 1664,
+      "waymarkFirstLine": 80,
+      "graphragFirstLine": 1
+    },
+    {
+      "waymark": "apps/web/public/third-party-notices.txt",
+      "graphrag": "LICENSE-MIT",
+      "blocks": 293,
+      "waymarkFirstLine": 289,
+      "graphragFirstLine": 5
+    }
+  ]
+}

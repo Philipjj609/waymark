@@ -57,7 +57,7 @@ sha256sum "$BACKUP_DIR/waymark-before-rc.dump" > "$BACKUP_DIR/waymark-before-rc.
 
 ## Additive migration and promotion procedure
 
-1. Obtain explicit approval for the public service/environment changes and exact release SHA. Verify source CI, lockfile, notice bundle and root attribution decision. Audit the hosted plan/environment again after access is restored.
+1. Obtain explicit approval for the public service/environment changes and exact release SHA. Verify source CI, lockfile, notice bundle and inclusion of the reviewed [root-attribution correction](graphrag-provenance.md). Audit the hosted plan/environment again after access is restored.
 2. Take and verify the backup above. Capture the old deployment SHA and stable Run secret reference without reading it into logs. Inspect `_migrations` read-only; never edit migration names or applied SQL.
 3. New migrations from older hosted builds may include **all of `0001` through `0005`**, not merely the last three. Use the checked-in runner; it sorts the embedded migrations, applies missing files in one transaction under advisory lock `727001`, and records successful names atomically.
 4. Required order: `0000_init.sql` → `0001_provider_operation_steps.sql` → `0002_checkout_work.sql` → `0003_personal_learning.sql` → `0004_run_heads.sql` → `0005_payment_targets.sql`. `0004` creates canonical append-only Run history; `0005` binds the existing payment operations to exactly one World or Run, with immutable binding and a genuine Run foreign key. Existing World rows retain their binding.
