@@ -1,8 +1,8 @@
 # Waymark judge demo
 
-This guide targets the integrated release candidate `c48d23687d0951a1c41bf48a4415148da5c07f71`.
+This guide targets deployed application `9c886a9bf89c22c8f03a20e2e14ac921c9e8bcfb`.
 
-**Hosted release-candidate URL: pending deployment and end-to-end verification.** An existing older hosted build is not evidence that this candidate is deployed. The release owner adds the verified URL to the submission after the public-deployment gate. Repository publication is also a separate owner decision.
+**Verified hosted URL:** [Waymark](https://waymark-web-vwsd.onrender.com/). Hosted Learn → real AI → durable Run → €750 PayPal Sandbox capture → restart → receipt recovery → Learn acceptance passed on 11 November 2026. [Evidence](https://github.com/Philipjj609/waymark/issues/147#issuecomment-6805004606).
 
 You can already run the candidate using the [README setup](../../README.md#run-locally-without-api-credentials). No API credentials or account are needed for the local fictional-money experience. The [final acceptance evidence](https://github.com/Philipjj609/waymark/issues/140#issuecomment-6796137800) records the separately tested real Sandbox journey and its persistence checks.
 
@@ -46,6 +46,7 @@ If Sandbox checkout is not configured, the checklist says so and offers payment 
 
 ## Revisit and troubleshooting
 
+**Known advisor limitation:** AI interpretation can be wrong about future affordability despite known incoming pay. Compare its prose with the game-generated cash, income and bill dates; treat a conclusion about future rent as tentative. The misleading Checked badge was removed from Run Ask by [PR #153](https://github.com/Philipjj609/waymark/pull/153); deterministic facts retain their separate label. [Issue #151](https://github.com/Philipjj609/waymark/issues/151) records the remaining interpretation limitation. This does not alter the ledger or verified-payment settlement, and the approved video is preserved unchanged.
 - Keep cookies and the signed browser Run pointer. There is no password or cross-device account recovery. A private window is a separate learner, not a way to resume the first session.
 - PostgreSQL preserves data across application restarts; the credential-free memory demo does not. Do not mistake memory-mode data loss for the durable configuration's behavior.
 - If the tutor falls back, the lesson remains usable. Report the provider label and visible error state, not notes or secrets.
@@ -53,3 +54,5 @@ If Sandbox checkout is not configured, the checklist says so and offers payment 
 - `/api/health` confirms the app process responds; it does not verify the database, Nebius or PayPal. A verified release requires the separate deployed acceptance checks.
 
 Judges should not change infrastructure, migrations, credentials, webhook registrations or payment settings. The operator's release checklist is separate from this learner-facing guide.
+
+Latest operator evidence, video checksum and recovery limits: [final release preflight](final-preflight.md). No success beyond the linked acceptance evidence is claimed.
