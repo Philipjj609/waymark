@@ -137,7 +137,7 @@ function availability(w: World, lender: LenderKind, pocket: PocketId): Availabil
       return left > 0 ? { maxMinor: left, why: null } : no("Your card is at its limit.");
     }
     case "PAYDAY":
-      if (w.cash(pocket) >= PAYDAY_CASH_BELOW)
+      if (w.available(pocket) >= PAYDAY_CASH_BELOW)
         return no("Payday lenders only lend when cash is low.");
       return have.length > 0
         ? no("You already have a payday loan.")
@@ -517,7 +517,7 @@ function repay(w: World, cmd: { loanId: string; amountMinor: number }): Refusal 
   if (loan?.status !== "ACTIVE") return refuse("UNKNOWN_LOAN", "There is no such loan to pay.");
   if (cmd.amountMinor > loan.balanceMinor)
     return refuse("OVER_BALANCE", `You only owe ${euros(loan.balanceMinor)}.`);
-  if (w.cash(loan.pocket) < cmd.amountMinor)
+  if (w.available(loan.pocket) < cmd.amountMinor)
     return refuse("NOT_ENOUGH_CASH", `You need ${euros(cmd.amountMinor)} in that pocket.`);
   w.post(loan.pocket, `Repaid: ${loan.label}`, [
     [loan.account, "DEBIT", cmd.amountMinor],

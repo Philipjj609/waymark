@@ -57,6 +57,26 @@ export class World {
     return this.balance(pocket, "ASSET:Cash");
   }
 
+  /**
+   * Cash held for external (PayPal Sandbox) payments in progress: every reserved, unpaid bill in
+   * this pocket. While held it is still the player's cash, but nothing else may spend it, so the
+   * settlement that the provider already captured can always be applied (Codex review, #140).
+   */
+  held(pocket: PocketId): Minor {
+    let total = 0;
+    for (const b of this.s.bills) {
+      if (b.pocket === pocket && b.reservedBy && (b.status === "DUE" || b.status === "LATE")) {
+        total += b.amountMinor;
+      }
+    }
+    return total;
+  }
+
+  /** Cash that may be spent now: cash minus what is held for payments in progress. */
+  available(pocket: PocketId): Minor {
+    return this.cash(pocket) - this.held(pocket);
+  }
+
   /** Sum of every LIABILITY balance across all pockets. */
   totalDebt(): Minor {
     let total = 0;
@@ -106,7 +126,7 @@ export class World {
   /** Cash out of a pocket to an expense (or any debit account). False, and nothing posted, if short. */
   spend(pocket: PocketId, account: string, amountMinor: Minor, memo: string): boolean {
     if (amountMinor <= 0) return true;
-    if (this.cash(pocket) < amountMinor) return false;
+    if (this.available(pocket) < amountMinor) return false;
     this.post(pocket, memo, [
       [account, "DEBIT", amountMinor],
       ["ASSET:Cash", "CREDIT", amountMinor],
@@ -129,7 +149,7 @@ export class World {
    * beyond that is income to you.
    */
   transfer(from: PocketId, to: PocketId, amountMinor: Minor, memo: string): boolean {
-    if (from === to || amountMinor <= 0 || this.cash(from) < amountMinor) return false;
+    if (from === to || amountMinor <= 0 || this.available(from) < amountMinor) return false;
     if (from === YOU) {
       this.post(YOU, memo, [
         ["ASSET:BusinessStake", "DEBIT", amountMinor],

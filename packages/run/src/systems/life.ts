@@ -220,12 +220,15 @@ export const lifeSystem: RunSystem = {
 
     // Grace is inclusive: a bill is still DUE on dueDay + graceDays and LATE from the next morning.
     for (const bill of s.bills) {
+      // A bill held for a payment in flight is being paid: it is neither late nor charged a fee,
+      // so its amount always equals what the payment provider was asked to collect.
+      if (bill.reservedBy) continue;
       if (bill.status === "DUE" && w.day > bill.dueDay + bill.graceDays) markLate(w, bill);
     }
 
     if (!evicted(w)) {
       for (const bill of s.bills) {
-        if (bill.kind !== "RENT" || bill.status !== "LATE") continue;
+        if (bill.kind !== "RENT" || bill.status !== "LATE" || bill.reservedBy) continue;
         if (s.flags[`life.warned.${bill.id}`] === true) continue;
         const lateSince = bill.dueDay + bill.graceDays;
         if (w.day - lateSince <= RENT_WARNING_AFTER_DAYS) continue;

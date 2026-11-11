@@ -72,7 +72,7 @@ function parseStart(params: Readonly<Record<string, unknown>>): StartParams | nu
 function startBusiness(w: World, p: StartParams): void {
   if (!IMPLEMENTED.includes(p.type)) return;
   // Checked before an id is spent, so a failed start leaves no trace.
-  if (!p.fromOutside && w.cash(YOU) < p.capitalMinor) return;
+  if (!p.fromOutside && w.available(YOU) < p.capitalMinor) return;
   const id = w.id("biz");
   const biz: Business = {
     id,
@@ -476,7 +476,7 @@ function restock(w: World, cmd: { businessId: string; units: number }): Refusal 
   if (!b) return refuse("UNKNOWN_BUSINESS", "There is no open business like that.");
   if (b.type !== "STOCK") return refuse("NO_STOCK", "This business does not hold stock.");
   const cost = restockCost(cmd.units);
-  if (w.cash(b.id) < cost)
+  if (w.available(b.id) < cost)
     return refuse("NOT_ENOUGH_CASH", `The business needs ${euros(cost)} in cash for that.`);
   w.post(b.id, "Bought stock", [
     ["ASSET:Stock", "DEBIT", cost],
@@ -553,7 +553,7 @@ export const businessSystem: RunSystem = {
     "business.start": (w, params) => {
       const p = parseStart(params);
       if (!p || !IMPLEMENTED.includes(p.type)) return "Coming later.";
-      if (!p.fromOutside && w.cash(YOU) < p.capitalMinor)
+      if (!p.fromOutside && w.available(YOU) < p.capitalMinor)
         return `Needs ${euros(p.capitalMinor)} in cash.`;
       return null;
     },
