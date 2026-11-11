@@ -79,7 +79,17 @@ test("durable Run Sandbox payment recovers a lost response, browser extras and p
   await db.connect();
   try {
     await start();
-    await page.goto(`${origin}/run`);
+    await page.goto(`${origin}/learn/lessons/cash-balance`);
+    const lessonNote = "Available cash and a verified payment are different records.";
+    await page.getByLabel("What do you want to remember or question?").fill(lessonNote);
+    await page.getByRole("button", { name: "Save my note" }).click();
+    await expect(
+      page.getByText("Note saved and linked to Cash balance.", { exact: false }),
+    ).toBeVisible();
+    await page
+      .getByRole("navigation", { name: "Main", exact: true })
+      .getByRole("link", { name: "Practise", exact: true })
+      .click();
     await expect(page.getByTestId("start-screen")).toBeVisible();
     const created = page.waitForResponse(
       (r) =>
@@ -258,6 +268,20 @@ test("durable Run Sandbox payment recovers a lost response, browser extras and p
       }
       expect(debit).toBe(credit);
     }
+    await page
+      .getByRole("navigation", { name: "Main", exact: true })
+      .getByRole("link", { name: "Learn", exact: true })
+      .click();
+    await page.locator('a[href="/learn/lessons/cash-balance"]').first().click();
+    await expect(page.getByLabel("What do you want to remember or question?")).toHaveValue(
+      lessonNote,
+    );
+    await page
+      .getByRole("navigation", { name: "Main", exact: true })
+      .getByRole("link", { name: "Practise", exact: true })
+      .click();
+    await page.getByTestId("continue-run").first().click();
+    await expect(page.getByTestId("paypal-chip")).toContainText("1 payment verified");
     console.log(
       JSON.stringify({
         evidence: "real durable Run UI/lost-response/extras/restart",
