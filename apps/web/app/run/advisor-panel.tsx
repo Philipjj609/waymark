@@ -2,15 +2,32 @@
 
 import type { PlayerCommand, RunView } from "@fle/run";
 import { useEffect, useId, useRef, useState } from "react";
+import type { RunPayment } from "../../lib/run-paypal";
 import type { SaveToken } from "../../lib/run-save";
 import { AiBlock, AiThinking } from "../ui/ai-block";
 import { ConceptRow } from "../ui/concept-chip";
+import { paymentsOf } from "./api";
 
 export interface AdvisorPanelProps {
   readonly save: SaveToken;
   readonly view: RunView;
   /** Sends a command the player confirmed, through the same path as every other action. */
   readonly onCommand: (command: PlayerCommand) => Promise<void>;
+  /**
+   * The server recorded that the advisor was asked (a server-only entry in the run's log), which
+   * moved the run on one step: adopt the new pointer so the next click is not stale.
+   */
+  readonly onRunMoved?: (next: {
+    save: SaveToken;
+    view: RunView;
+    payments: readonly RunPayment[] | null;
+  }) => void;
+}
+
+interface Moved {
+  save: SaveToken;
+  view: RunView;
+  payments: readonly RunPayment[] | null;
 }
 
 type Mode = "ask" | "do";
@@ -90,7 +107,24 @@ function readAnswer(json: unknown): Answer {
   return failed;
 }
 
-async function callAdvisor(mode: Mode, text: string, save: SaveToken): Promise<Answer> {
+/** The run as the server holds it after it recorded the question, if it did. */
+function movedOf(json: unknown): Moved | null {
+  if (!isObject(json) || !isObject(json.run)) return null;
+  const run = json.run;
+  if (!isObject(run.save) || !isObject(run.view)) return null;
+  return {
+    save: run.save as unknown as SaveToken,
+    view: run.view as unknown as RunView,
+    payments: paymentsOf(run),
+  };
+}
+
+async function callAdvisor(
+  mode: Mode,
+  text: string,
+  save: SaveToken,
+  onMoved?: (next: Moved) => void,
+): Promise<Answer> {
   let res: Response;
   try {
     res = await fetch("/api/run/advisor", {
@@ -119,7 +153,10 @@ async function callAdvisor(mode: Mode, text: string, save: SaveToken): Promise<A
     return { kind: "error", message: "The advisor could not answer just now. Try again." };
   }
   try {
-    return readAnswer(await res.json());
+    const json: unknown = await res.json();
+    const moved = movedOf(json);
+    if (moved) onMoved?.(moved);
+    return readAnswer(json);
   } catch {
     return { kind: "error", message: "The advisor sent back something unexpected." };
   }
@@ -139,7 +176,7 @@ const HELP: Record<Mode, { label: string; hint: string; examples: string }> = {
 };
 
 /** Ask about your money; typed requests become actions you confirm. All money here is fictional. */
-export function AdvisorPanel({ save, view, onCommand }: AdvisorPanelProps) {
+export function AdvisorPanel({ save, view, onCommand, onRunMoved }: AdvisorPanelProps) {
   const [mode, setMode] = useState<Mode>("ask");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -163,7 +200,7 @@ export function AdvisorPanel({ save, view, onCommand }: AdvisorPanelProps) {
     setBusy(true);
     setAnswer(null);
     askedDay.current = view.day;
-    const result = await callAdvisor(asMode, question, save);
+    const result = await callAdvisor(asMode, question, save, onRunMoved);
     // Ignore a slow reply if the player has moved on to another question or tab.
     if (ticket === latest.current) {
       setAnswer(result);

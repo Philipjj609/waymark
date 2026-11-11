@@ -2,7 +2,12 @@ import { z } from "zod";
 import { rejectUnsafeWrite } from "../../../../lib/csrf";
 import { errorResponse, guarded, json, worldNotFound } from "../../../../lib/http";
 import { clientIp, hit, type Limit } from "../../../../lib/rate-limit";
-import { paypalSandboxConfigured, payRunBill, runPayStatus } from "../../../../lib/run-paypal";
+import {
+  paypalSandboxConfigured,
+  payRunBill,
+  runPayments,
+  runPayStatus,
+} from "../../../../lib/run-paypal";
 import { runEnabled, type SaveToken } from "../../../../lib/run-save";
 import { readSession, startSession } from "../../../../lib/session";
 
@@ -57,7 +62,12 @@ const BodySchema = z.discriminatedUnion("action", [
     .object({
       action: z.literal("status"),
       save: SaveSchema,
-      operationId: z.string().regex(/^pop_[A-Za-z0-9_-]{1,100}$/),
+      billId: BillId,
+      /** Optional: after a lost answer the browser may not know it; the server finds it from the run's log. */
+      operationId: z
+        .string()
+        .regex(/^pop_[A-Za-z0-9_-]{1,100}$/)
+        .optional(),
       /** Ask PayPal once more (the "Check again" button); polling alone only reads. */
       recheck: z.boolean().optional(),
     })
@@ -119,13 +129,28 @@ export async function POST(req: Request): Promise<Response> {
     const r =
       body.action === "pay"
         ? await payRunBill(session.hash, save, body.billId)
-        : await runPayStatus(session.hash, save, body.operationId, body.recheck === true);
-    if (r.ok) return json({ status: r.status, view: r.view, save: r.save }, 200, setCookie);
+        : await runPayStatus(
+            session.hash,
+            save,
+            body.billId,
+            body.operationId,
+            body.recheck === true,
+          );
+    if (r.ok) {
+      const payments = await runPayments(session.hash, save.runId);
+      return json({ status: r.status, view: r.view, save: r.save, payments }, 200, setCookie);
+    }
     // The rules or PayPal said no: a plain message, never a provider payload or a stack trace.
     return json(
       {
         error: { code: r.code, message: r.message },
-        ...(r.save ? { save: r.save, view: r.view } : {}),
+        ...(r.save
+          ? {
+              save: r.save,
+              view: r.view,
+              payments: await runPayments(session.hash, r.save.runId),
+            }
+          : {}),
       },
       r.http,
       setCookie,

@@ -559,12 +559,21 @@ export const ReleaseExternalSchema = z
   })
   .strict();
 
+/**
+ * SERVER ONLY. The advisor route appends this after it answered a question, so "the player asked
+ * the advisor" is part of the run's authoritative history (and the demo checklist can be rebuilt
+ * from the server after a reload). It has no economic effect: the handler only records a flag and
+ * one event. Players cannot send it (CommandSchema excludes it).
+ */
+export const AdvisorAskedSchema = z.object({ kind: z.literal("ADVISOR_ASKED") }).strict();
+
 /** Everything a signed log may contain. */
 export const LoggedCommandSchema = z.discriminatedUnion("kind", [
   ...PLAYER_COMMANDS,
   SettleExternalSchema,
   ReserveExternalSchema,
   ReleaseExternalSchema,
+  AdvisorAskedSchema,
 ]);
 export type Command = z.infer<typeof LoggedCommandSchema>;
 export type CommandKind = Command["kind"];

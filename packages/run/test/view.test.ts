@@ -60,6 +60,7 @@ describe("runView", () => {
     expect(v.businesses).toEqual([]);
     expect(Object.keys(v).sort()).toEqual(
       [
+        "advisorAsked",
         "borrowing",
         "bills",
         "businesses",

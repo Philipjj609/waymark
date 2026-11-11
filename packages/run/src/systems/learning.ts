@@ -695,6 +695,13 @@ export const learningSystem: RunSystem = {
   },
 
   commands: {
+    // Server-only record that the advisor was used. No money, no stops, no cash: a flag and one event.
+    ADVISOR_ASKED(w) {
+      if (w.s.flags["advisor.asked"] === true) return undefined;
+      w.s.flags["advisor.asked"] = true;
+      w.emit("ADVISOR_ASKED", "You asked the advisor a question.", { concepts: [] });
+      return undefined;
+    },
     PREDICT(w, cmd) {
       const p = w.s.learning.predictions.find((x) => x.id === cmd.predictionId);
       if (!p) return refuse("UNKNOWN_PREDICTION", "There is no such question.");

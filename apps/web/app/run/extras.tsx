@@ -2,10 +2,11 @@
 
 import type { BillView, RunView } from "@fle/run";
 import { useEffect, useRef, useState } from "react";
+import type { RunPayment } from "../../lib/run-paypal";
 import type { SaveToken } from "../../lib/run-save";
 import { euros, plural } from "./format";
-import { type PayPalReceipt, PayWithPayPal } from "./pay-with-paypal";
-import type { DemoState, StoredReceipt } from "./storage";
+import { type PaidNext, PayWithPayPal } from "./pay-with-paypal";
+import type { StoredReceipt } from "./storage";
 import type { Act } from "./ui";
 
 /** The pieces around the desk: the Continue check, the first-run guide, the demo checklist, the
@@ -14,11 +15,7 @@ import type { Act } from "./ui";
 /** How the desk asks the advisor a question (switches to the Ask area and tells the advisor). */
 export type AskWhy = (text: string) => void;
 
-export type PayPalSettle = (next: {
-  save: SaveToken;
-  view: RunView;
-  receipt: PayPalReceipt | null;
-}) => void;
+export type PayPalSettle = (next: PaidNext) => void;
 
 // ---------------------------------------------------------------- Ask why
 
@@ -180,31 +177,76 @@ export const demoSteps = (paypalSandbox: boolean): readonly DemoStep[] => [
   { id: "ask", label: "Ask the advisor a question" },
 ];
 
-/** The steps the view itself already proves (the advisor step comes from a window event). */
+/**
+ * Receipts for the verified PayPal Sandbox payments the SERVER lists. The order id comes from the
+ * server (the shared checkout); the browser's cached copy only fills a gap when the server could
+ * not name it this time.
+ */
+export function receiptsFrom(
+  payments: readonly RunPayment[],
+  cache: readonly StoredReceipt[],
+): StoredReceipt[] {
+  const out: StoredReceipt[] = [];
+  for (const p of payments) {
+    if (p.state !== "SETTLED" || !p.captureId) continue;
+    const cached = cache.find((r) => r.captureId === p.captureId);
+    const orderId = p.orderId ?? cached?.orderId ?? "unavailable";
+    out.push({
+      operationId: p.operationId,
+      orderId,
+      captureId: p.captureId,
+      status: "COMPLETED",
+      amountMinor: p.amountMinor,
+      currency: "EUR",
+      billLabel: p.billLabel,
+      evidence: `paypal:order:${orderId}:capture:${p.captureId}`,
+      calendarLabel: p.calendarLabel ?? cached?.calendarLabel ?? "",
+    });
+  }
+  return out;
+}
+
+/**
+ * The checklist steps the SERVER's state proves: a settled rent payment (the payment projection),
+ * the studio (the view), the month close (the calendar or a month-end stop), and the advisor (a
+ * server-only record in the run's log, shown as `view.advisorAsked`). Nothing here reads
+ * localStorage except the cached receipts as a fallback while the projection is unknown.
+ */
 export function demoProgress(
   view: RunView,
-  receipts: readonly StoredReceipt[],
+  payments: readonly RunPayment[] | null,
+  cached: readonly StoredReceipt[],
   paypalSandbox: boolean,
 ): string[] {
   const ticks: string[] = [];
   const paidByGame = view.feed.some((f) => f.kind === "BILL_PAID" || f.kind === "BILL_PAID_LATE");
-  if (receipts.length > 0 || (!paypalSandbox && paidByGame)) ticks.push("pay");
+  const sandboxRent = payments
+    ? payments.some((p) => p.state === "SETTLED" && p.billKind === "RENT")
+    : cached.length > 0;
+  if (paypalSandbox ? sandboxRent : paidByGame) ticks.push("pay");
   if (view.businesses.length > 0) ticks.push("studio");
-  if (view.learning.monthClose) ticks.push("month");
+  if (
+    view.calendar.monthIndex >= 2 ||
+    view.learning.monthClose !== null ||
+    view.stops.some((s) => s.kind === "MONTH_END")
+  ) {
+    ticks.push("month");
+  }
+  if (view.advisorAsked) ticks.push("ask");
   return ticks;
 }
 
 export function DemoChecklist({
-  demo,
+  ticks,
   paypalSandbox,
   onHide,
 }: {
-  demo: DemoState;
+  ticks: readonly string[];
   paypalSandbox: boolean;
   onHide: () => void;
 }) {
   const steps = demoSteps(paypalSandbox);
-  const done = steps.filter((s) => demo.ticks.includes(s.id)).length;
+  const done = steps.filter((s) => ticks.includes(s.id)).length;
   return (
     <section className="run-demo" aria-labelledby="demo-h" data-testid="demo-checklist">
       <h2 id="demo-h" className="run-demo-h">
@@ -212,7 +254,7 @@ export function DemoChecklist({
       </h2>
       <ul className="run-demo-list">
         {steps.map((s) => {
-          const ticked = demo.ticks.includes(s.id);
+          const ticked = ticks.includes(s.id);
           return (
             <li key={s.id} data-done={ticked} data-testid={`demo-${s.id}`}>
               <span className="run-demo-tick" aria-hidden="true">

@@ -50,6 +50,8 @@ export interface RunView {
   readonly loans: readonly LoanView[];
   readonly businesses: readonly BusinessView[];
   /** Known and expected money over the next 28 days. Never hidden luck. */
+  /** True once the advisor has answered a question in this run (recorded by the server). */
+  readonly advisorAsked: boolean;
   readonly timeline: readonly TimelineItem[];
   /** Latest first, at most 40. */
   readonly feed: readonly {

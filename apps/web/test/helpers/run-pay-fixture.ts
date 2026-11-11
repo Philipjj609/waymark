@@ -81,6 +81,8 @@ export class FakePayPal {
   creates = 0;
   captureCalls = 0;
   testCardCreates = 0;
+  /** Scripted answers to the next order creations (consumed in order), then normal behaviour. */
+  createOutcomes: Array<"DECLINED" | "UNCERTAIN" | "CONFLICT"> = [];
   readonly orders = new Map<string, FakeOrder>();
   readonly byRequest = new Map<string, string>();
 
@@ -125,6 +127,11 @@ export class FakePayPal {
       const known = this.byRequest.get(requestId);
       const existing = known ? this.orders.get(known) : undefined;
       if (existing) return reply(200, this.body(existing));
+      const scripted = this.createOutcomes.shift();
+      if (scripted === "DECLINED") {
+        return reply(422, { details: [{ issue: "INSTRUMENT_DECLINED" }] });
+      }
+      if (scripted === "UNCERTAIN") throw new TypeError("lost create response");
       const body = JSON.parse(String(init.body));
       if (body.payment_source?.card) this.testCardCreates++;
       this.creates++;
@@ -149,6 +156,16 @@ export class FakePayPal {
                 amount: this.behaviour === "WRONG_AMOUNT" ? wrong : unit.amount,
               },
       };
+      if (scripted === "CONFLICT") {
+        // An order that is not the one we asked for, already holding a completed foreign capture.
+        order.status = "COMPLETED";
+        order.unit = {
+          ...order.unit,
+          reference_id: "foreign-operation",
+          custom_id: "foreign-operation",
+        };
+        order.capture = { id: `CAP${id}`, status: "COMPLETED", amount: unit.amount };
+      }
       this.orders.set(id, order);
       this.byRequest.set(requestId, id);
       return reply(201, this.body(order));

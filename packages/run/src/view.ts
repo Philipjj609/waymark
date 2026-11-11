@@ -125,7 +125,9 @@ export function runView(state: RunState): RunView {
       }),
     ),
     timeline: timeline(state),
+    advisorAsked: state.flags["advisor.asked"] === true,
     feed: [...state.events]
+      .filter((e) => e.kind !== "ADVISOR_ASKED")
       .reverse()
       .slice(0, FEED_MAX)
       .map((e) => ({

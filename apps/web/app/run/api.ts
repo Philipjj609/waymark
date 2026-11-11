@@ -1,4 +1,5 @@
 import type { Command, RunView } from "@fle/run";
+import type { RunPayment } from "../../lib/run-paypal";
 import type { LegacySave, SaveToken } from "../../lib/run-save";
 
 /**
@@ -19,16 +20,43 @@ export type RunBody =
   | { action: "import"; save: LegacySave };
 
 export type RunOutcome =
-  | { kind: "ok"; view: RunView; save: SaveToken }
+  | { kind: "ok"; view: RunView; save: SaveToken; payments: readonly RunPayment[] | null }
   /** 422: the rules said no. The save is unchanged. */
-  | { kind: "refused"; message: string; view: RunView; save: SaveToken }
+  | {
+      kind: "refused";
+      message: string;
+      view: RunView;
+      save: SaveToken;
+      payments: readonly RunPayment[] | null;
+    }
   /** 409 STALE: the run moved on elsewhere. Adopt `view` and `save`; nothing was changed. */
-  | { kind: "stale"; message: string; view: RunView; save: SaveToken }
+  | {
+      kind: "stale";
+      message: string;
+      view: RunView;
+      save: SaveToken;
+      payments: readonly RunPayment[] | null;
+    }
   /** 403 / 404 / 409: the server will not use this save. `message` says which. */
   | { kind: "unverified"; message: string }
   | { kind: "failed"; message: string };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+
+/** The server-built payment projection of a response (null if absent or malformed). */
+export function paymentsOf(json: unknown): readonly RunPayment[] | null {
+  if (!isObject(json) || !Array.isArray(json.payments)) return null;
+  const ok = json.payments.filter(
+    (p): p is RunPayment =>
+      isObject(p) &&
+      typeof p.operationId === "string" &&
+      typeof p.billId === "string" &&
+      typeof p.billLabel === "string" &&
+      typeof p.amountMinor === "number" &&
+      (p.state === "SETTLED" || p.state === "PENDING" || p.state === "RELEASED"),
+  );
+  return ok;
+}
 
 /** The server's error body is {error:{code,message}}; only the code is trusted for wording. */
 function errorCode(json: unknown): string | null {
@@ -77,6 +105,7 @@ export async function callRun(body: RunBody): Promise<RunOutcome> {
       message: STALE_NOTICE,
       view: json.view as RunView,
       save: json.save as SaveToken,
+      payments: paymentsOf(json),
     };
   }
   if (res.status === 409) return { kind: "unverified", message: RULES_MESSAGE };
@@ -98,13 +127,15 @@ export async function callRun(body: RunBody): Promise<RunOutcome> {
   if ((res.status === 200 || res.status === 422) && isObject(json) && json.view && json.save) {
     const view = json.view as RunView;
     const save = json.save as SaveToken;
-    if (res.status === 200) return { kind: "ok", view, save };
+    const payments = paymentsOf(json);
+    if (res.status === 200) return { kind: "ok", view, save, payments };
     const refusal = isObject(json.refusal) ? json.refusal.message : null;
     return {
       kind: "refused",
       message: typeof refusal === "string" ? refusal : "That can't be done right now.",
       view,
       save,
+      payments,
     };
   }
   if (res.status === 400) {
