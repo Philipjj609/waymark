@@ -687,6 +687,11 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
           original.service.requestRun(OWNER, t.runId, operation, "CAPTURE"),
         ]);
         expect(requests.filter((r) => r?.accepted)).toHaveLength(1);
+        // A concurrent rejected request can briefly lock the work row while the accepted
+        // request's immediate worker skips it. Drain only the still-queued capture intent;
+        // reconciling here instead would consume the deliberately lost-response fixture.
+        if ((await original.queue.read(operation))?.action === "CAPTURE")
+          await original.service.run(operation, false);
         expect(provider.creates).toBe(1);
         expect(provider.captures).toBe(1);
         expect((await original.service.statusRun(OWNER, t.runId, operation))?.settled).toBe(false);
@@ -709,6 +714,54 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
         expect((await new PgRunStore(db).load(t.runId))?.commands).toHaveLength(2);
         expect(await restarted.queue.facts(operation)).toHaveLength(0);
       });
+
+      if (mode === "PostgreSQL")
+        it("a contended work row preserves capture intent until a later worker resumes it once", async () => {
+          const t = await setup();
+          const provider = new ProviderFixture();
+          const runtime = createPgCheckout(
+            db,
+            {
+              clientId: "fixture-id",
+              clientSecret: "fixture-secret",
+              fetch: provider.fetch,
+              maxAttempts: 1,
+              returnOrigin: "http://localhost:3000",
+            },
+            t.target,
+          );
+          const operation = await runtime.startRun(OWNER, t.ref, 0);
+          await runtime.service.run(operation, true);
+          if (!provider.order) throw new Error("fixture order not created");
+          provider.order.status = "APPROVED";
+          expect(await runtime.queue.requestRun(OWNER, t.runId, operation, "CAPTURE")).toBe(true);
+          await db.transaction(async (tx) => {
+            await tx
+              .select()
+              .from(checkoutWork)
+              .where(eq(checkoutWork.operationId, operation))
+              .for("update");
+            await runtime.service.run(operation, false);
+            expect(provider.captures).toBe(0);
+          });
+          expect(await runtime.queue.read(operation)).toMatchObject({
+            action: "CAPTURE",
+            phase: "CAPTURING",
+          });
+          await runtime.service.run(operation, false);
+          expect(provider.captures).toBe(1);
+          expect((await runtime.queue.read(operation))?.phase).toBe("RECONCILING");
+          await runtime.service.requestRun(OWNER, t.runId, operation, "RECONCILE");
+          await runtime.service.requestRun(OWNER, t.runId, operation, "CAPTURE");
+          expect(await runtime.service.statusRun(OWNER, t.runId, operation)).toMatchObject({
+            phase: "FINISHED",
+            settled: true,
+          });
+          expect(provider.creates).toBe(1);
+          expect(provider.captures).toBe(1);
+          expect(t.commits()).toBe(1);
+          expect((await new PgRunStore(db).load(t.runId))?.commands).toHaveLength(2);
+        });
     },
   );
 }
