@@ -1,0 +1,20 @@
+{
+  "name": "@fle/run",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Waymark Run (#112): a saved money life over weeks, months and years. Pure and deterministic; every cent posts to the @fle/domain ledger.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@fle/contracts": "workspace:*",
+    "@fle/domain": "workspace:*",
+    "@fle/learning": "workspace:*",
+    "@fle/simulation": "workspace:*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "fast-check": "4.10.2"
+  }
+}
