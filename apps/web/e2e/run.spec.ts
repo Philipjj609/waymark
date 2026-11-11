@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { expect, type Page, type Response, test } from "@playwright/test";
+import { signLegacySave } from "../lib/run-save";
 
 /**
  * The Run (#112 / R8, screens redesigned in #120) in a real browser. Everything is fictional
@@ -175,23 +177,55 @@ test.describe("the Run", () => {
     expect(await storedRuns(page)).toHaveLength(1);
   });
 
-  test("a run saved before runs had names is carried over once", async ({ page }) => {
-    await startFirstFlat(page, "Old save");
-    // Put the save back where the single-save version kept it.
+  test("a run saved before runs had names is carried over once, then imported into the server", async ({
+    page,
+  }) => {
+    await page.goto("/run");
+    // The single-save version kept a v1 save (the whole log) under its own key. Signed the way the
+    // old server signed it (same secret as the test server).
+    process.env.RUN_SECRET = "e2e".repeat(12);
+    const old = signLegacySave("run_00000000000000a1", "first-flat", [
+      { kind: "ADVANCE", mode: "NEXT_STOP" },
+    ]);
     await page.evaluate(
-      ([runsKey, legacyKey]) => {
-        const runs = JSON.parse(localStorage.getItem(runsKey) as string);
-        localStorage.setItem(legacyKey, JSON.stringify(runs[0].save));
-        localStorage.removeItem(runsKey);
-      },
-      [RUNS_KEY, LEGACY_KEY] as const,
+      ([legacyKey, legacy]) => localStorage.setItem(legacyKey, JSON.stringify(legacy)),
+      [LEGACY_KEY, old] as const,
     );
     await page.reload();
     await expect(page.getByTestId("saved-run")).toHaveCount(1);
     expect(await page.evaluate((k) => localStorage.getItem(k), LEGACY_KEY)).toBeNull();
-    expect(await storedRuns(page)).toHaveLength(1);
+    const [carried] = await storedRuns(page);
+    expect(carried.save.v).toBe(1);
+
+    // Opening it moves it into the server once and replaces it with a pointer: no log left here.
     const resumed = await clickAndWaitForRun(page, () => page.getByTestId("continue-run").click());
     expect(resumed.status()).toBe(200);
+    await expect(page.getByTestId("desk")).toBeVisible();
+    const [now] = await storedRuns(page);
+    expect(now.save).toMatchObject({ v: 2, runId: "run_00000000000000a1", version: 1 });
+    expect(now.save).not.toHaveProperty("log");
+  });
+
+  test("an old save that cannot be imported is explained, with a way to delete it", async ({
+    page,
+  }) => {
+    await page.goto("/run");
+    const bad = {
+      v: 1,
+      runId: "run_00000000000000a2",
+      scenarioId: "first-flat",
+      log: [{ kind: "ADVANCE", mode: "NEXT_STOP" }],
+      sig: "A".repeat(43),
+    };
+    await page.evaluate(
+      ([legacyKey, legacy]) => localStorage.setItem(legacyKey, JSON.stringify(legacy)),
+      [LEGACY_KEY, bad] as const,
+    );
+    await page.reload();
+    await page.getByTestId("continue-run").click();
+    await expect(page.getByTestId("problem")).toContainText("could not verify");
+    await page.getByTestId("remove-run").click();
+    await expect(page.getByTestId("saved-run")).toHaveCount(0);
   });
 
   test("Continue never runs past the next Monday", async ({ page }) => {
@@ -306,30 +340,26 @@ test.describe("the Run", () => {
     }
   });
 
-  test("the server rejects a save whose log was changed (403)", async ({ page, baseURL }) => {
+  test("the server rejects a pointer that was changed (403)", async ({ page, baseURL }) => {
     await startFirstFlat(page);
     await carryOn(page);
 
     const [first] = await storedRuns(page);
-    const tampered = JSON.parse(JSON.stringify(first.save)) as { log: unknown[] };
-    // Same signature, longer log: an attempt to slip in a move the server never accepted.
-    tampered.log = [...tampered.log, { kind: "ADVANCE", mode: "WEEK" }];
-
-    const res = await page.request.post("/api/run", {
-      headers: { origin: baseURL as string, "content-type": "application/json" },
-      data: { action: "view", save: tampered },
-    });
-    expect(res.status()).toBe(403);
-
-    // And the untouched save still works.
-    const ok = await page.request.post("/api/run", {
-      headers: { origin: baseURL as string, "content-type": "application/json" },
-      data: { action: "view", save: first.save },
-    });
-    expect(ok.status()).toBe(200);
+    // There is no log in the browser any more: just a signed pointer to the server's run.
+    expect(first.save).not.toHaveProperty("log");
+    const post = (save: unknown) =>
+      page.request.post("/api/run", {
+        headers: { origin: baseURL as string, "content-type": "application/json" },
+        data: { action: "view", save },
+      });
+    // Same signature, a different version or head hash: an attempt to rewrite what happened.
+    expect((await post({ ...first.save, version: first.save.version + 1 })).status()).toBe(403);
+    expect((await post({ ...first.save, headHash: "0".repeat(64) })).status()).toBe(403);
+    // And the untouched pointer still works.
+    expect((await post(first.save)).status()).toBe(200);
   });
 
-  test("a tampered save in the browser is explained, with a way to delete that run", async ({
+  test("a changed pointer in the browser is explained, with a way to delete that run", async ({
     page,
   }) => {
     await startFirstFlat(page, "Doomed");
@@ -347,6 +377,87 @@ test.describe("the Run", () => {
     await page.getByTestId("remove-run").click();
     await expect(page.getByTestId("saved-run")).toHaveCount(0);
     await expect(page.getByTestId("start-screen")).toBeVisible();
+  });
+
+  test("a pointer from an older tab gets the current run when opened, and a refusal to write", async ({
+    page,
+  }) => {
+    await startFirstFlat(page, "Two tabs");
+    const [before] = await storedRuns(page);
+    await carryOn(page);
+    const [after] = await storedRuns(page);
+    expect(after.save.version).toBeGreaterThan(before.save.version);
+
+    // Another tab is still holding the earlier pointer.
+    await page.evaluate(
+      ([k, old]) => {
+        const runs = JSON.parse(localStorage.getItem(k) as string);
+        runs[0].save = old;
+        localStorage.setItem(k, JSON.stringify(runs));
+      },
+      [RUNS_KEY, before.save] as const,
+    );
+    await page.reload();
+    // Opening shows the server's current run (a view never writes).
+    await clickAndWaitForRun(page, () => page.getByTestId("continue-run").click());
+    await expect(page.getByTestId("desk")).toBeVisible();
+    const [shown] = await storedRuns(page);
+    expect(shown.save.version).toBe(after.save.version);
+
+    // A command from the stale pointer is refused, with where the run really is.
+    const stale = await page.evaluate(
+      async ([old]) => {
+        const res = await fetch("/api/run", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            action: "command",
+            save: old,
+            command: { kind: "ADVANCE", mode: "WEEK" },
+            requestId: crypto.randomUUID(),
+          }),
+        });
+        return { status: res.status, body: await res.json() };
+      },
+      [before.save] as const,
+    );
+    expect(stale.status).toBe(409);
+    expect(stale.body.error.code).toBe("STALE");
+    expect(stale.body.save.version).toBe(after.save.version);
+  });
+
+  test("a click made from an out-of-date screen says the run moved on and shows where it is", async ({
+    page,
+  }) => {
+    await startFirstFlat(page, "Moved on");
+    // Another tab moves the run on behind this screen's back.
+    const [mine] = await storedRuns(page);
+    const moved = await page.evaluate(
+      async ([save]) => {
+        const res = await fetch("/api/run", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            action: "command",
+            save,
+            command: { kind: "ADVANCE", mode: "NEXT_STOP" },
+            requestId: crypto.randomUUID(),
+          }),
+        });
+        return res.status;
+      },
+      [mine.save] as const,
+    );
+    expect(moved).toBe(200);
+
+    const res = await clickAndWaitForRun(page, () => pressContinue(page));
+    expect(res.status()).toBe(409);
+    await expect(page.getByTestId("problem")).toContainText(
+      "Your run moved on in another tab. Here is where it is now.",
+    );
+    // The screen adopted the server's current run, and storage holds the matching pointer.
+    const [stored] = await storedRuns(page);
+    expect(stored.save.version).toBe(mine.save.version + 1);
   });
 
   test("Continue asks before letting a payable bill go late", async ({ page }) => {
@@ -605,6 +716,7 @@ test.describe("the Run", () => {
           action: "command",
           save: reply.save,
           command: { kind: "PAY_BILL", billId: bill.id },
+          requestId: randomUUID(),
         });
         if (paid.status() === 200) reply = (await paid.json()) as Reply;
       }
@@ -612,6 +724,7 @@ test.describe("the Run", () => {
         action: "command",
         save: reply.save,
         command: { kind: "ADVANCE", mode: "WEEK" },
+        requestId: randomUUID(),
       });
       expect([200, 422]).toContain(res.status());
       reply = (await res.json()) as Reply;

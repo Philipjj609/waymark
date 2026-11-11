@@ -1,20 +1,9 @@
-import { LoggedCommandSchema } from "@fle/run";
 import { z } from "zod";
 import { rejectUnsafeWrite } from "../../../../lib/csrf";
 import { errorResponse, guarded, json, worldNotFound } from "../../../../lib/http";
 import { clientIp, hit, type Limit } from "../../../../lib/rate-limit";
-import {
-  payBillThroughSandbox,
-  paypalSandboxConfigured,
-  staleSaveResponse,
-} from "../../../../lib/run-paypal";
-import {
-  knownScenario,
-  MAX_LOG,
-  runEnabled,
-  type SaveToken,
-  verifySave,
-} from "../../../../lib/run-save";
+import { payBillThroughSandbox, paypalSandboxConfigured } from "../../../../lib/run-paypal";
+import { runEnabled, type SaveToken } from "../../../../lib/run-save";
 import { readSession, startSession } from "../../../../lib/session";
 
 export const runtime = "nodejs";
@@ -46,12 +35,13 @@ async function readCapped(req: Request, max: number): Promise<string | null> {
   return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
+/** The browser holds only a signed pointer to the server's run (lib/run-save.ts). */
 const SaveSchema = z
   .object({
-    v: z.literal(1),
+    v: z.literal(2),
     runId: z.string().regex(/^run_[0-9a-f]{16}$/),
-    scenarioId: z.string().regex(/^[a-z0-9-]{1,64}$/),
-    log: z.array(LoggedCommandSchema).max(MAX_LOG),
+    version: z.number().int().min(0).max(1_000_000),
+    headHash: z.string().regex(/^[0-9a-f]{64}$/),
     sig: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
   })
   .strict();
@@ -63,6 +53,15 @@ const BodySchema = z
     billId: z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/),
   })
   .strict();
+
+/** Everything else a failed payment can say is a 422: the rules or PayPal said no. */
+const HTTP: Record<string, number> = {
+  BAD_SAVE: 403,
+  NOT_FOUND: 404,
+  STALE: 409,
+  RULES_CHANGED: 409,
+  UNRECONCILED: 409,
+};
 
 const tooMany = () =>
   errorResponse(429, "RATE_LIMITED", "too many requests", { "retry-after": "60" });
@@ -106,25 +105,20 @@ export async function POST(req: Request): Promise<Response> {
     const body = parsed.data;
 
     const save: SaveToken = body.save;
-    if (!verifySave(save)) return errorResponse(403, "INVALID_REQUEST", "save not recognised");
-    if (!knownScenario(save.scenarioId)) {
-      return errorResponse(400, "INVALID_REQUEST", "unknown starting point");
-    }
     if (!hit(PER_RUN, save.runId)) return tooMany();
-    const stale = staleSaveResponse(save);
-    if (stale) return stale;
 
-    const r = await payBillThroughSandbox(save, body.billId);
+    const r = await payBillThroughSandbox(session.hash, save, body.billId);
     if (r.ok) {
       return json(
-        { status: "PAID", save: r.save, view: r.view, already: r.already, receipt: r.receipt },
+        { status: "PAID", save: r.save, view: r.view, receipt: r.receipt },
         200,
         setCookie,
       );
     }
+    const http = HTTP[r.status] ?? 422;
     return json(
-      { status: r.status, message: r.message },
-      r.status === "UNRECONCILED" ? 409 : 422,
+      { status: r.status, message: r.message, ...(r.save ? { save: r.save, view: r.view } : {}) },
+      http,
       setCookie,
     );
   });

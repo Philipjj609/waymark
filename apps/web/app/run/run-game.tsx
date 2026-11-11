@@ -30,6 +30,7 @@ import { type PayPalReceipt, PayPalReceiptCard } from "./pay-with-paypal";
 import { type ScenarioSummary, StartScreen } from "./start-screen";
 import {
   extrasOf,
+  isLegacySave,
   loadRuns,
   type RunExtras,
   type StoredReceipt,
@@ -101,6 +102,8 @@ export function RunGame({
   const [dismissed, setDismissed] = useState<readonly string[]>([]);
   const [chip, setChip] = useState<CashChip | null>(null);
   const busyRef = useRef(false);
+  const pendingRequest = useRef<{ key: string; requestId: string } | null>(null);
+  const lostAnswer = useRef(false);
   const pendingFocus = useRef<string | null>(null);
   const runsRef = useRef<readonly StoredRun[]>([]);
   const activeRef = useRef<Active | null>(null);
@@ -212,6 +215,7 @@ export function RunGame({
       setBusy(true);
       try {
         const out = await callRun(body);
+        lostAnswer.current = out.kind === "failed";
         const who = (id: string): Active | null =>
           opening
             ? {
@@ -226,6 +230,15 @@ export function RunGame({
           if (!a) return false;
           adopt(out.save, out.view, a, command);
           return true;
+        }
+        if (out.kind === "stale") {
+          // Another tab (or a lost answer) moved the run on: show where it is now, change nothing.
+          const a = who(out.save.runId);
+          if (!a) return false;
+          adopt(out.save, out.view, a, null);
+          setProblem({ kind: "failed", message: out.message });
+          setAnnounce(out.message);
+          return false;
         }
         if (out.kind === "refused") {
           setRefusal(out.message);
@@ -258,7 +271,19 @@ export function RunGame({
       if (!save) return Promise.resolve(false);
       const home = (document.activeElement as HTMLElement | null)?.closest("[data-focus-home]")?.id;
       pendingFocus.current = command.kind === "ADVANCE" ? "run-stops" : (home ?? "run-stops");
-      return request({ action: "command", save, command }, command, null);
+      // One id per click. If the answer was lost (network), the same click retried keeps its id,
+      // so the server counts it once; anything else gets a fresh one.
+      const key = `${save.headHash}|${JSON.stringify(command)}`;
+      const retry = pendingRequest.current;
+      const requestId = retry && retry.key === key ? retry.requestId : crypto.randomUUID();
+      pendingRequest.current = { key, requestId };
+      return request({ action: "command", save, command, requestId }, command, null).then(
+        (done) => {
+          // Settled for good (applied, refused or resynced): the next click is a new click.
+          if (!lostAnswer.current) pendingRequest.current = null;
+          return done;
+        },
+      );
     },
     [save, request],
   );
@@ -285,7 +310,12 @@ export function RunGame({
     pendingFocus.current = "run-stops";
     resetScreen();
     viewRef.current = null;
-    void request({ action: "view", save: run.save }, null, {
+    // An old browser save (full log) is moved into the server record once; the v2 pointer that
+    // comes back then replaces it in storage.
+    const body: RunBody = isLegacySave(run.save)
+      ? { action: "import", save: run.save }
+      : { action: "view", save: run.save };
+    void request(body, null, {
       name: run.name,
       scenarioId: run.scenarioId,
       id: run.id,
@@ -557,7 +587,7 @@ function Desk({
   };
 
   const settle = (next: { save: SaveToken; view: RunView; receipt: PayPalReceipt | null }) => {
-    setReceipt(next.receipt);
+    if (next.receipt) setReceipt(next.receipt);
     onSettled(next);
   };
 

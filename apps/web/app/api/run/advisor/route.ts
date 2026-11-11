@@ -1,4 +1,4 @@
-import { LoggedCommandSchema, runView } from "@fle/run";
+import { runView } from "@fle/run";
 import { z } from "zod";
 import { rejectUnsafeWrite } from "../../../../lib/csrf";
 import { errorResponse, guarded, json, worldNotFound } from "../../../../lib/http";
@@ -12,16 +12,7 @@ import {
   overriddenModel,
   takeDailyModelCall,
 } from "../../../../lib/run-advisor";
-import {
-  knownScenario,
-  MAX_LOG,
-  needsReplay,
-  ReplayError,
-  runEnabled,
-  type SaveToken,
-  stateOf,
-  verifySave,
-} from "../../../../lib/run-save";
+import { loadRun, runEnabled, type SaveToken } from "../../../../lib/run-save";
 import { readSession, startSession } from "../../../../lib/session";
 import { tutorProvider } from "../../../../lib/tutor";
 
@@ -31,16 +22,14 @@ export const dynamic = "force-dynamic";
 const PER_SESSION: Limit = { name: "advisor-session", max: 20, windowMs: 60_000 };
 /** A backstop: a made-up cookie gets a fresh session bucket, so per-session is not enough. */
 const GLOBAL: Limit = { name: "advisor-all", max: 60, windowMs: 60_000 };
-/** Rebuilding a run after a restart is the expensive part; bound it like /api/run does. */
-const REPLAYS: Limit = { name: "advisor-replay", max: 30, windowMs: 60_000 };
 const MAX_BODY_BYTES = 400_000;
 
 const SaveSchema = z
   .object({
-    v: z.literal(1),
+    v: z.literal(2),
     runId: z.string().regex(/^run_[0-9a-f]{16}$/),
-    scenarioId: z.string().regex(/^[a-z0-9-]{1,64}$/),
-    log: z.array(LoggedCommandSchema).max(MAX_LOG),
+    version: z.number().int().min(0).max(1_000_000),
+    headHash: z.string().regex(/^[0-9a-f]{64}$/),
     sig: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
   })
   .strict();
@@ -122,28 +111,25 @@ export async function POST(req: Request): Promise<Response> {
       return errorResponse(400, "INVALID_REQUEST", `write between 1 and ${MAX_TEXT} characters`);
     }
 
-    // Signature first: an unsigned log is never replayed, and never reaches a model.
-    if (!verifySave(save)) return errorResponse(403, "INVALID_REQUEST", "save not recognised");
-    if (!knownScenario(save.scenarioId)) {
-      return errorResponse(400, "INVALID_REQUEST", "unknown starting point");
-    }
-    if (needsReplay(save) && !hit(REPLAYS, "all")) return tooMany();
-
-    try {
-      const state = stateOf(save);
-      // Only the view goes any further: it holds no seed and no hidden luck.
-      const view = runView(state);
-      const model = modelForRequest();
-      const body =
-        mode === "ask"
-          ? await askAdvisor(text, view, model, undefined, state)
-          : await doAdvisor(text, state, view, model);
-      return json(body, 200, setCookie);
-    } catch (err) {
-      if (err instanceof ReplayError) {
-        return errorResponse(409, "STORE_CONFLICT", "this save no longer matches the rules");
+    // The server's own copy of the run answers; the pointer is verified first, and a run that is
+    // not this session's looks like a run that does not exist. Nothing is ever appended here.
+    const loaded = await loadRun(session.hash, save);
+    if (!loaded.ok) {
+      if (loaded.code === "BAD_SAVE") {
+        return errorResponse(403, "INVALID_REQUEST", "save not recognised");
       }
-      throw err;
+      if (loaded.code === "NOT_FOUND") return worldNotFound();
+      return errorResponse(409, "STORE_CONFLICT", "this save no longer matches the rules");
     }
+
+    const state = loaded.state;
+    // Only the view goes any further: it holds no seed and no hidden luck.
+    const view = runView(state);
+    const model = modelForRequest();
+    const body =
+      mode === "ask"
+        ? await askAdvisor(text, view, model, undefined, state)
+        : await doAdvisor(text, state, view, model);
+    return json(body, 200, setCookie);
   });
 }
