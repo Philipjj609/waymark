@@ -6,7 +6,7 @@
  * is set.
  */
 import { randomUUID } from "node:crypto";
-import type { ObservedOrder } from "@fle/payments";
+import { formatPayPalAmount, type ObservedOrder } from "@fle/payments";
 import { type Db, PgOperationStore, type PgRunStore, type SqlExecutor } from "@fle/persistence";
 import { type Command, replay, runView } from "@fle/run";
 import { hashSessionId } from "@fle/server";
@@ -242,10 +242,9 @@ for (const mode of MODES) {
 
     // ---------------------------------------------------------------- reconcile matrix
 
-    function observed(
-      status: string,
-      captures: ReadonlyArray<readonly [string, string]>,
-    ): ObservedOrder {
+    /** A capture is [id, status] (no money reported) or [id, status, amountValue, currencyCode]. */
+    type Cap = readonly [string, string] | readonly [string, string, string | null, string | null];
+    function observed(status: string, captures: ReadonlyArray<Cap>): ObservedOrder {
       return {
         orderId: "ORDERSYNTH",
         status: status as ObservedOrder["status"],
@@ -254,11 +253,11 @@ for (const mode of MODES) {
         amountValue: null,
         currencyCode: "EUR",
         approveUrl: null,
-        captures: captures.map(([captureId, st]) => ({
-          captureId,
-          status: st as ObservedOrder["captures"][number]["status"],
-          amountValue: null,
-          currencyCode: "EUR",
+        captures: captures.map((c) => ({
+          captureId: c[0],
+          status: c[1] as ObservedOrder["captures"][number]["status"],
+          amountValue: c.length === 4 ? c[2] : null,
+          currencyCode: c.length === 4 ? c[3] : "EUR",
           reason: null,
         })),
       };
@@ -353,7 +352,8 @@ for (const mode of MODES) {
 
     it("a settled payment is finished only when the captured set is exactly the settled capture", async () => {
       const s = await settledPayment();
-      const mine: [string, string] = [s.captureId, "COMPLETED"];
+      const paid = formatPayPalAmount(s.record.expected);
+      const mine: Cap = [s.captureId, "COMPLETED", paid.value, paid.currency_code];
       expect(await s.reconcile(observed("COMPLETED", [mine]))).toMatchObject({
         terminal: true,
         open: false,
@@ -369,7 +369,7 @@ for (const mode of MODES) {
         [mine, ["CAPEXTRA", "REFUNDED"]],
         [[s.captureId, "PARTIALLY_REFUNDED"]],
         [["CAPOTHER", "COMPLETED"]],
-      ] as Array<Array<[string, string]>>) {
+      ] as Array<Array<Cap>>) {
         expect(await s.reconcile(observed("COMPLETED", set))).toMatchObject({
           terminal: true,
           open: true,
@@ -381,6 +381,56 @@ for (const mode of MODES) {
         terminal: false,
       });
       // None of it appended anything: one settlement, books balanced.
+      expect((await kinds(s.p.save.runId)).filter((k) => k === "SETTLE_EXTERNAL")).toHaveLength(1);
+      expect(booksBalance(await stateNow(s.p.save.runId))).toBe(true);
+    });
+
+    it("a settled capture with wrong, missing or foreign money is never confirmed (Codex 8e8521c)", async () => {
+      const s = await settledPayment();
+      const paid = formatPayPalAmount(s.record.expected);
+      const wrong: Array<[string, Cap[]]> = [
+        ["wrong amount", [[s.captureId, "COMPLETED", "0.01", "EUR"]]],
+        ["wrong currency", [[s.captureId, "COMPLETED", paid.value, "USD"]]],
+        ["missing amount", [[s.captureId, "COMPLETED", null, "EUR"]]],
+        ["missing currency", [[s.captureId, "COMPLETED", paid.value, null]]],
+        ["malformed amount", [[s.captureId, "COMPLETED", "seven", "EUR"]]],
+        // Multiple captures: a correct-looking second capture does not rescue a wrong settled one.
+        [
+          "wrong settled + right extra",
+          [
+            [s.captureId, "COMPLETED", "0.01", "EUR"],
+            ["CAPEXTRA", "COMPLETED", paid.value, paid.currency_code],
+          ],
+        ],
+      ];
+      for (const [name, set] of wrong) {
+        const out = await s.reconcile(observed("COMPLETED", set));
+        expect(out.confirmed, name).toBe(false);
+        expect(out.open, name).toBe(true);
+      }
+      // The legitimate capture still confirms, and nothing above appended or moved money.
+      expect(
+        await s.reconcile(
+          observed("COMPLETED", [[s.captureId, "COMPLETED", paid.value, paid.currency_code]]),
+        ),
+      ).toMatchObject({ terminal: true, open: false, confirmed: true });
+      expect((await kinds(s.p.save.runId)).filter((k) => k === "SETTLE_EXTERNAL")).toHaveLength(1);
+      expect(booksBalance(await stateNow(s.p.save.runId))).toBe(true);
+    });
+
+    it("after a restart, a settled payment whose capture money changed is not FINISHED", async () => {
+      const s = await settledPayment();
+      // PayPal later reports the settled capture with a different amount; a new process reconciles.
+      const order = [...fake.orders.values()].find((o) => o.capture?.id === s.captureId);
+      if (!order?.capture) throw new Error("no fake capture");
+      fake.update(order.id, (o) => {
+        if (o.capture)
+          o.capture = { ...o.capture, amount: { currency_code: "EUR", value: "0.01" } };
+      });
+      const restarted = buildRuntime(db, fake);
+      await restarted.service.requestRun(OWNER, s.p.save.runId, s.op, "RECONCILE");
+      const st = await restarted.service.statusRun(OWNER, s.p.save.runId, s.op);
+      expect(st?.phase).not.toBe("FINISHED");
       expect((await kinds(s.p.save.runId)).filter((k) => k === "SETTLE_EXTERNAL")).toHaveLength(1);
       expect(booksBalance(await stateNow(s.p.save.runId))).toBe(true);
     });

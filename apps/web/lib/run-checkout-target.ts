@@ -4,6 +4,7 @@ import {
   type MatchedCaptureProof,
   type ObservedOrder,
   type OperationRecord,
+  parsePayPalAmount,
 } from "@fle/payments";
 import { appendRunCommandsTx, loadRunTx, type RunRecord, type SqlExecutor } from "@fle/persistence";
 import { apply, type Command, type RunState, YOU } from "@fle/run";
@@ -68,6 +69,30 @@ function settlementOf(rec: RunRecord, operationId: string) {
 function runRecordOf(record: OperationRecord) {
   if (!isRunOperation(record)) throw new RunTargetError("RUN_TARGET_REQUIRED");
   return record;
+}
+
+/**
+ * True only when a capture reports a parseable amount and currency equal to the operation's
+ * expected money and to the settled amount. Missing or malformed money is never a match.
+ */
+function sameMoney(
+  capture: { readonly amountValue: string | null; readonly currencyCode: string | null },
+  expected: Money,
+  settledAmountMinor: number,
+): boolean {
+  if (capture.amountValue === null || capture.currencyCode === null) return false;
+  if (capture.currencyCode !== expected.currency) return false;
+  let money: Money;
+  try {
+    money = parsePayPalAmount(capture.amountValue, capture.currencyCode);
+  } catch {
+    return false;
+  }
+  return (
+    money.currency === expected.currency &&
+    money.amountMinor === expected.amountMinor &&
+    settledAmountMinor === expected.amountMinor
+  );
 }
 
 export const runCheckoutTarget: CheckoutTarget<SqlExecutor> = {
@@ -175,7 +200,11 @@ export const runCheckoutTarget: CheckoutTarget<SqlExecutor> = {
       order.captures.filter((c) => c.status === "REFUNDED" || c.status === "PARTIALLY_REFUNDED")
         .length;
     if (settled) {
-      const matches = completed.some((c) => c.captureId === settled.captureId);
+      // Confirm only the exact money: the settled capture must be COMPLETED and report the same
+      // amount and currency as the immutable operation and the committed settlement. An id and a
+      // status alone, or a matching order total, prove nothing about this capture (Codex, 8e8521c).
+      const mine = completed.find((c) => c.captureId === settled.captureId);
+      const matches = mine !== undefined && sameMoney(mine, op.expected, settled.amountMinor);
       const extraMoney = completed.some((c) => c.captureId !== settled.captureId);
       // Another capture may still complete: not finished, keep watching.
       if (unresolved > 0)
