@@ -1,0 +1,1800 @@
+/*
+ * The Run (#112 / #120): design plan, then the styles.
+ *
+ * SUBJECT  A young adult's money life, played one week at a time. The world it lives in is a
+ *          paper week planner, a notebook ledger, envelopes and receipts.
+ * PALETTE  Light, "weekly paper": paper #eef0e9 (page), sheet #fbfbf6 (the notebook page),
+ *          ink #18232b, pencil-grey #52616a, rule #d3d9cd, ballpoint #1f4e8c (the only action
+ *          colour), highlighter #f4e27e (used ONLY behind "What needs you now"), red pencil
+ *          #a8362b (late, owed), green pencil #2f6b4f (paid, in).
+ *          Dark, "lamp on the desk": paper #12171b, sheet #1a2127, ink #e8ece6, pencil #a1aeb3,
+ *          rule #2f3a41, ballpoint #8db4ef, highlighter #cdb54f (a low-alpha wash), red #f0a198,
+ *          green #8fd0b0.
+ * TYPE     Literata (a book serif) for the voice: dates, headings, the story. Instrument Sans for
+ *          the tools: buttons, lists, figures (tabular numerals so columns line up).
+ * LAYOUT   Desktop is an open planner spread. A week strip runs across the top; below it, the left
+ *          page is the week (what needs you, inbox, bills, invoices, guesses), the right page is
+ *          your money (summary, businesses, the next four weeks). Money tools, history, notes and
+ *          the advisor sit on the lower page. Left-aligned throughout, ragged right.
+ *
+ *   1280                                           390
+ *   +-------------------------------------+      +--------------------+
+ *   | Run name        Practice money      |      | date      Continue |  (sticky)
+ *   | Year 1, Week 2  [M T W T F S S]  [Continue]|  [M T W T F S S]    |
+ *   +------------------+------------------+      | What needs you now |
+ *   | What needs you   | Your money       |      | Inbox, Bills ...   |
+ *   | Inbox            | Business         |      |                    |
+ *   | Bills            | Next 4 weeks     |      |                    |
+ *   | Invoices         +------------------+      +--------------------+
+ *   | Worth a thought  | Money tools      |      | Week Biz Money Ask Notes |
+ *   +------------------+ History, Notes   |      +--------------------+
+ *   | Ask              |                  |
+ *   +------------------+------------------+
+ *
+ * THE ONE MEMORABLE THING  The week strip. Seven days, today circled in ballpoint, days gone by
+ *          crossed off in pencil, and a heavy line after Sunday: the Monday that time never runs
+ *          past. The Continue button sits on the strip, so the rule it follows is the thing you
+ *          see. Everything else stays quiet: ruled lines instead of boxes, one accent, one
+ *          highlighter used once.
+ */
+
+body:has(.run) {
+  --paper: #eef0e9;
+  --sheet: #fbfbf6;
+  --ink: #18232b;
+  --pencil: #52616a;
+  --rule: #d3d9cd;
+  --rule-strong: #8b968a;
+  --pen: #1f4e8c;
+  --pen-ink: #ffffff;
+  --pen-wash: #e3ebf6;
+  --marker: #f4e27e;
+  --red: #a8362b;
+  --red-wash: #f6e2de;
+  --green: #2f6b4f;
+  --green-wash: #dfeee6;
+  --amber: #7a4b00;
+  --amber-wash: #f8ecd2;
+  --focus: #1d5fd1;
+  /* The shared tokens (globals.css) that components from other packages read, mapped onto this
+     palette so they follow light and dark with the rest of the page. */
+  --color-bg: var(--paper);
+  --color-surface: var(--sheet);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--pencil);
+  --color-line: var(--rule);
+  --color-accent: var(--pen);
+  --color-accent-ink: var(--pen-ink);
+  --color-control-border: var(--rule-strong);
+  --color-focus: var(--focus);
+  --tone-due-ink: var(--amber);
+  --tone-due-bg: var(--amber-wash);
+  --tone-overdue-ink: var(--red);
+  --tone-overdue-bg: var(--red-wash);
+  --tone-paid-ink: var(--green);
+  --tone-paid-bg: var(--green-wash);
+  --tone-upcoming-ink: var(--pencil);
+  --tone-upcoming-bg: var(--pen-wash);
+  --tone-other-ink: var(--pencil);
+  --tone-other-bg: var(--pen-wash);
+  --fiction-bg: var(--amber-wash);
+  --fiction-ink: var(--amber);
+  background: var(--paper);
+}
+
+@media (prefers-color-scheme: dark) {
+  body:has(.run) {
+    --paper: #12171b;
+    --sheet: #1a2127;
+    --ink: #e8ece6;
+    --pencil: #a1aeb3;
+    --rule: #2f3a41;
+    --rule-strong: #6d7b80;
+    --pen: #8db4ef;
+    --pen-ink: #0d1a2c;
+    --pen-wash: #22303f;
+    --marker: rgb(205 181 79 / 0.38);
+    --red: #f0a198;
+    --red-wash: #3d2422;
+    --green: #8fd0b0;
+    --green-wash: #1f3a31;
+    --amber: #f0c987;
+    --amber-wash: #3b3020;
+    --focus: #a9c7ff;
+  }
+}
+
+.run {
+  --serif: "Literata", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --gap: 24px;
+  min-height: 100dvh;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+.run :focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+.run [tabindex="-1"]:focus {
+  outline: none;
+}
+.run [tabindex="-1"]:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.run-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px 20px 48px;
+  overflow-wrap: anywhere;
+}
+
+.run-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.run .muted {
+  color: var(--pencil);
+}
+.run .small {
+  font-size: 0.875rem;
+}
+.run .figure {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.run .mt-0 {
+  margin-top: 0;
+}
+.run .mb-0 {
+  margin-bottom: 0;
+}
+.run .empty {
+  margin: 0;
+  color: var(--pencil);
+  font-size: 0.9375rem;
+}
+
+/* ---------------------------------------------------------------- headings and text */
+.run-h {
+  margin: 0 0 12px;
+  font-family: var(--serif);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.run-h-type {
+  font-family: var(--sans);
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+.run-h-sub {
+  margin: 20px 0 8px;
+  font-family: var(--sans);
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: var(--pencil);
+}
+.run-display {
+  margin: 0 0 12px;
+  font-family: var(--serif);
+  font-size: clamp(1.75rem, 1.2rem + 2.4vw, 2.75rem);
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+  max-width: 20ch;
+}
+.run-lede {
+  margin: 0 0 24px;
+  max-width: 58ch;
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+}
+.run-hint {
+  margin: 8px 0 0;
+  max-width: 62ch;
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-note {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--amber);
+  background: var(--amber-wash);
+  color: var(--amber);
+  font-size: 0.875rem;
+}
+
+/* ---------------------------------------------------------------- frame */
+.run-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 20px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.run-brand {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+.run-banner {
+  margin: 0;
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-banner strong {
+  color: var(--ink);
+}
+
+/* ---------------------------------------------------------------- buttons and chips */
+.run .btn {
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--sheet);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.25;
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+.run .btn:hover:not(:disabled) {
+  border-color: var(--pen);
+  background: var(--pen-wash);
+}
+.run .btn:disabled {
+  /* No opacity: faded text drops under 3:1. Disabled reads as flat and dashed instead. */
+  cursor: not-allowed;
+  border-style: dashed;
+  border-color: var(--rule-strong);
+  background: var(--paper);
+  color: var(--pencil);
+}
+.run .btn-primary {
+  border-color: var(--pen);
+  background: var(--pen);
+  color: var(--pen-ink);
+}
+.run .btn-primary:disabled {
+  border-color: var(--rule-strong);
+  background: var(--paper);
+  color: var(--pencil);
+}
+.run .btn-primary:hover:not(:disabled) {
+  background: var(--pen);
+  border-color: var(--ink);
+  filter: brightness(1.08);
+}
+.run .btn-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--pencil);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.run .btn-quiet:hover:not(:disabled) {
+  background: transparent;
+  color: var(--ink);
+  border-color: transparent;
+}
+.run .btn-danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+.run .btn-danger:hover:not(:disabled) {
+  background: var(--red-wash);
+  border-color: var(--red);
+}
+.run .btn-small {
+  min-height: 44px;
+  padding: 6px 12px;
+  font-size: 0.875rem;
+}
+.run .chip {
+  display: inline-block;
+  padding: 1px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 650;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.run .chip[data-tone="due"] {
+  color: var(--amber);
+  background: var(--amber-wash);
+}
+.run .chip[data-tone="overdue"] {
+  color: var(--red);
+  background: var(--red-wash);
+}
+.run .chip[data-tone="paid"] {
+  color: var(--green);
+  background: var(--green-wash);
+}
+.run .chip[data-tone="other"],
+.run .chip[data-tone="upcoming"] {
+  color: var(--pencil);
+  background: var(--pen-wash);
+}
+
+/* ---------------------------------------------------------------- time: the week strip */
+.run-time {
+  display: grid;
+  grid-template-columns: minmax(0, 17rem) minmax(0, 1fr) auto;
+  grid-template-areas: "when strip go";
+  align-items: center;
+  gap: 16px 28px;
+  margin-bottom: var(--gap);
+  padding-bottom: var(--gap);
+  border-bottom: 2px solid var(--ink);
+}
+.run-when {
+  grid-area: when;
+  min-width: 0;
+}
+.run-date {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.run-runname {
+  margin: 4px 0 0;
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+
+.run-strip {
+  grid-area: strip;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  margin: 0;
+  padding: 0 0 0 0;
+  list-style: none;
+  /* The heavy line after Sunday: time never runs past the Monday that follows. */
+  border-right: 4px solid var(--ink);
+}
+.run-day {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 2px 6px;
+  border-left: 1px solid var(--rule);
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-day:first-child {
+  border-left: 4px solid var(--ink);
+}
+.run-day-name {
+  position: relative;
+  /* Flex, not grid: the screen-reader suffix inside must not push the day name onto two lines. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  min-width: 2.6rem;
+  height: 2rem;
+  padding: 0 8px;
+  font-weight: 600;
+}
+.run-day[data-state="past"] .run-day-name::after {
+  /* crossed off in pencil */
+  content: "";
+  position: absolute;
+  inset: 50% 4px auto;
+  height: 2px;
+  background: var(--pencil);
+  opacity: 0.7;
+  transform: rotate(-4deg);
+}
+.run-day[data-state="past"] {
+  opacity: 0.6;
+}
+.run-day[data-state="today"] {
+  color: var(--ink);
+}
+.run-day[data-state="today"] .run-day-name {
+  border: 2px solid var(--pen);
+  border-radius: 50%;
+  color: var(--pen);
+  animation: run-circle 0.28s ease-out both;
+}
+.run-marks {
+  display: flex;
+  gap: 3px;
+  min-height: 8px;
+}
+.run-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.run-mark[data-direction="IN"] {
+  background: var(--green);
+}
+.run-mark[data-direction="OUT"] {
+  background: var(--ink);
+}
+.run-mark[data-certainty="EXPECTED"] {
+  background: transparent;
+  border: 2px dashed var(--pencil);
+}
+
+.run-go {
+  grid-area: go;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  max-width: 15rem;
+}
+.run .run-continue {
+  min-height: 52px;
+  font-family: var(--serif);
+  font-size: 1.125rem;
+  padding-inline: 28px;
+}
+.run-go-help {
+  margin: 0;
+  color: var(--pencil);
+  font-size: 0.8125rem;
+  line-height: 1.35;
+}
+
+@keyframes run-circle {
+  from {
+    transform: scale(0.7);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* ---------------------------------------------------------------- the spread */
+.run-spread {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  column-gap: 0;
+  align-items: start;
+}
+.run-col {
+  min-width: 0;
+}
+.run-col-left {
+  padding-right: var(--gap);
+}
+.run-col-right {
+  padding-left: var(--gap);
+  border-left: 1px solid var(--rule-strong);
+  /* the binding of the notebook: a second hairline just inside the first */
+  box-shadow: inset 3px 0 0 -2px var(--rule);
+}
+.run-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  margin-top: var(--gap);
+  border-top: 1px solid var(--rule);
+}
+.run-lower > .run-col-left {
+  padding-top: 0;
+}
+
+.run-section {
+  min-width: 0;
+  padding: 20px 0;
+  border-top: 1px solid var(--rule);
+}
+.run-col > .run-section:first-child,
+.run-col > :first-child > .run-section:first-child {
+  border-top: 0;
+}
+.run-panel {
+  min-width: 0;
+  margin: 20px 0;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--rule-strong);
+  border-top: 4px solid var(--pen);
+  border-radius: 3px 3px 8px 8px;
+  background: var(--sheet);
+}
+.run-section:focus,
+.run-panel:focus {
+  outline: none;
+}
+
+/* ---------------------------------------------------------------- what needs you now */
+.run-needs {
+  padding: 4px 0 20px;
+}
+.run-needs-h {
+  margin: 0 0 12px;
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.run-marker {
+  /* the highlighter: used here and nowhere else */
+  padding: 0 6px;
+  margin-left: -6px;
+  background: linear-gradient(
+    transparent 52%,
+    var(--marker) 52%,
+    var(--marker) 92%,
+    transparent 92%
+  );
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.run-welcome {
+  margin: 0 0 12px;
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+}
+.run-needs-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.run-needs-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding-left: 14px;
+  border-left: 3px solid var(--pen);
+}
+.run-needs-list > li[data-stop="BILL_LATE"],
+.run-needs-list > li[data-stop="SETBACK"],
+.run-needs-list > li[data-stop="LOW_CASH"] {
+  border-left-color: var(--red);
+}
+.run-need-text {
+  flex: 1 1 18rem;
+  margin: 0;
+}
+.run-need-lead {
+  font-weight: 650;
+}
+.run-need-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 6px;
+  color: var(--pen);
+  font-weight: 600;
+  text-underline-offset: 3px;
+}
+.run-need-link:hover {
+  color: var(--ink);
+}
+
+/* ---------------------------------------------------------------- lists */
+.run-letters,
+.run-options,
+.run-quiet,
+.run-starts,
+.run-timeline,
+.run-list,
+.run-saved,
+.run-ledger {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.run-quiet {
+  display: grid;
+  gap: 4px;
+  color: var(--pencil);
+}
+.run-list {
+  display: grid;
+  gap: 12px;
+}
+
+/* ---------------------------------------------------------------- inbox: letters */
+.run-letters {
+  display: grid;
+  gap: 16px;
+}
+.run-letter {
+  position: relative;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px 14px 2px 2px;
+  background: var(--sheet);
+}
+.run-letter-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.run-letter-kind {
+  margin: 0;
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-letter-title {
+  margin: 4px 0 6px;
+  font-family: var(--serif);
+  font-size: 1.1875rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.run-letter-body {
+  margin: 0 0 12px;
+  max-width: 60ch;
+}
+.run-options {
+  display: grid;
+  gap: 8px;
+}
+.run-options .btn {
+  width: 100%;
+  text-align: left;
+}
+.run-option-hours {
+  color: var(--pencil);
+  font-weight: 500;
+}
+.run-why {
+  display: block;
+  margin: 4px 0 0 4px;
+  color: var(--pencil);
+}
+
+/* ---------------------------------------------------------------- bills and invoices: ledger lines */
+.run-ledger {
+  display: grid;
+}
+.run-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 16px;
+  padding: 12px 0;
+  border-bottom: 1px dotted var(--rule-strong);
+}
+.run-line:last-child {
+  border-bottom: 0;
+}
+.run-line-name {
+  margin: 0;
+  font-weight: 600;
+}
+.run-line-meta {
+  margin: 2px 0 0;
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-line-amount {
+  align-self: start;
+  font-size: 1.125rem;
+  font-weight: 650;
+  text-align: right;
+}
+.run-line-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.run-line[data-status="LATE"] .run-line-amount {
+  color: var(--red);
+}
+
+/* ---------------------------------------------------------------- your money */
+.run-summary {
+  padding-top: 4px;
+}
+.run-cash {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 14px;
+  margin: 0 0 12px;
+}
+.run-cash-label {
+  color: var(--pencil);
+  font-size: 0.9375rem;
+}
+.run-cash-figure {
+  font-family: var(--serif);
+  font-size: clamp(2rem, 1.5rem + 1.6vw, 2.75rem);
+  font-weight: 600;
+  line-height: 1.1;
+}
+.run-ruled {
+  margin: 0;
+}
+.run-ruled > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.run-ruled dt {
+  flex: 1 1 auto;
+  color: var(--pencil);
+}
+.run-ruled dd {
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+}
+.run-ruled > .run-ruled-total {
+  border-bottom: 2px solid var(--ink);
+}
+.run-ruled-total dt {
+  color: var(--ink);
+  font-weight: 650;
+}
+.run-ruled-total dd {
+  font-family: var(--serif);
+  font-size: 1.125rem;
+}
+
+.run-hours {
+  margin-top: 16px;
+}
+.run-hours-label {
+  margin: 0 0 6px;
+  font-size: 0.875rem;
+}
+.run-bar {
+  display: flex;
+  height: 12px;
+  overflow: hidden;
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  background: var(--sheet);
+}
+.run-bar-committed {
+  background: var(--pen);
+  transition: width 0.25s ease;
+}
+.run-bar-used {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--pencil),
+    var(--pencil) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+  transition: width 0.25s ease;
+}
+.run-legend {
+  margin: 6px 0 0;
+  color: var(--pencil);
+  font-size: 0.8125rem;
+}
+.run-key {
+  display: inline-block;
+  width: 0.8rem;
+  height: 0.8rem;
+  margin-right: 2px;
+  vertical-align: -1px;
+  border-radius: 3px;
+}
+.run-key-committed {
+  background: var(--pen);
+}
+.run-key-used {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--pencil),
+    var(--pencil) 2px,
+    transparent 2px,
+    transparent 4px
+  );
+  border: 1px solid var(--pencil);
+}
+
+/* ---------------------------------------------------------------- planner (next four weeks) */
+.run-planner {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  margin-bottom: 8px;
+  border: 1px solid var(--rule-strong);
+  background: var(--sheet);
+}
+.run-planner-head {
+  padding: 2px 0;
+  border-bottom: 1px solid var(--rule-strong);
+  color: var(--pencil);
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-align: center;
+}
+.run-planner-day {
+  display: flex;
+  min-height: 26px;
+  padding: 3px;
+  border-right: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+.run-planner-day:nth-child(7n + 7) {
+  border-right: 0;
+}
+.run-planner-day[data-week-start] {
+  border-left: 0;
+}
+.run-planner-day[data-state="past"],
+.run-planner-day[data-state="after"] {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent,
+    transparent 4px,
+    var(--rule) 4px,
+    var(--rule) 5px
+  );
+}
+.run-planner-day[data-state="today"] {
+  box-shadow: inset 0 0 0 2px var(--pen);
+}
+.run-planner-marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 2px;
+}
+.run-planner .run-mark {
+  width: 7px;
+  height: 7px;
+}
+
+.run-timeline {
+  display: grid;
+}
+.run-tl {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 7px 0;
+  border-bottom: 1px dotted var(--rule-strong);
+}
+.run-tl[data-certainty="EXPECTED"] .run-tl-label {
+  font-style: italic;
+}
+.run-tl-when {
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-tl-amount {
+  font-weight: 650;
+  text-align: right;
+}
+.run-tl .chip {
+  grid-column: 2 / -1;
+  justify-self: start;
+}
+
+/* ---------------------------------------------------------------- forms */
+.run-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.run-inline label {
+  font-size: 0.875rem;
+}
+.run-label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.run-input {
+  min-height: 44px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--sheet);
+  color: var(--ink);
+  font: inherit;
+}
+input.run-input {
+  width: 7.5rem;
+}
+input.run-input-wide {
+  width: min(100%, 26rem);
+  font-family: var(--serif);
+  font-size: 1.125rem;
+}
+.run-problem {
+  margin: 8px 0 0;
+  color: var(--red);
+}
+.run-problem-box,
+.run-refusal {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border-left: 4px solid var(--red);
+  background: var(--red-wash);
+  color: var(--ink);
+}
+.run-refusal {
+  border-left-color: var(--amber);
+  background: var(--amber-wash);
+}
+.run-confirm {
+  min-width: 0;
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border: 2px solid var(--pen);
+  border-radius: 6px;
+  background: var(--sheet);
+}
+
+/* ---------------------------------------------------------------- slips: borrowing, guesses, questions */
+.run-card {
+  padding: 12px 14px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px 10px 2px 2px;
+  background: var(--sheet);
+}
+.run-card-title {
+  margin: 0 0 4px;
+  font-size: 1rem;
+  font-weight: 650;
+}
+.run-card-body {
+  margin: 8px 0 12px;
+  font-family: var(--serif);
+}
+.run-guess {
+  border-style: dashed;
+}
+.run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ---------------------------------------------------------------- money tools (collapsed) */
+.run-tools > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.run-tools > summary::-webkit-details-marker {
+  display: none;
+}
+.run-tools > summary .run-h {
+  margin: 0;
+}
+.run-tools > summary::after {
+  content: "Show";
+  margin-left: auto;
+  color: var(--pen);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.run-tools[open] > summary::after {
+  content: "Hide";
+}
+.run-tools-body {
+  margin-top: 12px;
+}
+.run-tools-body > .run-section {
+  padding: 16px 0;
+}
+
+/* ---------------------------------------------------------------- levers (business) */
+.run-bizstats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 0 0 12px;
+}
+.run-levers {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.run-lever {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.run-lever legend,
+.run-lever > label,
+.run-lever > span {
+  padding: 0;
+  font-weight: 600;
+}
+.run-lever input[type="range"] {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 2px 0;
+  accent-color: var(--pen);
+}
+.run-segments {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 6px 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.run-segment {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 5.5rem;
+  cursor: pointer;
+}
+.run-segment + .run-segment {
+  border-left: 1px solid var(--rule-strong);
+}
+.run-segment input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+.run-segment span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 8px 12px;
+  text-align: center;
+}
+.run-segment input:checked + span {
+  background: var(--pen);
+  color: var(--pen-ink);
+  font-weight: 650;
+}
+.run-segment input:focus-visible + span {
+  outline: 3px solid var(--focus);
+  outline-offset: -3px;
+}
+.run-lever-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 12px;
+}
+.run-lever-help {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.run-switch {
+  min-width: 4.5rem;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  background: var(--sheet);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.run-switch[aria-checked="true"] {
+  background: var(--pen);
+  border-color: var(--pen);
+  color: var(--pen-ink);
+}
+.run-pairs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 8px 20px;
+  margin: 0 0 12px;
+}
+.run-pairs dt {
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-pairs dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- notes and feed */
+.run-note-entry {
+  padding: 10px 0 12px;
+  border-bottom: 1px dotted var(--rule-strong);
+}
+.run-note-entry h3 {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+.run-note-entry p {
+  max-width: 62ch;
+}
+.run-feed li {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 8px;
+  padding: 3px 0;
+}
+
+/* ---------------------------------------------------------------- front door */
+.run-front {
+  max-width: 62rem;
+}
+.run-intro {
+  padding: 12px 0 8px;
+}
+.run-starts {
+  display: grid;
+  gap: 0;
+}
+.run-start {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px 28px;
+  padding: 20px 0;
+  border-top: 1px solid var(--rule);
+}
+.run-start-title {
+  margin: 0 0 6px;
+  font-family: var(--serif);
+  font-size: 1.375rem;
+  font-weight: 600;
+}
+.run-start-summary,
+.run-start-hard,
+.run-start-ideas {
+  margin: 0 0 6px;
+  max-width: 60ch;
+}
+.run-start-ideas {
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-start-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 11rem;
+}
+.run-start-cash {
+  display: grid;
+  margin: 0;
+}
+.run-start-cash-label {
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-start-cash .figure {
+  font-family: var(--serif);
+  font-size: 1.75rem;
+  font-weight: 600;
+}
+.run-saved {
+  display: grid;
+  margin-bottom: 28px;
+}
+.run-saved-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 20px;
+  padding: 12px 0;
+  border-top: 1px solid var(--rule);
+}
+.run-saved-name {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.1875rem;
+  font-weight: 600;
+}
+.run-saved-meta {
+  margin: 2px 0 0;
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-saved-confirm {
+  flex: 1 1 22rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.run-saved-ask {
+  margin: 0 0 8px;
+}
+.run-name-step {
+  max-width: 40rem;
+  padding-top: 12px;
+}
+
+/* ---------------------------------------------------------------- sheets: month close and year review */
+dialog.run-sheet {
+  width: min(40rem, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  padding: 0;
+  border: 1px solid var(--rule-strong);
+  border-top: 6px solid var(--pen);
+  border-radius: 3px 3px 10px 10px;
+  background: var(--sheet);
+  color: var(--ink);
+  overflow: auto;
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+dialog.run-sheet::backdrop {
+  background: rgb(10 16 20 / 0.55);
+}
+.run-sheet-body {
+  padding: 20px 24px 24px;
+}
+.run-sheet-h {
+  margin: 0 0 4px;
+  font-family: var(--serif);
+  font-size: 1.625rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.run-sheet-sub {
+  margin: 0 0 16px;
+  color: var(--pencil);
+  font-size: 0.9375rem;
+}
+.run-sheet-lines {
+  margin: 16px 0;
+  max-width: 60ch;
+  font-family: var(--serif);
+}
+.run-sheet-lines li {
+  margin-bottom: 6px;
+}
+.run-sheet-ask {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 2px solid var(--ink);
+}
+.run-sheet-foot {
+  margin-top: 20px;
+}
+.run-year {
+  max-width: 44rem;
+  padding: 8px 0 24px;
+}
+.run-year-change {
+  margin: 16px 0 4px;
+  font-weight: 600;
+}
+.run-year-story p {
+  max-width: 62ch;
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+}
+.run-year-nw {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 36px;
+  margin: 16px 0 20px;
+  padding: 12px 0;
+  border-block: 2px solid var(--ink);
+}
+.run-year-nw dt {
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-year-nw dd {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- phone: one pane at a time */
+.run-tabs {
+  display: none;
+}
+
+@media (max-width: 859px) {
+  .run-brand {
+    flex: 1 1 auto;
+  }
+  .run-banner {
+    order: 3;
+    flex: 1 1 100%;
+  }
+  .run-page {
+    padding: 14px 16px calc(176px + env(safe-area-inset-bottom));
+  }
+  .run-time {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: none;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+  }
+  .run-when,
+  .run-strip {
+    grid-area: auto;
+  }
+  .run-date {
+    font-size: 1.25rem;
+  }
+  .run-day-name {
+    min-width: 0;
+    padding: 0 4px;
+    font-size: 0.8125rem;
+  }
+  .run-go {
+    position: fixed;
+    inset: auto 0 calc(56px + env(safe-area-inset-bottom)) 0;
+    z-index: 20;
+    max-width: none;
+    padding: 8px 16px 8px;
+    border-top: 1px solid var(--rule-strong);
+    background: var(--paper);
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 12px;
+  }
+  .run-continue {
+    flex: 0 0 auto;
+    min-width: 9.5rem;
+  }
+  .run-go-help {
+    flex: 1 1 8rem;
+    font-size: 0.75rem;
+  }
+  .run-tabs {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 21;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding-bottom: env(safe-area-inset-bottom);
+    border-top: 2px solid var(--ink);
+    background: var(--sheet);
+  }
+  .run-tab {
+    min-height: 56px;
+    padding: 6px 2px;
+    border: 0;
+    border-top: 4px solid transparent;
+    margin-top: -2px;
+    background: none;
+    color: var(--pencil);
+    font: inherit;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .run-tab[aria-current="page"] {
+    color: var(--ink);
+    border-top-color: var(--pen);
+  }
+  .run-spread,
+  .run-lower {
+    display: block;
+    margin-top: 0;
+    border-top: 0;
+  }
+  .run-col-left,
+  .run-col-right {
+    padding: 0;
+    border-left: 0;
+    box-shadow: none;
+  }
+  .run-desk[data-pane="week"] [data-p]:not([data-p="week"]),
+  .run-desk[data-pane="business"] [data-p]:not([data-p="business"]),
+  .run-desk[data-pane="money"] [data-p]:not([data-p="money"]),
+  .run-desk[data-pane="ask"] [data-p]:not([data-p="ask"]),
+  .run-desk[data-pane="notes"] [data-p]:not([data-p="notes"]) {
+    display: none;
+  }
+  .run-start {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .run-start-side {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .run-needs-h {
+    font-size: 1.3125rem;
+  }
+  .run-tl {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .run-tl-when {
+    grid-column: 1 / -1;
+  }
+  .run-sheet-body {
+    padding: 16px 16px 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run *,
+  .run *::before,
+  .run *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must beat every component rule */
+    animation: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must beat every component rule */
+    transition: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must beat every component rule */
+    scroll-behavior: auto !important;
+  }
+}
+
+/* PayPal Sandbox receipt: a till slip, so a verified payment reads as a real document. */
+.run-receipt {
+  border: 1px dashed var(--rule-strong);
+  background: var(--color-surface, var(--paper));
+  padding: 16px 18px;
+  margin-block: 12px;
+  display: grid;
+  gap: 10px;
+  max-width: 44rem;
+}
+.run-receipt-head h3 {
+  margin: 0;
+}
+.run-receipt-head p {
+  margin: 4px 0 0;
+}
+.run-receipt-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.run-receipt-steps li {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  gap: 6px;
+  align-items: start;
+}
+.run-receipt-tick {
+  color: var(--green);
+  font-weight: 700;
+}
+.run-receipt-detail {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.run-receipt-evidence {
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+/* Last on purpose: its selectors are more specific than the base rules above, so keeping them
+   at the end means no later, weaker rule appears to sit under them. */
+.run[data-busy="true"] .btn,
+.run[data-busy="true"] .run-segment,
+.run[data-busy="true"] .run-switch {
+  cursor: progress;
+}
+
+/* ---------------------------------------------------------------- structure and keyboard */
+html:has(.run) {
+  /* The phone's fixed Continue bar and tab bar (about 130px) never cover a focused item. */
+  scroll-padding-bottom: 150px;
+  scroll-padding-top: 12px;
+}
+.run-main {
+  display: block;
+}
+.run-main:focus {
+  outline: none;
+}
+.run-skip {
+  position: absolute;
+  left: 12px;
+  top: -80px;
+  z-index: 40;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 650;
+  text-decoration: none;
+}
+.run-skip:focus {
+  top: 12px;
+}
+.run-brand {
+  /* now the page's h1 */
+  line-height: 1.2;
+}
+
+/* ---------------------------------------------------------------- goal, cash chip, PayPal chip */
+.run-goal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--pen);
+  background: var(--pen-wash);
+  font-size: 0.9375rem;
+}
+.run-goal[data-done="true"] {
+  border-left-color: var(--green);
+  background: var(--green-wash);
+}
+.run-goal-label {
+  color: var(--pencil);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.run-goal-text {
+  font-family: var(--serif);
+  font-weight: 600;
+}
+.run-goal-progress {
+  flex-basis: 100%;
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run .run-cash-chip {
+  font-size: 0.8125rem;
+  white-space: normal;
+}
+.run-cash-phone {
+  display: none;
+  margin: 6px 0 0;
+}
+.run-summary-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.run-summary-head .run-h {
+  margin-bottom: 8px;
+}
+.run-pp {
+  margin: 0 0 8px;
+}
+.run .run-pp-chip {
+  min-height: 32px;
+  border: 1px solid var(--rule-strong);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+.run .run-pp-chip[data-tone="paid"] {
+  color: var(--green);
+  background: var(--green-wash);
+}
+.run-pp-list {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--rule-strong);
+  background: var(--sheet);
+}
+.run-pp-list ul {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+/* ---------------------------------------------------------------- continue check, guide, demo */
+.run-confirm-now {
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 2px solid var(--pen);
+  border-radius: 6px;
+  background: var(--sheet);
+}
+.run-confirm-now:focus {
+  outline: none;
+}
+.run-confirm-q {
+  margin: 0 0 10px;
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+.run-guide,
+.run-demo {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: 6px;
+  background: var(--sheet);
+}
+.run-guide-h,
+.run-demo-h {
+  margin: 0 0 6px;
+  font-family: var(--serif);
+  font-size: 1rem;
+  font-weight: 650;
+}
+.run-demo-count {
+  margin-left: 6px;
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.run-guide-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+}
+.run-guide-steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.run-guide-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--pen);
+  color: var(--pen-ink);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+.run-demo-list {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+}
+.run-demo-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.run-demo-tick {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  margin-top: 1px;
+  border: 2px solid var(--rule-strong);
+  border-radius: 4px;
+  color: var(--green);
+  font-weight: 700;
+}
+.run-demo-list li[data-done="true"] .run-demo-tick {
+  border-color: var(--green);
+  background: var(--green-wash);
+}
+.run-demo-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin: 0 0 16px;
+}
+.run-lede-paypal {
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+.run-forecast ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.9375rem;
+}
+.run-refusal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+/* ---------------------------------------------------------------- month close: short first */
+.run-sheet-headline {
+  margin: 8px 0 12px;
+  font-family: var(--serif);
+  font-size: 1.1875rem;
+  line-height: 1.4;
+}
+.run-sheet-two {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 32px;
+  margin: 0 0 12px;
+  padding: 10px 0;
+  border-block: 2px solid var(--ink);
+}
+.run-sheet-two dt {
+  color: var(--pencil);
+  font-size: 0.875rem;
+}
+.run-sheet-two dd {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+.run-sheet-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 20px -24px -24px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--rule-strong);
+  background: var(--sheet);
+}
+
+@media (max-width: 859px) {
+  .run-cash-phone {
+    display: block;
+  }
+  .run-sheet-foot {
+    margin: 20px -16px -20px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  }
+  .run-sheet-foot .btn-primary {
+    flex: 1 1 auto;
+  }
+}
