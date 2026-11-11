@@ -33,7 +33,7 @@ class ProviderFixture {
   captures = 0;
   loseCapture = true;
   failReads = 0;
-  createOutcomes: Array<"DECLINED" | "UNCERTAIN"> = [];
+  createOutcomes: Array<"DECLINED" | "UNCERTAIN" | "CONFLICT"> = [];
   order: {
     id: string;
     status: string;
@@ -63,6 +63,16 @@ class ProviderFixture {
         purchase_units: body.purchase_units,
         links: [{ rel: "approve", href: `https://www.sandbox.paypal.com/checkoutnow?token=${id}` }],
       };
+      if (outcome === "CONFLICT") {
+        this.order.status = "COMPLETED";
+        const unit = this.order.purchase_units[0];
+        if (!unit) throw new Error("fixture purchase unit missing");
+        unit.reference_id = "foreign-operation";
+        unit.custom_id = "foreign-operation";
+        unit.payments = {
+          captures: [{ id: `CAP${id}`, status: "COMPLETED", amount: unit.amount }],
+        };
+      }
       return response(201, this.order);
     }
     if (!this.order) return response(404, { name: "RESOURCE_NOT_FOUND" });
@@ -460,6 +470,7 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
           const input = await t.operations.update(operation, (r) => ({
             ...r,
             createState: "REFUSED",
+            lastResult: "DECLINED:INSTRUMENT_DECLINED",
             captureState,
           }));
           expect(await t.releaseUncreated(input)).toBe(false);
@@ -497,6 +508,7 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
         const input = await known.operations.update(p.operationId, (r) => ({
           ...r,
           createState: "REFUSED",
+          lastResult: "DECLINED:INSTRUMENT_DECLINED",
         }));
         expect(await known.releaseUncreated(input)).toBe(false);
         expect((await new PgRunStore(db).load(known.runId))?.version).toBe(1);
@@ -506,6 +518,7 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
         const record = await unknown.operations.update(op, (r) => ({
           ...r,
           createState: "REFUSED",
+          lastResult: "DECLINED:INSTRUMENT_DECLINED",
         }));
         // Defensive storage boundary: even an inconsistent/legacy fact must prevent release.
         await db.insert(checkoutFacts).values({
@@ -524,6 +537,7 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
         const input = await t.operations.update(operation, (r) => ({
           ...r,
           createState: "REFUSED",
+          lastResult: "DECLINED:INSTRUMENT_DECLINED",
         }));
         await expect(t.releaseUncreated(input, FOREIGN)).rejects.toThrow(
           "Run checkout unavailable",
@@ -544,6 +558,7 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
         const input = await t.operations.update(operation, (r) => ({
           ...r,
           createState: "REFUSED",
+          lastResult: "DECLINED:INSTRUMENT_DECLINED",
         }));
         const old = await t.queue.lease(operation, true);
         if (!old) throw new Error("fixture lease missing");
@@ -601,6 +616,53 @@ for (const mode of ["PGlite", "PostgreSQL"] as const) {
           expect((await new PgRunStore(db).load(t.runId))?.version).toBe(1);
         },
       );
+
+      it.each([
+        null,
+        "CONFLICT",
+        "CONFLICT:ORDER_MISMATCH",
+        "UNKNOWN",
+        "NOT_SENT:configuration",
+        "DECLINED_BUT_UNKNOWN",
+      ] as const)("a refused state with unproven result %s cannot release", async (lastResult) => {
+        const t = await setup();
+        const operation = await t.start();
+        const input = await t.operations.update(operation, (r) => ({
+          ...r,
+          createState: "REFUSED",
+          lastResult,
+        }));
+        expect(await t.releaseUncreated(input)).toBe(false);
+        expect((await new PgRunStore(db).load(t.runId))?.version).toBe(1);
+        expect((await t.queue.read(operation))?.phase).not.toBe("FINISHED");
+      });
+
+      it("a conflicting create response containing a completed capture never releases its reservation", async () => {
+        const t = await setup();
+        const provider = new ProviderFixture();
+        provider.createOutcomes = ["CONFLICT"];
+        const runtime = createPgCheckout(
+          db,
+          {
+            clientId: "fixture-id",
+            clientSecret: "fixture-secret",
+            fetch: provider.fetch,
+            maxAttempts: 1,
+            returnOrigin: "http://localhost:3000",
+          },
+          t.target,
+        );
+        const operation = await runtime.startRun(OWNER, t.ref, 0);
+        await runtime.service.run(operation, true);
+        expect(provider.order?.status).toBe("COMPLETED");
+        expect(await t.operations.get(operation)).toMatchObject({
+          createState: "REFUSED",
+          paypalOrderId: null,
+          lastResult: "CONFLICT",
+        });
+        expect((await t.queue.read(operation))?.phase).toBe("RECONCILING");
+        expect((await new PgRunStore(db).load(t.runId))?.commands).toHaveLength(1);
+      });
 
       it("the unified coordinator recovers a lost capture and failed lookup after restart without another order or capture", async () => {
         const t = await setup();
