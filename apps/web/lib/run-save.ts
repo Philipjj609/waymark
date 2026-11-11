@@ -18,6 +18,7 @@ import {
   SCENARIOS,
   startRun,
 } from "@fle/run";
+import { canonicalJson } from "@fle/simulation";
 
 /**
  * The Run's record (#137, owner-approved 10 Nov 2026). The SERVER holds each run: its scenario and
@@ -101,9 +102,16 @@ const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 export const genesisHash = (runId: string, scenarioId: string) =>
   sha(`${RUN_RULES_VERSION}|${runId}|${scenarioId}`);
 
-/** Each accepted command extends the chain, so the head hash commits to the whole history. */
+/**
+ * Each accepted command extends the chain, so the head hash commits to the whole history. Canonical
+ * JSON (sorted keys): Postgres JSONB reorders keys, and the chain must be rebuildable from storage.
+ */
 export const chainHash = (previous: string, command: unknown) =>
-  sha(`${previous}\n${JSON.stringify(command)}`);
+  sha(`${previous}\n${canonicalJson(command)}`);
+
+/** Rebuild the head hash from a stored log (audits and tests). */
+export const rebuildHeadHash = (runId: string, scenarioId: string, commands: readonly unknown[]) =>
+  commands.reduce<string>((h, c) => chainHash(h, c), genesisHash(runId, scenarioId));
 
 const equalText = (a: string, b: string) => {
   const x = Buffer.from(a);
@@ -246,6 +254,20 @@ export type Applied =
       readonly state: RunState;
     }
   | RunFailure;
+
+/**
+ * The deterministic state of a stored run record (also used inside payment transactions). Cached by
+ * version and head hash; a miss replays the stored log. Throws ReplayError if it no longer replays.
+ */
+export function stateOfRecord(rec: RunHead & { readonly commands: readonly unknown[] }): RunState {
+  const cached = states().get(rec.runId);
+  if (cached && cached.version === rec.version && cached.headHash === rec.headHash) {
+    return cached.state;
+  }
+  const state = replay(rec.runId, seedFor(rec.runId), rec.scenarioId, rec.commands as Command[]);
+  remember(rec, state);
+  return state;
+}
 
 /** The run's current state, rebuilt from the stored log when it is not cached. */
 async function current(

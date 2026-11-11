@@ -18,9 +18,11 @@ export function holdsOne(w: World, c: Condition, cardPocket: PocketId): boolean 
   switch (c.kind) {
     case "CASH": {
       if (c.pocket === "anyBusiness") {
-        return s.businesses.some((b) => b.status === "OPEN" && within(w.cash(b.id), c.min, c.max));
+        return s.businesses.some(
+          (b) => b.status === "OPEN" && within(w.available(b.id), c.min, c.max),
+        );
       }
-      return within(w.cash(c.pocket === "card" ? cardPocket : "you"), c.min, c.max);
+      return within(w.available(c.pocket === "card" ? cardPocket : "you"), c.min, c.max);
     }
     case "DEBT":
       return within(w.totalDebt(), c.min, c.max);

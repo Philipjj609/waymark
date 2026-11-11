@@ -185,7 +185,7 @@ function billViews(state: RunState, w: World): BillView[] {
         canPay:
           (b.status === "DUE" || b.status === "LATE") &&
           !b.reservedBy &&
-          w.cash(b.pocket) >= b.amountMinor,
+          w.available(b.pocket) >= b.amountMinor,
         graceLeftDays: graceLeft,
         note: billNote(w, b, state.day, graceLeft),
       };
