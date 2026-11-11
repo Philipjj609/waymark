@@ -55,10 +55,15 @@ h3 {
   letter-spacing: -0.02em;
   text-decoration: none;
 }
-.brand-mark {
-  width: 26px;
-  height: 26px;
-  color: var(--color-accent);
+.brand-logo {
+  display: block;
+  width: auto;
+  height: 28px;
+}
+@media (max-width: 420px) {
+  .brand-logo {
+    height: 24px;
+  }
 }
 .site-nav {
   display: flex;

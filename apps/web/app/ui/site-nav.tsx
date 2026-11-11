@@ -15,19 +15,24 @@ const DESTINATIONS = [
   { href: "/learn/map", label: "Map", match: (p: string) => p === "/learn/map" },
 ] as const;
 
-function BrandMark() {
+/**
+ * The approved Waymark lockup (Direction 3, "Journey Map"), cut from the owner's logo sheet.
+ * The dark-panel variant follows the same `prefers-color-scheme` switch as the colour tokens, so
+ * the mark always matches the bar behind it. The image carries the link's accessible name.
+ */
+function BrandLogo() {
   return (
-    <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
-      <path d="M16 2.5 28 9v14L16 29.5 4 23V9z" fill="currentColor" opacity="0.14" />
-      <path
-        d="M9 22 14 10l4 8 5-10"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+    <picture>
+      <source srcSet="/brand/waymark-lockup-dark.png" media="(prefers-color-scheme: dark)" />
+      <img
+        className="brand-logo"
+        src="/brand/waymark-lockup-light.png"
+        alt="Waymark"
+        width={483}
+        height={100}
+        decoding="async"
       />
-    </svg>
+    </picture>
   );
 }
 
@@ -45,8 +50,7 @@ export function SiteHeader({
     <header className="site-bar" data-compact={compact ? "" : undefined}>
       <div className="site-bar-in">
         <Link href="/" className="brand">
-          <BrandMark />
-          <span>Waymark</span>
+          <BrandLogo />
         </Link>
         <nav className="site-nav" aria-label="Main">
           {DESTINATIONS.map((d) => (
