@@ -216,8 +216,18 @@ export class CheckoutService {
       const fresh = await this.queue.read(operation);
       const rec = fresh?.record;
       if (!rec?.paypalOrderId) {
-        phase = "RECONCILING";
-        error ??= "ORDER_UNRESOLVED";
+        if (
+          rec &&
+          isRunOperation(rec) &&
+          (await this.requireRunTarget().releaseUncreated(lease.owner, rec, lease.token))
+        ) {
+          phase = "FINISHED";
+          approveUrl = null;
+          error = null;
+        } else {
+          phase = "RECONCILING";
+          error ??= "ORDER_UNRESOLVED";
+        }
       } else {
         if (isRunOperation(rec)) await this.requireRunTarget().bind(lease.owner, rec);
         else await this.target.bind(lease.owner, { ...rec, paypalOrderId: rec.paypalOrderId });

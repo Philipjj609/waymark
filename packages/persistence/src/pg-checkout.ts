@@ -249,10 +249,19 @@ export class PgCheckoutQueue implements CheckoutQueue {
           ...(abandonedCapture ? { action: "RECONCILE", phase: "RECONCILING" } : {}),
         })
         .where(eq(checkoutWork.operationId, operation));
-      return token;
+      return { token, creating: work.action === "CREATE" };
     });
+    if (claimed?.creating) {
+      // A crashed worker may have reached PayPal without recording its answer. Fence its lease
+      // first, then preserve that uncertainty before retrying the same provider request ID.
+      // STARTED is uncertain even if an error handler already cleared the old work lease.
+      // Do not hold the work-row lock while taking the operation lock (release uses the reverse).
+      await this.operations.update(operation, (record) =>
+        record.createState === "STARTED" ? { ...record, createState: "UNCERTAIN" } : record,
+      );
+    }
     const work = claimed ? await this.read(operation) : null;
-    return work && claimed ? { ...work, token: claimed } : null;
+    return work && claimed ? { ...work, token: claimed.token } : null;
   }
 
   async finish(
