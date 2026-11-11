@@ -1,5 +1,5 @@
 import type { PayPalReceipt } from "../../lib/run-paypal";
-import type { SaveToken } from "../../lib/run-save";
+import type { LegacySave, SaveToken } from "../../lib/run-save";
 
 /**
  * The saved runs in this browser. Names live here and nowhere else: the server never sees them.
@@ -23,11 +23,14 @@ export interface DemoState {
   readonly hidden: boolean;
 }
 
+export type StoredSave = SaveToken | LegacySave;
+
 export interface StoredRun {
   readonly id: string;
   readonly name: string;
   readonly scenarioId: string;
-  readonly save: SaveToken;
+  /** A v2 pointer to the server's run, or an old v1 save (full log) waiting for its one-time import. */
+  readonly save: StoredSave;
   readonly calendarLabel: string;
   /** Milliseconds since 1970, from the browser clock (only used for "last played"). */
   readonly updatedAt: number;
@@ -81,16 +84,15 @@ function cleanExtras(run: StoredRun): StoredRun {
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
-export function looksLikeSave(v: unknown): v is SaveToken {
-  return (
-    isObject(v) &&
-    v.v === 1 &&
-    typeof v.runId === "string" &&
-    typeof v.scenarioId === "string" &&
-    Array.isArray(v.log) &&
-    typeof v.sig === "string"
-  );
+export function looksLikeSave(v: unknown): v is StoredSave {
+  if (!isObject(v) || typeof v.runId !== "string" || typeof v.sig !== "string") return false;
+  if (v.v === 2) {
+    return typeof v.headHash === "string" && Number.isInteger(v.version);
+  }
+  return v.v === 1 && typeof v.scenarioId === "string" && Array.isArray(v.log);
 }
+
+export const isLegacySave = (s: StoredSave): s is LegacySave => s.v === 1;
 
 function looksLikeRun(v: unknown): v is StoredRun {
   return (
@@ -136,7 +138,11 @@ export function loadRuns(titleOf: (scenarioId: string) => string): StoredRun[] {
     const legacy = window.localStorage.getItem(LEGACY_SAVE_KEY);
     if (legacy) {
       const parsed: unknown = JSON.parse(legacy);
-      if (looksLikeSave(parsed) && !runs.some((r) => r.id === parsed.runId)) {
+      if (
+        looksLikeSave(parsed) &&
+        isLegacySave(parsed) &&
+        !runs.some((r) => r.id === parsed.runId)
+      ) {
         runs.push({
           id: parsed.runId,
           name: cleanName(`${titleOf(parsed.scenarioId)}, earlier run`),

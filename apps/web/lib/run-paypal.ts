@@ -16,10 +16,18 @@ import {
   SANDBOX_TEST_CARD,
   SandboxCheckout,
 } from "@fle/payments";
-import { type RunView, runView, YOU } from "@fle/run";
+import { type Command, type RunState, type RunView, runView, YOU } from "@fle/run";
 import { allowedOrigins } from "./csrf";
-import { errorResponse } from "./http";
-import { applyToSave, runEnabled, type SaveToken, stateOf } from "./run-save";
+import {
+  type Applied,
+  appendServerCommand,
+  type Loaded,
+  loadRun,
+  type RunFailure,
+  runEnabled,
+  runStoreDurable,
+  type SaveToken,
+} from "./run-save";
 
 /**
  * Paying a Run bill through PayPal Sandbox (#112; AGENTS.md invariants 4 to 7).
@@ -27,7 +35,7 @@ import { applyToSave, runEnabled, type SaveToken, stateOf } from "./run-save";
  * The Run's money is fictional; PayPal Sandbox is only the rail that moves a labelled test payment.
  * A bill settles only when THIS SERVER captured the order, read it back from PayPal, and saw a
  * COMPLETED capture whose amount equals the bill (SandboxCheckout.verify). The settlement enters the
- * run as the server-only SETTLE_EXTERNAL command, which a player cannot send through POST /api/run.
+ * run as the server-only SETTLE_EXTERNAL command (after a RESERVE_EXTERNAL), which a player cannot send through POST /api/run.
  *
  * No buyer sign-in (owner decision, 10 Nov 2026): the server pays with PayPal's PUBLISHED Sandbox
  * test card, so players and judges need no PayPal account and approve nothing. The card number is
@@ -54,6 +62,10 @@ const real = (v: string | undefined): v is string => !!v && v.trim() !== "" && !
  */
 export function paypalSandboxConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   if (!runEnabled(env)) return false;
+  // In durable mode (Postgres) Run payments wait for the world-or-run checkout target (#112 /
+  // #137 step 2), so the durable run log never records a payment whose facts (operation records,
+  // captures) live only in this process's memory and would be lost on a restart.
+  if (runStoreDurable()) return false;
   if (env.PAYPAL_ENV !== "sandbox") return false;
   if (env.PAYPAL_API_BASE && env.PAYPAL_API_BASE.replace(/\/+$/, "") !== PAYPAL_SANDBOX_BASE_URL) {
     return false;
@@ -63,43 +75,21 @@ export function paypalSandboxConfigured(env: NodeJS.ProcessEnv = process.env): b
 
 // -- shared state (one per server process) ------------------------------------------------------
 
-interface Settlement {
-  readonly operationId: string;
-  readonly billId: string;
-  /** Position of the SETTLE_EXTERNAL command in the log that recorded it. */
-  readonly logIndex: number;
-}
-interface Unreconciled {
-  readonly operationId: string;
-  readonly billId: string;
-}
+/**
+ * Only the PayPal client and the provider-operation records live here. What a payment MEANS for the
+ * run (reserved, settled, released) is recorded in the run's append-only log on the server
+ * (lib/run-save.ts), never in a registry of its own.
+ */
 interface Shared {
   store?: ProviderOperationStore;
   checkout?: SandboxCheckout;
-  settled: Map<string, Settlement[]>;
-  unreconciled: Map<string, Unreconciled[]>;
   locks: Map<string, Promise<unknown>>;
 }
 const holder = globalThis as typeof globalThis & { __waymarkRunPayPal?: Shared };
 const shared = (): Shared => {
-  holder.__waymarkRunPayPal ??= { settled: new Map(), unreconciled: new Map(), locks: new Map() };
+  holder.__waymarkRunPayPal ??= { locks: new Map() };
   return holder.__waymarkRunPayPal;
 };
-
-/**
- * The registry of verified settlements (owner rule: a verified payment lives in a record that
- * replaying an older save cannot undo). NOTE: this registry is in memory, so a server restart
- * forgets it. PgOperationStore cannot be queried by world, so persisting this in Postgres (a table
- * keyed by runId, or a worldId query on provider_operations) is the next step; until then a restart
- * re-opens the "go back to an older save" hole. The operation records are in memory for the same
- * reason.
- */
-export function verifiedSettlements(runId: string): readonly Settlement[] {
-  return shared().settled.get(runId) ?? [];
-}
-export function unreconciledPayments(runId: string): readonly Unreconciled[] {
-  return shared().unreconciled.get(runId) ?? [];
-}
 
 function store(): ProviderOperationStore {
   const s = shared();
@@ -129,8 +119,6 @@ export function setPayPalForTests(fake?: {
   store: ProviderOperationStore;
 }): void {
   holder.__waymarkRunPayPal = {
-    settled: new Map(),
-    unreconciled: new Map(),
     locks: new Map(),
     ...(fake ? { checkout: fake.checkout, store: fake.store } : {}),
   };
@@ -150,24 +138,6 @@ async function exclusive<T>(key: string, f: () => Promise<T>): Promise<T> {
   }
 }
 
-// -- the guard used by POST /api/run ------------------------------------------------------------
-
-const logHas = (save: SaveToken, operationId: string): boolean =>
-  save.log.some((c) => c.kind === "SETTLE_EXTERNAL" && c.operationId === operationId);
-
-/**
- * Call right after a save is verified. A run with a verified PayPal payment newer than this save
- * must not continue from the older save: the payment would silently vanish from the game.
- */
-export function staleSaveResponse(save: SaveToken): Response | null {
-  if (verifiedSettlements(save.runId).every((s) => logHas(save, s.operationId))) return null;
-  return errorResponse(
-    409,
-    "STORE_CONFLICT",
-    "This run has a verified PayPal payment newer than this save. Continue from your latest save.",
-  );
-}
-
 // -- results ------------------------------------------------------------------------------------
 
 export type PayPalFailure =
@@ -183,12 +153,20 @@ export type PayPalFailure =
   | "UNCERTAIN"
   | "MISMATCH"
   | "UNRECONCILED"
-  | "FAILED";
+  | "FAILED"
+  /** The run moved while the payment was being set up; nothing was paid. */
+  | "STALE"
+  | "BAD_SAVE"
+  | "NOT_FOUND"
+  | "RULES_CHANGED";
 
 interface Failure {
   readonly ok: false;
   readonly status: PayPalFailure;
   readonly message: string;
+  /** The run as it is now, when the server knows it, so the browser can resync. */
+  readonly save?: SaveToken;
+  readonly view?: RunView;
 }
 /** What PayPal Sandbox confirmed, read back by the server. Shown to the player as a receipt. */
 export interface PayPalReceipt {
@@ -204,18 +182,35 @@ export interface PayPalReceipt {
   readonly verifiedAt: string;
 }
 
-type StartResult = { readonly ok: true; readonly operationId: string } | Failure;
 export type PayResult =
   | {
       readonly ok: true;
       readonly save: SaveToken;
       readonly view: RunView;
-      readonly already: boolean;
-      readonly receipt: PayPalReceipt | null;
+      readonly receipt: PayPalReceipt;
     }
   | Failure;
 
 const fail = (status: PayPalFailure, message: string): Failure => ({ ok: false, status, message });
+
+/** A failure that also carries the run as it now stands. */
+const carry = (f: Failure, cur: Pick<Loaded, "save" | "state">): Failure => ({
+  ...f,
+  save: cur.save,
+  view: runView(cur.state),
+});
+
+function fromRunFailure(f: RunFailure): Failure {
+  if (f.code === "STALE") {
+    return carry(
+      fail("STALE", "Your run moved on while this payment was being set up. Nothing was paid."),
+      { save: f.save, state: f.state },
+    );
+  }
+  if (f.code === "BAD_SAVE") return fail("BAD_SAVE", "This saved run could not be verified.");
+  if (f.code === "NOT_FOUND") return fail("NOT_FOUND", "This run was not found.");
+  return fail("RULES_CHANGED", "This run no longer matches the game's rules.");
+}
 
 const worldIdOf = (runId: string) => WorldIdSchema.parse(`wld_${runId}`) as WorldId;
 const obligationIdOf = (billId: string) =>
@@ -224,8 +219,7 @@ const operationIdOf = (runId: string, billId: string, n: number) =>
   ProviderOperationIdSchema.parse(`pop_${runId}_${billId}_${n}`) as ProviderOperationId;
 
 /** The bill, if it can be paid now with the cash in your pocket; otherwise the reason. */
-function payable(save: SaveToken, billId: string) {
-  const state = stateOf(save);
+function payable(state: RunState, billId: string) {
   const bill = state.bills.find((b) => b.id === billId);
   if (!bill) return fail("UNKNOWN_BILL", "There is no such bill.");
   if (bill.pocket !== YOU || (bill.status !== "DUE" && bill.status !== "LATE")) {
@@ -253,48 +247,124 @@ function explainFailure(r: PayPalResult<unknown>): string {
     : "PayPal Sandbox could not start this payment. Nothing was paid.";
 }
 
+/**
+ * Append a server-decided command. A player's command may land between two of our steps, which
+ * moves the version under us; the engine re-checks every command, so retrying from the version the
+ * conflict reports is safe and never double-applies (settlement is guarded by its capture id).
+ */
+async function serverAppend(
+  owner: string,
+  runId: string,
+  from: SaveToken,
+  command: Command,
+): Promise<Applied> {
+  let version = from.version;
+  let last: Applied | undefined;
+  for (let i = 0; i < 4; i++) {
+    last = await appendServerCommand(owner, runId, version, command);
+    if (last.ok || last.status !== 409 || last.code !== "STALE") return last;
+    version = last.save.version;
+  }
+  return last as Applied;
+}
+
+const loadedOf = (a: Applied): Pick<Loaded, "save" | "state"> | null =>
+  "state" in a ? { save: a.save, state: a.state } : null;
+
 // -- pay ----------------------------------------------------------------------------------------
 
 /**
- * Pay one due bill through PayPal Sandbox in a single server call: create the order with the
- * published test card, capture it, read it back from PayPal, verify it, then settle the bill.
- * Serialised per run, so a double click cannot pay twice.
+ * Pay one due bill through PayPal Sandbox in a single server call: reserve the bill in the run's
+ * log, create the order with the published test card, capture it, read it back from PayPal, verify
+ * it, then settle the bill. Serialised per run, so a double click cannot pay twice; the run's own
+ * log (RESERVE_EXTERNAL / SETTLE_EXTERNAL / RELEASE_EXTERNAL) is the only record of the outcome.
+ * The pointer only names the run: the bill is judged against the server's current state.
  */
-export function payBillThroughSandbox(save: SaveToken, billId: string): Promise<PayResult> {
-  return exclusive(save.runId, async () => {
-    const started = await createOrder(save, billId);
-    if (!started.ok) return started;
-    return captureLocked(save, started.operationId);
-  });
+export function payBillThroughSandbox(
+  owner: string,
+  save: SaveToken,
+  billId: string,
+): Promise<PayResult> {
+  return exclusive(save.runId, () => payLocked(owner, save, billId));
 }
 
-async function createOrder(save: SaveToken, billId: string): Promise<StartResult> {
-  const ok = payable(save, billId);
-  if (!ok.ok) return ok;
-  const amount = { amountMinor: ok.bill.amountMinor, currency: CURRENCY };
+async function payLocked(owner: string, save: SaveToken, billId: string): Promise<PayResult> {
+  const loaded = await loadRun(owner, save);
+  if (!loaded.ok) return fromRunFailure(loaded);
+  let cur: Loaded = loaded;
+  const ok = payable(cur.state, billId);
+  if (!ok.ok) return carry(ok, cur);
+  const { runId } = save;
+
+  // An open reservation is an earlier attempt that never finished (PayPal was slow or unclear):
+  // carry on with that same payment instead of starting another.
+  const held = ok.bill.reservedBy;
+  if (held) {
+    if (!held.startsWith(`pop_${runId}_${billId}_`)) {
+      return carry(fail("NOT_PAYABLE", "A payment for this bill is already in progress."), cur);
+    }
+    return captureLocked(owner, cur, ok.bill, held);
+  }
 
   // Reuse the open attempt (a second click, a reload); a used or refused one gets a fresh order.
-  let n = await lastAttempt(save.runId, billId);
-  const latest = n > 0 ? await store().get(operationIdOf(save.runId, billId, n)) : null;
+  const amount = { amountMinor: ok.bill.amountMinor, currency: CURRENCY };
+  let n = await lastAttempt(runId, billId);
+  const latest = n > 0 ? await store().get(operationIdOf(runId, billId, n)) : null;
   if (!latest || !reusable(latest) || latest.expected.amountMinor !== amount.amountMinor) {
     if (n >= MAX_ATTEMPTS_PER_BILL) {
-      return fail(
-        "TOO_MANY_ATTEMPTS",
-        "Too many PayPal attempts for this bill. Pay it in the game instead.",
+      return carry(
+        fail(
+          "TOO_MANY_ATTEMPTS",
+          "Too many PayPal attempts for this bill. Pay it in the game instead.",
+        ),
+        cur,
       );
     }
     n += 1;
   }
-  const operationId = operationIdOf(save.runId, billId, n);
+  const operationId = operationIdOf(runId, billId, n);
+
+  // The reservation goes into the log BEFORE any money moves at PayPal.
+  const reserved = await serverAppend(owner, runId, cur.save, {
+    kind: "RESERVE_EXTERNAL",
+    billId,
+    operationId,
+  });
+  if (!reserved.ok) {
+    if (reserved.status === 422) {
+      return carry(fail("NOT_PAYABLE", reserved.refusal.message), reserved);
+    }
+    return fromRunFailure(reserved);
+  }
+  cur = reserved;
+
   const result = await checkout().start({
     operationId,
-    worldId: worldIdOf(save.runId),
+    worldId: worldIdOf(runId),
     obligationId: obligationIdOf(billId),
     amount,
     sandboxTestCard: SANDBOX_TEST_CARD,
   });
-  if (result.kind !== "OK") return fail("FAILED", explainFailure(result));
-  return { ok: true, operationId };
+  if (result.kind !== "OK") {
+    return releaseAndFail(owner, cur, billId, operationId, fail("FAILED", explainFailure(result)));
+  }
+  return captureLocked(owner, cur, ok.bill, operationId);
+}
+
+/** A definite failure: nothing was paid, so the bill is handed back to the player. */
+async function releaseAndFail(
+  owner: string,
+  cur: Pick<Loaded, "save" | "state">,
+  billId: string,
+  operationId: string,
+  failure: Failure,
+): Promise<Failure> {
+  const released = await serverAppend(owner, cur.save.runId, cur.save, {
+    kind: "RELEASE_EXTERNAL",
+    billId,
+    operationId,
+  });
+  return carry(failure, loadedOf(released) ?? cur);
 }
 
 // -- capture and verify -------------------------------------------------------------------------
@@ -307,53 +377,56 @@ const MISMATCH_REASONS = new Set([
   "OPERATION_MISMATCH",
 ]);
 
-async function captureLocked(save: SaveToken, operationId: string): Promise<PayResult> {
+async function captureLocked(
+  owner: string,
+  start: Pick<Loaded, "save" | "state">,
+  bill: RunState["bills"][number],
+  operationId: string,
+): Promise<PayResult> {
+  const runId = start.save.runId;
+  const cur = start;
+  const billId = bill.id;
+  const release = (failure: Failure) => releaseAndFail(owner, cur, billId, operationId, failure);
+
   const idParse = ProviderOperationIdSchema.safeParse(operationId);
   const unknown = fail("UNKNOWN_OPERATION", "This payment is not recognised.");
-  if (!idParse.success) return unknown;
+  if (!idParse.success) return release(unknown);
   const opId = idParse.data as ProviderOperationId;
   const rec = await store().get(opId);
-  // The operation must belong to THIS run: its id and world both carry the run id.
+  // The operation must belong to THIS run and bill: its id and world both carry the run id.
   if (
     !rec ||
-    rec.worldId !== worldIdOf(save.runId) ||
-    !operationId.startsWith(`pop_${save.runId}_`)
+    rec.worldId !== worldIdOf(runId) ||
+    rec.obligationId !== obligationIdOf(billId) ||
+    !operationId.startsWith(`pop_${runId}_`)
   ) {
-    return unknown;
-  }
-  const billId = rec.obligationId.slice("obl_".length);
-
-  // Already applied (a double click, a retry): say so instead of paying twice.
-  if (verifiedSettlements(save.runId).some((s) => s.operationId === operationId)) {
-    if (!logHas(save, operationId)) {
-      return fail(
-        "UNRECONCILED",
-        "This payment was already confirmed. Continue from your latest save.",
-      );
-    }
-    return { ok: true, save, view: runView(stateOf(save)), already: true, receipt: null };
+    return release(unknown);
   }
 
-  // Before any money moves: the bill is still payable, covered, and the amount is unchanged.
-  const ok = payable(save, billId);
-  if (!ok.ok) return ok;
-  if (rec.expected.amountMinor !== ok.bill.amountMinor || rec.expected.currency !== CURRENCY) {
-    return fail("BILL_CHANGED", "The bill changed after you started this payment. Start it again.");
+  // Before any money moves: the amount is unchanged.
+  if (rec.expected.amountMinor !== bill.amountMinor || rec.expected.currency !== CURRENCY) {
+    return release(
+      fail("BILL_CHANGED", "The bill changed after you started this payment. Start it again."),
+    );
   }
 
   const captured = await checkout().capture(opId);
   switch (captured.kind) {
     case "NOT_APPROVED":
-      return fail(
-        "NOT_APPROVED",
-        "PayPal has not seen your approval yet. Approve the payment, then try again.",
+      return release(
+        fail(
+          "NOT_APPROVED",
+          "PayPal has not seen your approval yet. Approve the payment, then try again.",
+        ),
       );
     case "DECLINED":
-      return fail("DECLINED", "PayPal Sandbox declined this payment. Nothing was paid.");
+      return release(fail("DECLINED", "PayPal Sandbox declined this payment. Nothing was paid."));
     case "REJECTED":
     case "NOT_SENT":
     case "CONFLICT":
-      return fail("FAILED", "PayPal Sandbox could not take this payment. Nothing was paid.");
+      return release(
+        fail("FAILED", "PayPal Sandbox could not take this payment. Nothing was paid."),
+      );
     default:
       break; // OK, PENDING, ALREADY_CAPTURED, UNCERTAIN: the server reads PayPal back and decides.
   }
@@ -361,21 +434,31 @@ async function captureLocked(save: SaveToken, operationId: string): Promise<PayR
   const verified = await checkout().verify(opId, new Date().toISOString());
   if (!verified.ok) {
     const reason = "reason" in verified ? verified.reason : "";
+    // PENDING and UNCERTAIN keep the reservation: money may still land, and the next click
+    // resumes this same payment instead of starting a second one.
     if (captured.kind === "PENDING" || reason === "CAPTURE_NOT_COMPLETED") {
-      return fail(
-        "PENDING",
-        "PayPal is still reviewing this payment. Nothing is paid until it completes.",
+      return carry(
+        fail(
+          "PENDING",
+          "PayPal is still reviewing this payment. Nothing is paid until it completes.",
+        ),
+        cur,
       );
     }
     if (MISMATCH_REASONS.has(reason)) {
-      return fail(
-        "MISMATCH",
-        "PayPal reported an amount that does not match the bill. Nothing was paid.",
+      return release(
+        fail(
+          "MISMATCH",
+          "PayPal reported an amount that does not match the bill. Nothing was paid.",
+        ),
       );
     }
-    return fail(
-      "UNCERTAIN",
-      "We could not confirm this payment with PayPal. Nothing was paid yet; try again.",
+    return carry(
+      fail(
+        "UNCERTAIN",
+        "We could not confirm this payment with PayPal. Nothing was paid yet; try again.",
+      ),
+      cur,
     );
   }
   const { event } = verified;
@@ -383,15 +466,14 @@ async function captureLocked(save: SaveToken, operationId: string): Promise<PayR
     event.operationId !== opId ||
     event.provider !== "PAYPAL_SANDBOX" ||
     event.amount.currency !== CURRENCY ||
-    event.amount.amountMinor !== ok.bill.amountMinor
+    event.amount.amountMinor !== bill.amountMinor
   ) {
-    return fail(
-      "MISMATCH",
-      "PayPal reported an amount that does not match the bill. Nothing was paid.",
+    return release(
+      fail("MISMATCH", "PayPal reported an amount that does not match the bill. Nothing was paid."),
     );
   }
 
-  const applied = applyToSave(save, {
+  const applied = await serverAppend(owner, runId, cur.save, {
     kind: "SETTLE_EXTERNAL",
     billId,
     amountMinor: event.amount.amountMinor,
@@ -399,24 +481,22 @@ async function captureLocked(save: SaveToken, operationId: string): Promise<PayR
     operationId,
     captureId: event.providerEventId,
   });
-  const s = shared();
   if (!applied.ok) {
-    // Verified money that the game refused: never drop it silently.
-    s.unreconciled.set(save.runId, [...unreconciledPayments(save.runId), { operationId, billId }]);
-    return fail(
-      "UNRECONCILED",
-      "PayPal confirmed the payment but the game could not apply it. It is recorded for review.",
+    // Verified money that the game refused: the reservation stays, so the bill cannot be paid a
+    // second way, and the next click resumes this payment.
+    const now = loadedOf(applied) ?? cur;
+    return carry(
+      fail(
+        "UNRECONCILED",
+        "PayPal confirmed the payment but the game could not apply it yet. Try again in a moment.",
+      ),
+      now,
     );
   }
-  s.settled.set(save.runId, [
-    ...verifiedSettlements(save.runId),
-    { operationId, billId, logIndex: save.log.length },
-  ]);
   return {
     ok: true,
     save: applied.save,
     view: runView(applied.state),
-    already: false,
     receipt: {
       operationId,
       orderId: event.orderId,
@@ -424,7 +504,7 @@ async function captureLocked(save: SaveToken, operationId: string): Promise<PayR
       status: "COMPLETED",
       amountMinor: event.amount.amountMinor,
       currency: CURRENCY,
-      billLabel: ok.bill.label,
+      billLabel: bill.label,
       evidence: event.verification.evidenceRef,
       verifiedAt: event.verification.verifiedAt,
     },

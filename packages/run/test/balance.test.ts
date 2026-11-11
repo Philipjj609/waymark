@@ -54,7 +54,8 @@ function play(scenario: string, strategy: StrategyId): Cell {
 const median = (xs: number[]): number =>
   [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0;
 
-describe("balance sweep (4 seeds, 1 year)", () => {
+// Each cell simulates a year for 4 seeds; under a full parallel run that can pass 5 s.
+describe("balance sweep (4 seeds, 1 year)", { timeout: 30_000 }, () => {
   for (const sc of SCENARIOS) {
     for (const strategy of STRATEGIES) {
       it(`${sc.id} / ${strategy}: no crash, books balance, cash never negative`, () => {

@@ -6,9 +6,11 @@ import {
   type RunState,
   type RunView,
   runView,
+  startRun,
 } from "@fle/run";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { POST } from "../app/api/run/advisor/route";
+import { POST as runPost } from "../app/api/run/route";
 import { ASK_EVENT, ASKED_EVENT, askFromEvent } from "../app/run/advisor-panel";
 import { resetRateLimits } from "../lib/rate-limit";
 import {
@@ -31,7 +33,7 @@ import {
   typedAmounts,
   yearlyCostTenths,
 } from "../lib/run-advisor";
-import { resetRunCache, seedFor, startSave } from "../lib/run-save";
+import { resetRunCache, type SaveToken, seedFor, setRunStoreForTests } from "../lib/run-save";
 
 const ORIGIN = "http://localhost:3000";
 const ENV_KEYS = ["APP_ORIGINS", "WAYMARK_RUN", "RUN_SECRET"] as const;
@@ -51,6 +53,7 @@ afterAll(() => {
 });
 beforeEach(() => {
   resetRateLimits();
+  setRunStoreForTests();
   resetRunCache();
   resetAdvisorCapForTests();
   setAdvisorModelForTests(undefined);
@@ -60,7 +63,10 @@ afterEach(() => setAdvisorModelForTests(undefined));
 
 /** The stall after its first stop: one business with stock, rent due. */
 function stallState(): RunState {
-  const r = apply(startSave("the-stall").state, { kind: "ADVANCE", mode: "NEXT_STOP" });
+  const r = apply(startRun("run_0123456789abcdef", seedFor("run_0123456789abcdef"), "the-stall"), {
+    kind: "ADVANCE",
+    mode: "NEXT_STOP",
+  });
   if (r.refusal) throw new Error(r.refusal.code);
   return r.state;
 }
@@ -402,7 +408,22 @@ describe("do", () => {
 
 // -- the route ------------------------------------------------------------------------------------------
 
-const post = (body: unknown, cookie?: string, headers: Record<string, string> = {}) =>
+/** The session that owns the run these tests use. */
+const COOKIE = `session=${"a".repeat(43)}`;
+
+/** A run the server holds for COOKIE (the pointer is all the browser has). */
+async function startOwnRun(scenarioId = "first-flat"): Promise<SaveToken> {
+  const res = await runPost(
+    new Request(`${ORIGIN}/api/run`, {
+      method: "POST",
+      headers: { origin: ORIGIN, "content-type": "application/json", cookie: COOKIE },
+      body: JSON.stringify({ action: "start", scenarioId }),
+    }),
+  );
+  return ((await res.json()) as { save: SaveToken }).save;
+}
+
+const post = (body: unknown, cookie: string = COOKIE, headers: Record<string, string> = {}) =>
   new Request(`${ORIGIN}/api/run/advisor`, {
     method: "POST",
     headers: {
@@ -415,7 +436,10 @@ const post = (body: unknown, cookie?: string, headers: Record<string, string> = 
   });
 
 describe("POST /api/run/advisor", () => {
-  const { save } = startSave("first-flat");
+  let save: SaveToken;
+  beforeEach(async () => {
+    save = await startOwnRun();
+  });
 
   it("answers Ask with facts and a stand-in when no model is configured", async () => {
     const res = await POST(post({ mode: "ask", text: "Can I afford the course?", save }));
@@ -475,8 +499,11 @@ describe("POST /api/run/advisor", () => {
         return "{}";
       },
     });
-    const forged = { ...save, log: [{ kind: "ADVANCE", mode: "WEEK" }] };
+    const forged = { ...save, version: save.version + 1 };
     expect((await POST(post({ mode: "ask", text: "hello", save: forged }))).status).toBe(403);
+    // Someone else's run looks like no run at all.
+    const other = `session=${"b".repeat(43)}`;
+    expect((await POST(post({ mode: "ask", text: "hello", save }, other))).status).toBe(404);
     expect(
       (await POST(post({ mode: "do", text: "pay the rent", save: { ...save, sig: "abc" } })))
         .status,
@@ -485,11 +512,7 @@ describe("POST /api/run/advisor", () => {
   });
 
   it("answers 429 over the per-session limit and over the global limit", async () => {
-    const cookie = (await POST(post({ mode: "ask", text: "hello", save }))).headers.get(
-      "set-cookie",
-    );
-    const session = cookie?.split(";")[0];
-    expect(session).toBeTruthy();
+    const session = COOKIE;
     resetRateLimits();
     const statuses: number[] = [];
     for (let i = 0; i < 21; i++) {
@@ -501,7 +524,9 @@ describe("POST /api/run/advisor", () => {
     resetRateLimits();
     let last = 200;
     for (let i = 0; i < 61; i++) {
-      last = (await POST(post({ mode: "ask", text: "hello", save }))).status; // a new session each time
+      // a new session each time (it owns no run, but the limit is checked first)
+      const fresh = `session=${i.toString(16).padStart(43, "c")}`;
+      last = (await POST(post({ mode: "ask", text: "hello", save }, fresh))).status;
     }
     expect(last).toBe(429);
   });
@@ -867,7 +892,7 @@ describe("ask results", () => {
   });
 
   it("come back over the route with lead, relevant facts and the checked flag", async () => {
-    const { save } = startSave("first-flat");
+    const save = await startOwnRun();
     setAdvisorModelForTests(null);
     const res = await POST(post({ mode: "ask", text: "Why did my cash drop this week?", save }));
     const body = (await res.json()) as {

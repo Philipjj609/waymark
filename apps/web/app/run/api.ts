@@ -1,25 +1,30 @@
 import type { Command, RunView } from "@fle/run";
-import type { SaveToken } from "../../lib/run-save";
+import type { LegacySave, SaveToken } from "../../lib/run-save";
 
 /**
- * The browser's side of POST /api/run (route.ts). The save is a signed log the server hands out;
- * we only carry it. Every outcome is folded into one small union so the screen never inspects a
+ * The browser's side of POST /api/run (route.ts). The save is a signed pointer to the run the
+ * server holds (#137); we only carry it, there is no history in the browser. Every outcome is folded into one small union so the screen never inspects a
  * status code. Same-origin fetch with a JSON body is what the CSRF gate (lib/csrf.ts) accepts.
  * Where saves live in this browser is storage.ts.
  */
 
-export type { SaveToken };
+export type { LegacySave, SaveToken };
 
 export type RunBody =
   | { action: "start"; scenarioId: string }
   | { action: "view"; save: SaveToken }
-  | { action: "command"; save: SaveToken; command: Command };
+  /** A fresh `requestId` per click; a retry of the same click reuses it so it counts once. */
+  | { action: "command"; save: SaveToken; command: Command; requestId: string }
+  /** One-time move of a pre-#137 save (full log) into the server's record. */
+  | { action: "import"; save: LegacySave };
 
 export type RunOutcome =
   | { kind: "ok"; view: RunView; save: SaveToken }
   /** 422: the rules said no. The save is unchanged. */
   | { kind: "refused"; message: string; view: RunView; save: SaveToken }
-  /** 403 / 409: the server will not replay this save. `message` says which of the two it is. */
+  /** 409 STALE: the run moved on elsewhere. Adopt `view` and `save`; nothing was changed. */
+  | { kind: "stale"; message: string; view: RunView; save: SaveToken }
+  /** 403 / 404 / 409: the server will not use this save. `message` says which. */
   | { kind: "unverified"; message: string }
   | { kind: "failed"; message: string };
 
@@ -33,8 +38,11 @@ function errorCode(json: unknown): string | null {
 
 export const UNVERIFIED_MESSAGE =
   "We could not verify this saved run. The save may have been changed, or the game's rules may have moved on since you saved.";
-const STALE_MESSAGE =
-  "This save is older than your latest progress, or the game's rules have changed since you saved it. Reload the page and open the run again.";
+export const STALE_NOTICE = "Your run moved on in another tab. Here is where it is now.";
+const MISSING_MESSAGE =
+  "The game server no longer has this run, or it belongs to another browser session. A demo server can forget runs when it restarts.";
+const RULES_MESSAGE =
+  "The game's rules have changed since this run was saved, so it can no longer be opened.";
 
 export async function callRun(body: RunBody): Promise<RunOutcome> {
   let res: Response;
@@ -63,7 +71,15 @@ export async function callRun(body: RunBody): Promise<RunOutcome> {
     return { kind: "failed", message: "This page is not allowed to reach the game server." };
   }
   if (res.status === 403) return { kind: "unverified", message: UNVERIFIED_MESSAGE };
-  if (res.status === 409) return { kind: "unverified", message: STALE_MESSAGE };
+  if (res.status === 409 && code === "STALE" && isObject(json) && json.view && json.save) {
+    return {
+      kind: "stale",
+      message: STALE_NOTICE,
+      view: json.view as RunView,
+      save: json.save as SaveToken,
+    };
+  }
+  if (res.status === 409) return { kind: "unverified", message: RULES_MESSAGE };
   if (res.status === 429) {
     return {
       kind: "failed",
@@ -72,6 +88,9 @@ export async function callRun(body: RunBody): Promise<RunOutcome> {
   }
   if (res.status === 413) {
     return { kind: "failed", message: "This run has grown too large to send to the game." };
+  }
+  if (res.status === 404 && code === "NOT_FOUND") {
+    return { kind: "unverified", message: MISSING_MESSAGE };
   }
   if (res.status === 404) {
     return { kind: "failed", message: "The Run is not switched on in this version of the app." };
