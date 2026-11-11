@@ -1,6 +1,6 @@
 # Final release preflight — 11 November 2026
 
-**Main:** `88d0d85b3b46d62f07b1443c44a60958b73a2ec9`, the owner-authorized squash merge of PR #148 at exact reviewed head `5f0f6aa38591f81b8e7ca86cca274070c5d1eed9`. The resulting tree equals the reviewed tree and has one parent, `c48d236`. [Main CI](https://github.com/Philipjj609/waymark/actions/runs/43035634384) is green on all six checks. Its first browser-install attempt failed on Ubuntu mirror DNS before any browser tests; the failed-job-only rerun passed without source/workflow changes.
+**Current deployment candidate:** `47b19dfcd453b5554a38657102f5a8d2d74140dd`, the owner-authorized squash merge of PR #150 (approved branding and README screenshots). [Current main CI](https://github.com/Philipjj609/waymark/actions/runs/43075526003) is green on all six checks, including Windows. Its parent is `88d0d85b3b46d62f07b1443c44a60958b73a2ec9`, the authorized #148 squash at exact reviewed head `5f0f6aa38591f81b8e7ca86cca274070c5d1eed9`. The backup/migration/replay evidence below was produced at `88d0d85`; #150 changes no persistence, migrations, payments or AI code. Render configuration, live deployment and private backup checksum were rechecked after #150 and remain unchanged.
 
 **Decision:** code/restore readiness GO; public promotion requires the authorizations and remaining gates below. No public deployment, hosted migration, restart, environment update, webhook registration, Live payment or repository publication was performed. No paid resources or upgrades were created. A logical backup export used the existing paid database's recovery capability.
 
@@ -23,6 +23,8 @@ The recovered Render API and dashboard were audited directly, replacing the earl
 
 The service can use its **existing resources** for the RC. It needs a reviewed configuration update and migrations before it can serve the Learn/Run/Sandbox journey. There is no spare isolated Waymark staging service/database in the current inventory. No unrelated service may be repurposed. A public web preview is not private staging.
 
+Fresh operator-local checks after #150: PayPal **Sandbox** OAuth succeeded and Nebius authenticated with the configured tutor model available. These are credential-readiness checks, not a claim that hosted Sandbox settings or payment acceptance exist. The hosted environment still has no PayPal variables. No payment, webhook registration or inference was performed by these probes.
+
 ## Backup, restore and migration proof
 
 One logical export was requested from the existing database. The API returned an empty body and the local JSON parser failed; **creation was not retried**. The dashboard subsequently showed the completed export, which was downloaded and validated. The REST export listing remained empty during these checks; completion is supported by the actual UI/download/restore evidence, not by an invented API success payload.
@@ -39,7 +41,7 @@ This establishes compatibility with this actual hosted snapshot. It is not permi
 ## Shortest safe public deployment procedure
 
 These are **owner-gated steps**, not actions already executed:
-1. Confirm the remaining Nebius budget/top-up posture and decide [advisor limitation #151](https://github.com/Philipjj609/waymark/issues/151). Choose the exact approved source SHA. PR #150's separate branding work remains unmerged and is excluded from `88d0d85` unless independently approved.
+1. Confirm the remaining Nebius budget/top-up posture and decide [advisor limitation #151](https://github.com/Philipjj609/waymark/issues/151). Choose the exact approved source SHA: current main `47b19df` includes merged #150. This documentation follow-up does not need to delay its deployment; merging it would require selecting and checking the resulting new main SHA separately.
 2. In the **existing** `waymark-web` environment, retain PostgreSQL and Nebius settings. Add `WAYMARK_RUN=1`, a new private stable `RUN_SECRET` of at least 32 characters, `WAYMARK_PAYPAL=1`, `PAYPAL_ENV=sandbox`, `PAYPAL_API_BASE=https://api-m.sandbox.paypal.com`, `PAYPAL_SANDBOX_TEST_CARD=1`, existing verified Sandbox merchant credentials, and exact `APP_BASE_URL`/`APP_ORIGINS=https://waymark-web-vwsd.onrender.com`. Never put secrets in the browser bundle, README, chat, screenshots or command transcripts. Do not add Live keys or a fabricated webhook ID. Do not save-and-deploy configuration before deployment is authorized.
 3. Confirm the private backup/restore evidence above and that no later data requires a fresher backup. Use **Manual Deploy → Deploy a specific commit** for the approved SHA, on the existing plan. Preserve the existing frozen build command, pre-deploy `pnpm db:migrate`, start command and health check. Never apply the Blueprint to create duplicate resources.
 4. Verify deployment metadata identifies that SHA and `_migrations` contains `0000` through `0005`. Health alone is insufficient. Inspect sanitized logs, exact-origin rejection, Secure/HttpOnly/SameSite cookies and a foreign session's denial.

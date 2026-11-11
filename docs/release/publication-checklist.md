@@ -1,21 +1,22 @@
 # Final repository publication checklist
 
-Application release SHA: `88d0d85b3b46d62f07b1443c44a60958b73a2ec9`. No repository visibility change is authorized by this checklist. Use the exact final approved SHA if another PR is approved later.
+Application release SHA: `47b19dfcd453b5554a38657102f5a8d2d74140dd`. No repository visibility change is authorized by this checklist. Use the exact final approved SHA if another PR is approved later.
 
 ## Verified for the current merged candidate
 
 - [x] PR #148 exact reviewed head was squash-merged with a single main parent and identical reviewed tree.
-- [x] All six main CI checks passed: [run 43035634384](https://github.com/Philipjj609/waymark/actions/runs/43035634384). Initial browser dependency DNS failure was rerun without code changes; browser tests then passed.
+- [x] All six current main CI checks passed, including Windows: [run 43075526003](https://github.com/Philipjj609/waymark/actions/runs/43075526003). The parent #148 release also passed all six checks.
 - [x] Root MIT OR Apache-2.0 licenses and public README are present; GitHub detects Apache-2.0 while README explains the dual choice.
 - [x] Scoped GraphRAG provenance review and independent reproduction completed; only the erroneous root application-notice copyright changed. Terms and legitimate third-party notices were preserved. [Evidence and limits](graphrag-provenance.md).
 - [x] Third-party notices are included and the static plain-text file was production-smoke-tested. Distinct upstream terms and platform/source distribution limitations remain explicit; no blanket native-image compliance is claimed.
 - [x] Candidate main's full reachable history and current files passed the secret-scanning CI gate; dependency audit passed. Earlier all-local-ref findings were labelled fake scanner-test tokens absent from main/current remote scanner-test branches.
+- [x] A fresh redacted secret scan of currently retrievable issue/PR bodies, issue/PR comments and inline-review comments covered about 2.33 MB and found no leaks. Raw exports remain private outside Git. Deleted content, image pixels, every attachment and old workflow artifact are outside this automated scan; do not claim exhaustive certification.
 - [x] Production backup, extracted data and isolated restored database remain outside Git; no signed backup URL, DB connection string or learner records are in release evidence. The approved-duration video master remains outside Git/Temp and is checksum-preserved.
 - [x] Curriculum remains DRAFT; model interpretation and learning evidence are not editorial approval or mastery.
 
 ## Required before the owner changes visibility
 
-- [ ] Confirm the exact repository/branch/release SHA and independently reviewed PR set. PR #150 branding is separate and unmerged; do not silently include it. Review its asset provenance/security if it will become public, even when it is not part of the selected main release.
+- [x] Current main includes owner-authorized #150 branding at `47b19df`, with identical reviewed tree to `12747cd`. Independent release review checked its README/license distinctions and recorded owner-approved asset provenance; no runtime dependencies, payment, learning or AI changes. This review does not certify every image pixel or historical attachment. Confirm the exact SHA again before publication if another merge occurs.
 - [ ] Recheck the final head's secret scan, dependency audit and license/notice files if anything has changed. Do not treat a scan of main as an exhaustive scan of every discussion, attachment, stale workflow artifact or unrelated branch.
 - [ ] Deliberately accept or approve sanitization of private Drive URLs, project names and relative paths in governance/architecture history, including the files listed in [readiness.md](readiness.md). Do not perform history rewrites, deletions or permission changes implicitly.
 - [ ] Review issue/PR discussions, attachments and exposed workflow artifacts for credentials or unnecessary personal data before publication. Private operator tool output, signed download URLs, local `.env`, backups and raw API payloads must not be copied into public discussions or submission files.

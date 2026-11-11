@@ -1,6 +1,6 @@
 # Release-readiness report — 11 November 2026
 
-**Later update:** PR #148 is now merged as `88d0d85`, all main CI checks passed, Render access recovered and a real hosted backup was restored/migrated/replayed locally. The earlier hosting-access paragraphs below are historical audit evidence. Use [final-preflight.md](final-preflight.md) for current verified facts, the advisor limitation, video preservation and remaining public-release gates; use the [publication checklist](publication-checklist.md) for the final visibility decision.
+**Later update:** PR #148 merged as `88d0d85`; approved branding #150 then merged as current candidate `47b19df`, with all six main CI checks passed. Render access recovered and a real hosted backup was restored/migrated/replayed locally. The earlier hosting-access paragraphs below are historical audit evidence. Use [final-preflight.md](final-preflight.md) for current verified facts, the advisor limitation, video preservation and remaining public-release gates; use the [publication checklist](publication-checklist.md) for the final visibility decision.
 
 Application RC: **`c48d23687d0951a1c41bf48a4415148da5c07f71`**. Release-preparation work is tracked in [#147](https://github.com/Philipjj609/waymark/issues/147), including the ownership claim, independent audits and exact verification results. This report does not authorize publication or public deployment.
 
