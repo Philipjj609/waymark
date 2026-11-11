@@ -185,6 +185,11 @@ export const runCheckoutTarget: CheckoutTarget<SqlExecutor> = {
     const op = runRecordOf(record);
     const rec = await locked(tx, owner, op.runId);
     const settled = settlementOf(rec, op.operationId);
+    // Duplicate observations are not independent evidence. Reject the whole contradictory
+    // capture set before choosing a match or releasing funds; array order must decide nothing.
+    if (new Set(order.captures.map((c) => c.captureId)).size !== order.captures.length) {
+      return { terminal: false, open: true, confirmed: false };
+    }
     // Read the WHOLE capture set. Only COMPLETED is money; DECLINED/FAILED are definite no-money;
     // refunds need a person; anything else (PENDING, unknown or missing status) may still become
     // money, so it keeps the hold and keeps reconciling (Codex review of 0185484, HIGH).
