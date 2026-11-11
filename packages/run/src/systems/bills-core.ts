@@ -68,7 +68,9 @@ function accrue(w: World, bill: Bill): void {
 
 /** Add a fee to an accrued, unpaid bill (used by R2). */
 export function addBillFee(w: World, bill: Bill, feeMinor: number, memo: string): void {
-  if (feeMinor <= 0 || bill.status === "PAID" || bill.status === "UPCOMING") return;
+  // Never change the amount of a bill held for an external payment (see life.ts).
+  if (feeMinor <= 0 || bill.status === "PAID" || bill.status === "UPCOMING" || bill.reservedBy)
+    return;
   w.post(bill.pocket, memo, [
     ["EXPENSE:LateFees", "DEBIT", feeMinor],
     ["LIABILITY:Bills", "CREDIT", feeMinor],
@@ -85,7 +87,11 @@ export interface PaidVia {
 
 export function payBill(w: World, bill: Bill, via: PaidVia | null = null): boolean {
   if (bill.status !== "DUE" && bill.status !== "LATE") return false;
-  if (w.cash(bill.pocket) < bill.amountMinor) return false;
+  // A held bill is paid only by its own settlement, from the cash held for it; any other bill
+  // may use only cash that is not held.
+  const spendable =
+    w.available(bill.pocket) + (via && bill.reservedBy === via.operationId ? bill.amountMinor : 0);
+  if (spendable < bill.amountMinor) return false;
   w.post(bill.pocket, via ? `Paid ${bill.label} through PayPal Sandbox` : `Paid ${bill.label}`, [
     ["LIABILITY:Bills", "DEBIT", bill.amountMinor],
     ["ASSET:Cash", "CREDIT", bill.amountMinor],

@@ -195,7 +195,7 @@ export function blockerOf(w: World, effects: readonly Effect[], ctx: EffectCtx):
     }
   }
   for (const [pocket, amount] of need) {
-    if (w.cash(pocket) < amount) return `Needs ${euros(amount)} in cash.`;
+    if (w.available(pocket) < amount) return `Needs ${euros(amount)} in cash.`;
   }
   return null;
 }

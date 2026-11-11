@@ -1,5 +1,6 @@
 import { createPgCheckout } from "@fle/persistence";
 import { allowedOrigins } from "./csrf";
+import { runCheckoutTarget } from "./run-checkout-target";
 import { getPaymentDatabase } from "./store";
 
 const holder = globalThis as typeof globalThis & {
@@ -29,13 +30,19 @@ async function start() {
   if (!rawOrigin) throw new Error("checkout origin not configured");
   const origin = new URL(rawOrigin).origin;
   if (!allowedOrigins().includes(origin)) throw new Error("checkout origin not allowed");
-  const runtime = createPgCheckout(db, {
-    clientId: process.env.PAYPAL_CLIENT_ID ?? "",
-    clientSecret: process.env.PAYPAL_CLIENT_SECRET ?? "",
-    baseUrl: process.env.PAYPAL_API_BASE,
-    returnOrigin: origin,
-    testCard: process.env.PAYPAL_SANDBOX_TEST_CARD === "1",
-  });
+  const runtime = createPgCheckout(
+    db,
+    {
+      clientId: process.env.PAYPAL_CLIENT_ID ?? "",
+      clientSecret: process.env.PAYPAL_CLIENT_SECRET ?? "",
+      baseUrl: process.env.PAYPAL_API_BASE,
+      returnOrigin: origin,
+      testCard: process.env.PAYPAL_SANDBOX_TEST_CARD === "1",
+      // #137 step 3 (agreed on #140): one runtime for World and Run targets, so the shared tick
+      // never meets a Run operation without its target.
+    },
+    runCheckoutTarget,
+  );
   let stopped = false;
   let running: Promise<void> | undefined;
   const tick = () => {

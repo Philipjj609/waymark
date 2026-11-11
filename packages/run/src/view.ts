@@ -125,7 +125,9 @@ export function runView(state: RunState): RunView {
       }),
     ),
     timeline: timeline(state),
+    advisorAsked: state.flags["advisor.asked"] === true,
     feed: [...state.events]
+      .filter((e) => e.kind !== "ADVISOR_ASKED")
       .reverse()
       .slice(0, FEED_MAX)
       .map((e) => ({
@@ -185,7 +187,7 @@ function billViews(state: RunState, w: World): BillView[] {
         canPay:
           (b.status === "DUE" || b.status === "LATE") &&
           !b.reservedBy &&
-          w.cash(b.pocket) >= b.amountMinor,
+          w.available(b.pocket) >= b.amountMinor,
         graceLeftDays: graceLeft,
         note: billNote(w, b, state.day, graceLeft),
       };
