@@ -46,13 +46,7 @@ h3 {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
   margin-right: auto;
-  color: var(--color-ink);
-  font-family: var(--font-display);
-  font-size: 1.25rem;
-  font-weight: 750;
-  letter-spacing: -0.02em;
   text-decoration: none;
 }
 .brand-logo {

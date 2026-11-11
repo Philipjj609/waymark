@@ -30,7 +30,7 @@ Screenshots from the integrated release build, in a guest session with fictional
     <td width="50%"><img src="docs/assets/readme/02-lesson-liquidity.jpg" alt="The Liquidity lesson with its DRAFT curriculum notice, prerequisites and learning goals."><br><b>Lessons.</b> Short, numeric and labelled DRAFT until editorial approval.</td>
   </tr>
   <tr>
-    <td><img src="docs/assets/readme/03-ai-tutor-reasoning.jpg" alt="A learner's free-text explanation and the tutor's tentative reply, quoting the learner and asking which assumption to check."><br><b>An AI tutor that reads your reasoning.</b> It quotes you exactly, treats a possible misconception as tentative and chooses reviewed teaching panels.</td>
+    <td><img src="docs/assets/readme/03-ai-tutor-reasoning.jpg" alt="A learner's free-text explanation and the tutor's tentative reply, quoting the learner and asking which assumption to check."><br><b>An AI tutor that reads your reasoning.</b> It quotes you exactly, treats a possible misconception as tentative and chooses from pre-written, validated teaching panels.</td>
     <td><img src="docs/assets/readme/04-knowledge-map.jpg" alt="Knowledge map cards; Liquidity shows one evidence source and the note that understanding is still being explored."><br><b>Knowledge map.</b> Evidence of what was observed, never a mastery score.</td>
   </tr>
   <tr>
@@ -43,7 +43,7 @@ Screenshots from the integrated release build, in a guest session with fictional
 
 1. In a Run, the player chooses **Pay with PayPal Sandbox** on a due bill. The server holds that amount in the Run so nothing else can spend it while the payment is in progress.
 2. The server creates an order through PayPal's Sandbox Orders API and pays it with PayPal's published Sandbox test card, so no buyer login or card details are needed.
-3. The server captures the order, then reads the capture back from PayPal.
+3. PayPal captures the test-card payment, and the server reads the capture back from PayPal. It asks PayPal to capture explicitly only if the order is still waiting for capture.
 4. The bill is marked paid only when that capture is `COMPLETED` and its amount and currency match the bill exactly. Each capture can settle at most once.
 5. The receipt shows the PayPal order and capture references. Payment records and the Run history are stored durably, and restarts or lost responses are reconciled against PayPal rather than guessed.
 

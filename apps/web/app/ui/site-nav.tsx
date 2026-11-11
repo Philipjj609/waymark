@@ -23,7 +23,12 @@ const DESTINATIONS = [
 function BrandLogo() {
   return (
     <picture>
-      <source srcSet="/brand/waymark-lockup-dark.png" media="(prefers-color-scheme: dark)" />
+      <source
+        srcSet="/brand/waymark-lockup-dark.png"
+        media="(prefers-color-scheme: dark)"
+        width={497}
+        height={100}
+      />
       <img
         className="brand-logo"
         src="/brand/waymark-lockup-light.png"
