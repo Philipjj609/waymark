@@ -1,8 +1,16 @@
 import { PAYPAL_SANDBOX_BASE_URL } from "@fle/payments";
-import { type RunView, runView, YOU } from "@fle/run";
+import { type Command, calendarLabel, type RunView, runView, YOU } from "@fle/run";
 import type { SessionHash } from "@fle/server";
 import { getCheckoutRuntime } from "./checkout-runtime";
-import { type Loaded, loadRun, type RunFailure, runEnabled, type SaveToken } from "./run-save";
+import {
+  type Loaded,
+  loadRun,
+  type RunFailure,
+  runEnabled,
+  runStore,
+  type SaveToken,
+  stateOfRecord,
+} from "./run-save";
 
 /**
  * Paying a Run bill through PayPal Sandbox (#112, #137 step 3, ADR-0014).
@@ -70,9 +78,34 @@ export interface RunPayStatus {
   readonly phase: string;
   readonly settled: boolean;
   readonly needsAttention: boolean;
+  /**
+   * True only when the checkout finished WITHOUT a settlement and without needing a person: the
+   * order was voided or definitely refused, so the hold on the bill was released and no money moved.
+   */
+  readonly released: boolean;
   readonly orderId: string | null;
   readonly captureId: string | null;
   readonly expected: { readonly amountMinor: number; readonly currency: "EUR" };
+}
+
+/**
+ * One external payment of a Run, rebuilt from the authoritative Run log (RESERVE / SETTLE / RELEASE
+ * commands) and, for the order id, the shared checkout's own status. A read projection only: the
+ * browser may cache it but never decides it.
+ */
+export interface RunPayment {
+  readonly billId: string;
+  readonly billLabel: string;
+  readonly billKind: string;
+  readonly amountMinor: number;
+  readonly operationId: string;
+  readonly state: "SETTLED" | "PENDING" | "RELEASED";
+  readonly captureId: string | null;
+  /** From the checkout's status (owner-checked); null if the runtime is off or knows nothing. */
+  readonly orderId: string | null;
+  /** The game day the bill was paid on (settled payments only). */
+  readonly day: number | null;
+  readonly calendarLabel: string | null;
 }
 
 /** What PayPal Sandbox confirmed, shown to the player as a receipt (built from RunPayStatus). */
@@ -93,6 +126,7 @@ export type PayFailureCode =
   | "NOT_PAYABLE"
   | "NOT_ENOUGH_CASH"
   | "PAYMENT_IN_PROGRESS"
+  | "NO_PAYMENT"
   | "STALE"
   | "BAD_SAVE"
   | "NOT_FOUND"
@@ -134,7 +168,7 @@ function fromRunFailure(f: RunFailure): PayResult {
     return refuse(
       409,
       "STALE",
-      "Your run moved on while this payment was being set up. Nothing was paid.",
+      "Your run moved on in another tab or request. Here is where it is now; check the bill before paying again.",
       f,
     );
   }
@@ -169,7 +203,8 @@ const TARGET_REFUSALS: Record<
   STALE: {
     http: 409,
     code: "STALE",
-    message: "Your run moved on while this payment was being set up. Nothing was paid.",
+    message:
+      "Your run moved on in another tab or request. Here is where it is now; check the bill before paying again.",
   },
   RUN_UNAVAILABLE: { http: 404, code: "NOT_FOUND", message: "This run was not found." },
 };
@@ -192,6 +227,7 @@ const statusOf = (s: CoordinatorStatus): RunPayStatus => ({
   phase: s.phase,
   settled: s.settled,
   needsAttention: s.needsAttention,
+  released: s.phase === "FINISHED" && !s.settled && !s.needsAttention,
   orderId: s.orderId,
   captureId: s.captureId,
   expected: { amountMinor: s.expected.amountMinor, currency: "EUR" },
@@ -222,7 +258,7 @@ export async function payRunBill(
     return refuse(
       409,
       "STALE",
-      "Your run moved on while this payment was being set up. Nothing was paid.",
+      "Your run moved on in another tab or request. Here is where it is now; check the bill before paying again.",
       loaded,
     );
   }
@@ -272,11 +308,27 @@ export async function payRunBill(
   return respond(owner, save, statusOf(status));
 }
 
-/** The payment's status for polling, or after a lost answer. `recheck` asks PayPal again once. */
+/** The operation of the latest payment this run's own log holds for the bill, or null. */
+async function latestOperationOf(owner: string, runId: string, billId: string) {
+  const rec = await runStore().load(runId);
+  if (!rec || rec.owner !== owner) return null;
+  let found: string | null = null;
+  for (const c of rec.commands as Command[]) {
+    if (c.kind === "RESERVE_EXTERNAL" && c.billId === billId) found = c.operationId;
+  }
+  return found;
+}
+
+/**
+ * The payment's status for polling, or after a lost answer. The browser may not know the operation
+ * id (the answer that carried it was lost), so the server finds it from the run's own log: the
+ * latest RESERVE_EXTERNAL for that bill. `recheck` asks PayPal again once.
+ */
 export async function runPayStatus(
   owner: string,
   save: SaveToken,
-  operationId: string,
+  billId: string,
+  operationId?: string,
   recheck = false,
 ): Promise<PayResult> {
   const loaded = await fresh(owner, save);
@@ -284,7 +336,18 @@ export async function runPayStatus(
   if (!loaded.ok) return fromRunFailure(loaded);
   const rt = await runtime();
   if (!rt) return refuse(503, "UNAVAILABLE", "PayPal Sandbox is not set up on this server");
-  const id = operationId as Parameters<RunPayRuntime["service"]["statusRun"]>[2];
+  const found = await latestOperationOf(owner, save.runId, billId);
+  // A given id must be the one the log holds for this bill: a stale id never answers for another.
+  const wanted = operationId ?? found;
+  if (!wanted || (operationId !== undefined && found !== null && operationId !== found)) {
+    return refuse(
+      404,
+      "NO_PAYMENT",
+      "The game has no payment on record for this bill yet. You can press Pay again; it will not charge twice.",
+      loaded,
+    );
+  }
+  const id = wanted as Parameters<RunPayRuntime["service"]["statusRun"]>[2];
   let status = await rt.service.statusRun(owner as SessionHash, save.runId, id);
   if (!status) return refuse(404, "NOT_FOUND", "This payment was not found.");
   if (recheck && !done(statusOf(status))) {
@@ -296,6 +359,98 @@ export async function runPayStatus(
     status = (await rt.service.statusRun(owner as SessionHash, save.runId, id)) ?? status;
   }
   return respond(owner, save, statusOf(status));
+}
+
+const NO_PAYMENTS: readonly RunPayment[] = [];
+
+type SettleCommand = Extract<Command, { kind: "SETTLE_EXTERNAL" }>;
+
+/**
+ * Every external payment in the run's log, rebuilt from the authoritative record: SETTLED from a
+ * SETTLE_EXTERNAL, PENDING from a RESERVE_EXTERNAL with no SETTLE or RELEASE yet, RELEASED from a
+ * RELEASE_EXTERNAL. Receipts and the demo checklist come from this after a reload, a new browser
+ * session or a server restart. Order ids come from the shared checkout (owner-checked); with the
+ * runtime off they are null. It writes nothing and never calls PayPal.
+ */
+export async function runPayments(owner: string, runId: string): Promise<readonly RunPayment[]> {
+  let rec: Awaited<ReturnType<ReturnType<typeof runStore>["load"]>>;
+  try {
+    rec = await runStore().load(runId);
+  } catch {
+    return NO_PAYMENTS;
+  }
+  if (!rec || rec.owner !== owner) return NO_PAYMENTS;
+  const entries = new Map<
+    string,
+    { billId: string; state: RunPayment["state"]; settle: SettleCommand | null }
+  >();
+  for (const c of rec.commands as Command[]) {
+    if (c.kind === "RESERVE_EXTERNAL") {
+      if (!entries.has(c.operationId)) {
+        entries.set(c.operationId, { billId: c.billId, state: "PENDING", settle: null });
+      }
+    } else if (c.kind === "SETTLE_EXTERNAL") {
+      const e = entries.get(c.operationId);
+      if (e) {
+        e.state = "SETTLED";
+        e.settle = c;
+      } else entries.set(c.operationId, { billId: c.billId, state: "SETTLED", settle: c });
+    } else if (c.kind === "RELEASE_EXTERNAL") {
+      const e = entries.get(c.operationId);
+      if (e && e.state === "PENDING") e.state = "RELEASED";
+    }
+  }
+  if (entries.size === 0) return NO_PAYMENTS;
+  let state: ReturnType<typeof stateOfRecord>;
+  try {
+    state = stateOfRecord(rec);
+  } catch {
+    return NO_PAYMENTS;
+  }
+  // Order ids: only when the shared checkout is on, and never a reason to fail the whole answer.
+  let rt: RunPayRuntime | null = null;
+  if (holder.__waymarkRunPayRuntime || paypalSandboxConfigured()) {
+    try {
+      rt = await runtime();
+    } catch {
+      rt = null;
+    }
+  }
+  const out: RunPayment[] = [];
+  for (const [operationId, e] of entries) {
+    const bill = state.bills.find((b) => b.id === e.billId);
+    const paid = e.settle
+      ? state.events.find(
+          (ev) => ev.refs.operationId === operationId && ev.kind.startsWith("BILL_PAID"),
+        )
+      : undefined;
+    let orderId: string | null = null;
+    if (rt && e.state !== "RELEASED") {
+      try {
+        const st = await rt.service.statusRun(
+          owner as SessionHash,
+          runId,
+          operationId as Parameters<RunPayRuntime["service"]["statusRun"]>[2],
+        );
+        orderId = st?.orderId ?? null;
+      } catch {
+        orderId = null;
+      }
+    }
+    out.push({
+      billId: e.billId,
+      billLabel: bill?.label ?? e.billId,
+      billKind: bill?.kind ?? "OTHER",
+      amountMinor: e.settle?.amountMinor ?? bill?.amountMinor ?? 0,
+      operationId,
+      state: e.state,
+      captureId: e.settle?.captureId ?? null,
+      orderId,
+      day: paid?.day ?? null,
+      calendarLabel: paid ? calendarLabel(paid.day) : null,
+    });
+  }
+  return out;
 }
 
 async function respond(owner: string, save: SaveToken, status: RunPayStatus): Promise<PayResult> {

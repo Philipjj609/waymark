@@ -608,19 +608,38 @@ test.describe("the Run", () => {
     expect(paid.status()).toBe(200);
     await expect(page.getByTestId("demo-pay")).toHaveAttribute("data-done", "true");
 
-    // The advisor panel announces an answer with a window event; the checklist listens.
-    await page.evaluate(() => window.dispatchEvent(new CustomEvent("run:asked")));
+    // Asking the advisor is recorded by the SERVER in the run's log; the checklist reads it back.
+    await page.getByTestId("advisor-now").click();
     await expect(page.getByTestId("demo-ask")).toHaveAttribute("data-done", "true");
 
-    // The ticks are remembered with the run, and the checklist can be put away.
+    // The ticks come from the server, not the browser: delete every extra the browser kept
+    // (keeping only the run's signed pointer) and they all come back.
+    await page.evaluate((key) => {
+      const runs = JSON.parse(localStorage.getItem(key) as string);
+      localStorage.setItem(
+        key,
+        JSON.stringify(
+          runs.map((r: Record<string, unknown>) => ({
+            id: r.id,
+            name: r.name,
+            scenarioId: r.scenarioId,
+            save: r.save,
+            calendarLabel: r.calendarLabel,
+            updatedAt: r.updatedAt,
+          })),
+        ),
+      );
+    }, RUNS_KEY);
     await page.reload();
     await clickAndWaitForRun(page, () => page.getByTestId("continue-run").click());
+    await expect(page.getByTestId("demo-checklist")).toBeVisible();
     await expect(page.getByTestId("demo-ask")).toHaveAttribute("data-done", "true");
+    await expect(page.getByTestId("demo-pay")).toHaveAttribute("data-done", "true");
     await list.getByRole("button", { name: "Hide the checklist" }).click();
     await expect(list).toBeHidden();
   });
 
-  test("PayPal Sandbox receipts are kept per run, next to the save, and survive play", async ({
+  test("PayPal Sandbox receipts come from the server: a receipt planted in the browser proves nothing", async ({
     page,
   }) => {
     await startFirstFlat(page, "Receipts");
@@ -646,15 +665,10 @@ test.describe("the Run", () => {
     );
     await page.reload();
     await clickAndWaitForRun(page, () => page.getByTestId("continue-run").click());
-    const chip = page.getByTestId("paypal-chip");
-    await expect(chip).toHaveText("PayPal Sandbox: 1 payment verified");
-    await chip.click();
-    await expect(page.getByTestId("paypal-receipts")).toContainText("ORDER123");
-    await expect(page.getByTestId("paypal-receipts")).toContainText("Test money");
-
-    // Playing on keeps them (the entry is rewritten on every move).
-    await carryOn(page);
-    expect((await storedRuns(page))[0].receipts).toHaveLength(1);
+    // The server lists no payment for this run, so the browser's cached receipt is not shown as
+    // a verified payment (the chip is hidden while PayPal is off and nothing was paid).
+    await expect(page.getByTestId("paypal-chip")).toHaveCount(0);
+    await expect(page.getByTestId("paypal-receipts")).toHaveCount(0);
 
     // A damaged extra is dropped, never a reason to lose the run.
     await page.evaluate((key) => {

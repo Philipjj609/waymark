@@ -3,6 +3,7 @@ import { z } from "zod";
 import { rejectUnsafeWrite } from "../../../lib/csrf";
 import { errorResponse, guarded, json, worldNotFound } from "../../../lib/http";
 import { clientIp, hit, type Limit } from "../../../lib/rate-limit";
+import { runPayments } from "../../../lib/run-paypal";
 import {
   type Applied,
   commandRun,
@@ -137,7 +138,7 @@ export async function POST(req: Request): Promise<Response> {
         return errorResponse(400, "INVALID_REQUEST", "unknown starting point");
       }
       const made = await createRun(owner, body.scenarioId);
-      return json({ view: runView(made.state), save: made.save }, 200, setCookie);
+      return json({ view: runView(made.state), save: made.save, payments: [] }, 200, setCookie);
     }
 
     let result: Loaded | Applied | RunFailure;
@@ -155,13 +156,25 @@ export async function POST(req: Request): Promise<Response> {
       result = await commandRun(owner, body.save as SaveToken, body.command, body.requestId);
     }
 
+    // The run's payments, rebuilt from the server's own log on every view: receipts and the demo
+    // checklist survive a reload, a new browser session and a server restart.
+    const paymentsOf = (r: { save: SaveToken }) => runPayments(owner, r.save.runId);
     if (result.ok) {
-      return json({ view: runView(result.state), save: result.save }, 200, setCookie);
+      return json(
+        { view: runView(result.state), save: result.save, payments: await paymentsOf(result) },
+        200,
+        setCookie,
+      );
     }
     switch (result.code) {
       case "REFUSED":
         return json(
-          { refusal: result.refusal, view: runView(result.state), save: result.save },
+          {
+            refusal: result.refusal,
+            view: runView(result.state),
+            save: result.save,
+            payments: await paymentsOf(result),
+          },
           422,
           setCookie,
         );
@@ -171,6 +184,7 @@ export async function POST(req: Request): Promise<Response> {
             error: { code: "STALE", message: "your run moved on in another tab" },
             view: runView(result.state),
             save: result.save,
+            payments: await paymentsOf(result),
           },
           409,
           setCookie,

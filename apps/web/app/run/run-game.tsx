@@ -2,6 +2,7 @@
 
 import type { Command, RunView } from "@fle/run";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { RunPayment } from "../../lib/run-paypal";
 import { SiteHeader } from "../ui/site-nav";
 import { AdvisorPanel } from "./advisor-panel";
 import { callRun, type RunBody, type SaveToken } from "./api";
@@ -20,6 +21,7 @@ import {
   FirstRunGuide,
   GoalLine,
   payableBills,
+  receiptsFrom,
 } from "./extras";
 import { Borrowing, Transfer } from "./finance-panels";
 import { euros } from "./format";
@@ -27,7 +29,12 @@ import { Bills, Inbox, Invoices } from "./inbox";
 import { Asks, MonthCloseSheet, Notes, YearReviewPage } from "./learning-panels";
 import { MoneyStrip } from "./money-strip";
 import { NeedsYou, type Pane } from "./needs-you";
-import { type PayPalReceipt, PayPalReceiptCard } from "./pay-with-paypal";
+import {
+  type PaidNext,
+  type PayPalReceipt,
+  PayPalReceiptCard,
+  PendingPayment,
+} from "./pay-with-paypal";
 import { type ScenarioSummary, StartScreen } from "./start-screen";
 import {
   extrasOf,
@@ -108,6 +115,9 @@ export function RunGame({
   const [announce, setAnnounce] = useState("");
   const [dismissed, setDismissed] = useState<readonly string[]>([]);
   const [chip, setChip] = useState<CashChip | null>(null);
+  // The server-built payment projection of the active run (null: not known yet). Receipts and the
+  // demo checklist come from it; localStorage only caches what it said.
+  const [payments, setPayments] = useState<readonly RunPayment[] | null>(null);
   const busyRef = useRef(false);
   const pendingRequest = useRef<{ key: string; requestId: string } | null>(null);
   const lostAnswer = useRef(false);
@@ -157,6 +167,7 @@ export function RunGame({
       who: Active,
       command: Command | null,
       receipt: PayPalReceipt | null = null,
+      nextPayments: readonly RunPayment[] | null = null,
     ) => {
       setAnnounce(describeChange(viewRef.current, nextView));
       setChip(command?.kind === "ADVANCE" ? cashChipOf(viewRef.current, nextView) : null);
@@ -169,7 +180,10 @@ export function RunGame({
       setProblem(null);
       const prior = runsRef.current.find((r) => r.id === who.id);
       const extras = extrasOf(prior);
+      if (nextPayments) setPayments(nextPayments);
       let receipts = extras.receipts ?? [];
+      // The cache follows the server's projection when there is one.
+      if (nextPayments) receipts = receiptsFrom(nextPayments, receipts);
       if (receipt && !receipts.some((r) => r.captureId === receipt.captureId)) {
         const kept: StoredReceipt = { ...receipt, calendarLabel: nextView.calendar.label };
         receipts = [...receipts, kept];
@@ -228,14 +242,14 @@ export function RunGame({
         if (out.kind === "ok") {
           const a = who(out.save.runId);
           if (!a) return false;
-          adopt(out.save, out.view, a, command);
+          adopt(out.save, out.view, a, command, null, out.payments);
           return true;
         }
         if (out.kind === "stale") {
           // Another tab (or a lost answer) moved the run on: show where it is now, change nothing.
           const a = who(out.save.runId);
           if (!a) return false;
-          adopt(out.save, out.view, a, null);
+          adopt(out.save, out.view, a, null, null, out.payments);
           setProblem({ kind: "failed", message: out.message });
           setAnnounce(out.message);
           return false;
@@ -348,6 +362,7 @@ export function RunGame({
     setActive(null);
     setView(null);
     setSave(null);
+    setPayments(null);
     setChip(null);
     resetScreen();
     setAnnounce("Back at your runs.");
@@ -442,12 +457,16 @@ export function RunGame({
               paypalSandbox={paypalSandbox}
               chip={chip}
               extras={runExtras}
+              payments={payments}
               onExtras={(change) => updateExtras(active.id, change)}
               monthSheetOpen={monthKey !== null && !dismissed.includes(monthKey)}
               onDismissMonth={() => monthKey && dismiss(monthKey)}
               onOpenMonth={() => monthKey && reopen(monthKey)}
               onOpenYear={() => yearKey && reopen(yearKey)}
-              onSettled={(next) => adopt(next.save, next.view, active, null, next.receipt)}
+              onSettled={(next) =>
+                adopt(next.save, next.view, active, null, next.receipt, next.payments)
+              }
+              onRunMoved={(next) => adopt(next.save, next.view, active, null, null, next.payments)}
             />
           )}
         </main>
@@ -525,12 +544,14 @@ function Desk({
   paypalSandbox,
   chip,
   extras,
+  payments,
   onExtras,
   monthSheetOpen,
   onDismissMonth,
   onOpenMonth,
   onOpenYear,
   onSettled,
+  onRunMoved,
 }: {
   view: RunView;
   save: SaveToken;
@@ -540,12 +561,18 @@ function Desk({
   paypalSandbox: boolean;
   chip: CashChip | null;
   extras: RunExtras;
+  payments: readonly RunPayment[] | null;
   onExtras: (change: (prev: RunExtras) => RunExtras) => void;
   monthSheetOpen: boolean;
   onDismissMonth: () => void;
   onOpenMonth: () => void;
   onOpenYear: () => void;
-  onSettled: (next: { save: SaveToken; view: RunView; receipt: PayPalReceipt | null }) => void;
+  onSettled: (next: PaidNext) => void;
+  onRunMoved: (next: {
+    save: SaveToken;
+    view: RunView;
+    payments: readonly RunPayment[] | null;
+  }) => void;
 }) {
   const [receipt, setReceipt] = useState<PayPalReceipt | null>(null);
   const [pane, setPane] = useState<Pane>("week");
@@ -553,7 +580,11 @@ function Desk({
   const [goTo, setGoTo] = useState<{ id: string; n: number; ask?: string } | null>(null);
   const [confirming, setConfirming] = useState(false);
 
-  const receipts = extras.receipts ?? [];
+  // Receipts come from the server's projection; the cached copy is only a fallback.
+  const receipts = payments
+    ? receiptsFrom(payments, extras.receipts ?? [])
+    : (extras.receipts ?? []);
+  const pending = (payments ?? []).filter((p) => p.state === "PENDING");
   const payable = payableBills(view);
   const showConfirm = confirming && payable.length > 0;
   const hasBusiness = view.businesses.length > 0;
@@ -607,38 +638,22 @@ function Desk({
     else advance();
   };
 
-  const settle = (next: { save: SaveToken; view: RunView; receipt: PayPalReceipt | null }) => {
+  const settle = (next: PaidNext) => {
     if (next.receipt) setReceipt(next.receipt);
     onSettled(next);
   };
 
-  // The demo checklist ticks itself from what the view shows; the advisor step comes from the
-  // advisor panel's "run:asked" event.
-  const demo = extras.demo;
-  useEffect(() => {
-    if (!demo) return;
-    const fresh = demoProgress(view, receipts, paypalSandbox).filter(
-      (t) => !demo.ticks.includes(t),
-    );
-    if (fresh.length === 0) return;
-    onExtras((prev) =>
-      prev.demo
-        ? { ...prev, demo: { ...prev.demo, ticks: [...new Set([...prev.demo.ticks, ...fresh])] } }
-        : prev,
-    );
-  }, [demo, view, receipts, paypalSandbox, onExtras]);
-  const hasDemo = demo !== undefined;
-  useEffect(() => {
-    if (!hasDemo) return;
-    const onAsked = () =>
-      onExtras((prev) =>
-        prev.demo && !prev.demo.ticks.includes("ask")
-          ? { ...prev, demo: { ...prev.demo, ticks: [...prev.demo.ticks, "ask"] } }
-          : prev,
-      );
-    window.addEventListener("run:asked", onAsked);
-    return () => window.removeEventListener("run:asked", onAsked);
-  }, [hasDemo, onExtras]);
+  // The demo checklist is derived from the server's state on every render (the view, the payment
+  // projection, the Run log's advisor record), so it is identical after a reload, a new browser
+  // session or a server restart. Only "hidden" is a browser preference.
+  // The Quick demo run is recognised by what it is (name and scenario), so deleting the browser's
+  // extras brings the checklist back, with the ticks the server proves.
+  const demo =
+    extras.demo ??
+    (runName === DEMO_NAME && view.scenario.id === DEMO_SCENARIO
+      ? { ticks: [], hidden: false }
+      : undefined);
+  const ticks = demo ? demoProgress(view, payments, receipts, paypalSandbox) : [];
 
   const paypal = { enabled: paypalSandbox, save, onSettled: settle };
 
@@ -714,18 +729,22 @@ function Desk({
           <div data-p="week">
             {demo && !demo.hidden ? (
               <DemoChecklist
-                demo={demo}
+                ticks={ticks}
                 paypalSandbox={paypalSandbox}
                 onHide={() =>
-                  onExtras((prev) =>
-                    prev.demo ? { ...prev, demo: { ...prev.demo, hidden: true } } : prev,
-                  )
+                  onExtras((prev) => ({
+                    ...prev,
+                    demo: { ticks: prev.demo?.ticks ?? [], hidden: true },
+                  }))
                 }
               />
             ) : null}
             {!extras.guideDone ? (
               <FirstRunGuide onDone={() => onExtras((prev) => ({ ...prev, guideDone: true }))} />
             ) : null}
+            {pending.map((p) => (
+              <PendingPayment key={p.operationId} save={save} payment={p} onSettled={settle} />
+            ))}
             <NeedsYou
               view={view}
               runName={runName}
@@ -774,6 +793,7 @@ function Desk({
               <AdvisorPanel
                 save={save}
                 view={view}
+                onRunMoved={onRunMoved}
                 onCommand={async (command) => {
                   await act(command);
                 }}

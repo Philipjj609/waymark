@@ -12,7 +12,8 @@ import {
   overriddenModel,
   takeDailyModelCall,
 } from "../../../../lib/run-advisor";
-import { loadRun, runEnabled, type SaveToken } from "../../../../lib/run-save";
+import { runPayments } from "../../../../lib/run-paypal";
+import { appendServerCommand, loadRun, runEnabled, type SaveToken } from "../../../../lib/run-save";
 import { readSession, startSession } from "../../../../lib/session";
 import { tutorProvider } from "../../../../lib/tutor";
 
@@ -74,8 +75,9 @@ function modelForRequest() {
 }
 
 /**
- * The Run's advisor (#118, #120). Read-only: it never changes a save. Ask answers a question from
- * facts the server writes; Do turns typed words into at most one command the player must confirm,
+ * The Run's advisor (#118, #120). It never changes the player's money: the one thing it records is
+ * a server-only ADVISOR_ASKED entry (no economic effect) after a real Ask answer, so the demo
+ * checklist survives a reload. Ask answers a question from facts the server writes; Do turns typed words into at most one command the player must confirm,
  * which then goes through POST /api/run like any other action. The model, when there is one, only
  * proposes; the player's text is data, and the seed never leaves the server.
  */
@@ -112,7 +114,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     // The server's own copy of the run answers; the pointer is verified first, and a run that is
-    // not this session's looks like a run that does not exist. Nothing is ever appended here.
+    // not this session's looks like a run that does not exist.
     const loaded = await loadRun(session.hash, save);
     if (!loaded.ok) {
       if (loaded.code === "BAD_SAVE") {
@@ -130,6 +132,32 @@ export async function POST(req: Request): Promise<Response> {
       mode === "ask"
         ? await askAdvisor(text, view, model, undefined, state)
         : await doAdvisor(text, state, view, model);
+    // Asking is part of the run's authoritative history (the demo checklist reads it back after a
+    // reload): record it once, after a real answer. The command is server-only and has no economic
+    // effect. If the run moved meanwhile, skip silently; nothing depends on it.
+    if (mode === "ask" && "answer" in body && !view.advisorAsked) {
+      try {
+        const done = await appendServerCommand(session.hash, save.runId, loaded.save.version, {
+          kind: "ADVISOR_ASKED",
+        });
+        if (done.ok) {
+          return json(
+            {
+              ...body,
+              run: {
+                save: done.save,
+                view: runView(done.state),
+                payments: await runPayments(session.hash, save.runId),
+              },
+            },
+            200,
+            setCookie,
+          );
+        }
+      } catch {
+        // Recording is best effort.
+      }
+    }
     return json(body, 200, setCookie);
   });
 }

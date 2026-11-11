@@ -101,8 +101,12 @@ const pay = (
   extra: Record<string, unknown> = {},
   cookie = COOKIE,
 ) => postPayPal(req({ action: "pay", save, billId, ...extra }, cookie));
-const status = (save: SaveToken, operationId: string, extra: Record<string, unknown> = {}) =>
-  postPayPal(req({ action: "status", save, operationId, ...extra }));
+const status = (
+  save: SaveToken,
+  billId: string,
+  operationId?: string,
+  extra: Record<string, unknown> = {},
+) => postPayPal(req({ action: "status", save, billId, operationId, ...extra }));
 
 interface Status {
   operationId: string;
@@ -236,16 +240,19 @@ describe("paying a bill", () => {
     const p = await withPayableBill(OWNER);
     const paid = (await (await pay(p.save, p.billId)).json()) as Ok;
     // The browser lost the answer and still holds the OLD pointer: status answers with the new run.
-    const res = await status(p.save, paid.status.operationId);
+    const res = await status(p.save, p.billId, paid.status.operationId);
     expect(res.status).toBe(200);
     const body = (await res.json()) as Ok;
     expect(body.status).toMatchObject({ settled: true, captureId: paid.status.captureId });
     expect(body.save).toEqual(paid.save);
     expect(fake.creates).toBe(1);
     // Unknown payment, someone else's, or a made-up id: 404 with the same words.
-    expect((await status(p.save, "pop_nope")).status).toBe(404);
+    expect((await status(p.save, p.billId, "pop_nope")).status).toBe(404);
     const foreign = await postPayPal(
-      req({ action: "status", save: p.save, operationId: paid.status.operationId }, OTHER),
+      req(
+        { action: "status", save: p.save, billId: p.billId, operationId: paid.status.operationId },
+        OTHER,
+      ),
     );
     expect(foreign.status).toBe(404);
   });
@@ -303,7 +310,7 @@ describe("paying a bill", () => {
       if (o.capture) o.capture.status = "COMPLETED";
     });
     const checked = (await (
-      await status(body.save, body.status.operationId, { recheck: true })
+      await status(body.save, p.billId, body.status.operationId, { recheck: true })
     ).json()) as Ok;
     expect(checked.status.settled).toBe(true);
     expect((await logOf(p.save.runId)).filter((c) => c.kind === "SETTLE_EXTERNAL")).toHaveLength(1);
