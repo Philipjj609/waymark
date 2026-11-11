@@ -160,22 +160,38 @@ export const runCheckoutTarget: CheckoutTarget<SqlExecutor> = {
     const op = runRecordOf(record);
     const rec = await locked(tx, owner, op.runId);
     const settled = settlementOf(rec, op.operationId);
+    // Read the WHOLE capture set. Only COMPLETED is money; DECLINED/FAILED are definite no-money;
+    // refunds need a person; anything else (PENDING, unknown or missing status) may still become
+    // money, so it keeps the hold and keeps reconciling (Codex review of 0185484, HIGH).
     const completed = order.captures.filter((c) => c.status === "COMPLETED");
     const refunded = order.captures.some(
       (c) => c.status === "REFUNDED" || c.status === "PARTIALLY_REFUNDED",
     );
+    const failed = order.captures.filter((c) => c.status === "DECLINED" || c.status === "FAILED");
+    const unresolved =
+      order.captures.length -
+      completed.length -
+      failed.length -
+      order.captures.filter((c) => c.status === "REFUNDED" || c.status === "PARTIALLY_REFUNDED")
+        .length;
     if (settled) {
       const matches = completed.some((c) => c.captureId === settled.captureId);
-      // Settled and still a completed capture at PayPal: done. A refund needs a person.
-      return { terminal: true, open: refunded || !matches, confirmed: matches && !refunded };
+      const extraMoney = completed.some((c) => c.captureId !== settled.captureId);
+      // Another capture may still complete: not finished, keep watching.
+      if (unresolved > 0)
+        return { terminal: false, open: extraMoney || refunded, confirmed: false };
+      if (!matches || extraMoney || refunded)
+        return { terminal: true, open: true, confirmed: false };
+      return { terminal: true, open: false, confirmed: true };
     }
-    if (completed.length > 0 || refunded) {
-      // Money moved at PayPal but the fact is not applied yet: the coordinator applies it next.
-      return { terminal: false, open: refunded, confirmed: false };
+    if (completed.length > 0) {
+      // Money moved but the fact is not applied yet: the coordinator applies it next. More than
+      // one completed capture for one bill is never normal.
+      return { terminal: false, open: completed.length > 1 || refunded, confirmed: false };
     }
-    const declined = order.captures.some((c) => c.status === "DECLINED" || c.status === "FAILED");
+    if (refunded || unresolved > 0) return { terminal: false, open: refunded, confirmed: false };
     if (order.status === "VOIDED") {
-      // Verified terminal order with no capture: the hold can be released.
+      // Verified terminal order whose every capture (if any) definitely failed: release the hold.
       const state = stateOfRecord(rec);
       const bill = state.bills.find((b) => b.id === op.billId);
       if (bill?.reservedBy === op.operationId) {
@@ -187,8 +203,38 @@ export const runCheckoutTarget: CheckoutTarget<SqlExecutor> = {
       }
       return { terminal: true, open: false, confirmed: true };
     }
-    // Pending, uncertain or declined: keep the hold and reconcile the original order again.
-    return { terminal: false, open: declined, confirmed: false };
+    // Created, approved or declined but not voided: keep the hold and reconcile again.
+    return { terminal: false, open: failed.length > 0, confirmed: false };
+  },
+
+  /**
+   * The gateway calls this only after proving that order creation was definitely refused: no order,
+   * capture not started, no facts. Release this operation's hold once; a repeat is a no-op; never
+   * touch a hold that belongs to another operation; never release after a settlement.
+   */
+  async releaseUncreated(
+    tx: SqlExecutor,
+    owner: SessionHash,
+    record: OperationRecord,
+  ): Promise<void> {
+    const op = runRecordOf(record);
+    const rec = await locked(tx, owner, op.runId);
+    if (settlementOf(rec, op.operationId)) throw new RunTargetError("ALREADY_SETTLED");
+    const commands = rec.commands as Command[];
+    const reserved = commands.some(
+      (c) =>
+        c.kind === "RESERVE_EXTERNAL" && c.operationId === op.operationId && c.billId === op.billId,
+    );
+    if (!reserved) throw new RunTargetError("NOT_RESERVED");
+    const state = stateOfRecord(rec);
+    const bill = state.bills.find((b) => b.id === op.billId);
+    if (!bill) throw new RunTargetError("UNKNOWN_BILL");
+    if (bill.reservedBy !== op.operationId) return; // already released, or held by another payment
+    await appendServer(tx, rec, state, {
+      kind: "RELEASE_EXTERNAL",
+      billId: op.billId,
+      operationId: op.operationId,
+    });
   },
 
   async status(
