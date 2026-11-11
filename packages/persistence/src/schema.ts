@@ -90,8 +90,11 @@ export const journalLines = pgTable(
 
 export const providerOperations = pgTable("provider_operations", {
   operationId: text("operation_id").primaryKey(),
-  worldId: text("world_id").notNull(),
-  obligationId: text("obligation_id").notNull(),
+  targetKind: text("target_kind").notNull().default("WORLD"),
+  worldId: text("world_id"),
+  obligationId: text("obligation_id"),
+  runId: text("run_id"),
+  billId: text("bill_id"),
   amountMinor: bigint("amount_minor", { mode: "number" }).notNull(),
   currency: text("currency").notNull(),
   paypalOrderId: text("paypal_order_id").unique(),

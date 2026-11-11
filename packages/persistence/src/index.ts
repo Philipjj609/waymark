@@ -3,6 +3,7 @@ export { connectPostgres } from "./connect.js";
 export { type Db, migrate } from "./migrate.js";
 export { createPgCheckout, PgCheckoutQueue } from "./pg-checkout.js";
 export { PgOperationStore } from "./pg-operation-store.js";
+export { createRunCheckout, PgRunCheckoutGateway } from "./pg-run-checkout.js";
 export {
   appendRunCommandsTx,
   loadRunTx,

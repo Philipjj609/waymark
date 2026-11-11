@@ -52,9 +52,13 @@ afterAll(async () => {
   await Promise.all(pools.map((p) => p.end()));
   if (!ADMIN_URL) return;
   const admin = new pg.Client({ connectionString: ADMIN_URL });
-  await admin.connect();
-  for (const name of databases) await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-  await admin.end();
+  try {
+    await admin.connect();
+    for (const name of databases) await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+  } finally {
+    // A failed DROP must not itself leave the cleanup connection open.
+    await admin.end();
+  }
 });
 
 describe.skipIf(!ADMIN_URL)("PgWorldStore on a real PostgreSQL server", () => {

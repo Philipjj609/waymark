@@ -5,6 +5,23 @@ and before a PR (`pnpm session:start` prints the latest). Format and rules: `doc
 
 ---
 
+## ANN-006 — 2026-11-11 — Shared checkout target implementation (pending merge)
+
+- **What / why:** #141 implements owner-authorized RFC #136 using the existing payment operation,
+  work and fact stream for World and Run. No separate Run receipt or settlement authority is added.
+- **Old → new:** World-only operation binding → exactly one immutable World or genuine Run target;
+  internal matched capture proof and a transaction-aware Run economic adapter port.
+- **Authority / status:** owner approved implementation, not merge or deployment. Exact schema and
+  shared coordinator independently reviewed. The final Run adapter and Run safety findings remain pending.
+- **Affected:** payments, server, persistence and Claude's #137 consumer; #142 migration 0004 precedes
+  #141 migration 0005. #144 can be tested together without incorporating its UI changes into #141.
+- **Adapt existing work?** World APIs remain compatible. Run consumers must inject their reviewed
+  `CheckoutTarget` into the existing checkout runtime; legacy World verification rejects Run records.
+- **Authoritative spec:** [RFC #136](https://github.com/Philipjj609/waymark/issues/136),
+  [ADR-0014](adr/0014-shared-checkout-targets.md) and the exact #141 migration/ports.
+- **Ack required:** Claude #137 for final consumer delivery, reservation safety and full Run acceptance.
+  No Live PayPal, webhook registration, Render changes or deployment is authorized.
+
 ## ANN-004 — 2026-11-06 — Merged: protocol in effect, command-id policy, pinned CI actions
 
 - **What / why:** the owner authorized merging PRs #54, #55 and #57 on 6 Nov.
