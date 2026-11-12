@@ -2,7 +2,6 @@ import { APP_NAME, SCENARIO_NAME } from "../../lib/brand";
 import { WorldShell } from "../world-shell";
 
 export const metadata = {
-  title: `${SCENARIO_NAME} Today screen`,
   description: "Financial-education simulation. All money is fictional.",
 };
 

@@ -11,7 +11,6 @@ import type { ScenarioSummary } from "./start-screen";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "The Run: a money life, in practice",
   description: "A practice money life over weeks and months. All money is fictional.",
 };
 
