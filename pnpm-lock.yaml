@@ -67,8 +67,8 @@ importers:
         version: 4.6.7
     devDependencies:
       '@electric-sql/pglite':
-        specifier: 0.5.11
-        version: 0.5.11
+        specifier: 0.5.13
+        version: 0.5.13
       '@fle/simulation':
         specifier: workspace:*
         version: link:../../packages/simulation
@@ -86,7 +86,7 @@ importers:
         version: 19.3.0(@types/react@19.3.0)
       drizzle-orm:
         specifier: 0.45.4
-        version: 0.45.4(@electric-sql/pglite@0.5.11)(@types/pg@8.23.1)(pg@8.23.1)
+        version: 0.45.4(@electric-sql/pglite@0.5.13)(@types/pg@8.23.1)(pg@8.23.1)
 
   packages/ai:
     dependencies:
@@ -157,14 +157,14 @@ importers:
         version: link:../simulation
       drizzle-orm:
         specifier: 0.45.4
-        version: 0.45.4(@electric-sql/pglite@0.5.11)(@types/pg@8.23.1)(pg@8.23.1)
+        version: 0.45.4(@electric-sql/pglite@0.5.13)(@types/pg@8.23.1)(pg@8.23.1)
       pg:
         specifier: 8.23.1
         version: 8.23.1
     devDependencies:
       '@electric-sql/pglite':
-        specifier: 0.5.11
-        version: 0.5.11
+        specifier: 0.5.13
+        version: 0.5.13
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
@@ -283,8 +283,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@electric-sql/pglite@0.5.11':
-    resolution: {integrity: sha512-SWuqsTjA4DDWqgZ05PC1RJaq8e00p5KACxbqaikDFQ8dIGA0SLRzuPniky7IW+q/c5RDNMdEXwv7mFBWIx9Hxw==}
+  '@electric-sql/pglite@0.5.13':
+    resolution: {integrity: sha512-4rZuxK1k07w6sSpJzjMri0B9+HuXuC7V9pxVB51pR0T9KPqXg6TD0mdaEwBA9rkcL4jdht4tGDf/wYzAiGhT7g==}
 
   '@emnapi/runtime@1.11.3':
     resolution: {integrity: sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==}
@@ -1382,7 +1382,7 @@ snapshots:
   '@biomejs/cli-win32-x64@2.6.2':
     optional: true
 
-  '@electric-sql/pglite@0.5.11': {}
+  '@electric-sql/pglite@0.5.13': {}
 
   '@emnapi/runtime@1.11.3':
     dependencies:
@@ -1718,9 +1718,9 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
-  drizzle-orm@0.45.4(@electric-sql/pglite@0.5.11)(@types/pg@8.23.1)(pg@8.23.1):
+  drizzle-orm@0.45.4(@electric-sql/pglite@0.5.13)(@types/pg@8.23.1)(pg@8.23.1):
     optionalDependencies:
-      '@electric-sql/pglite': 0.5.11
+      '@electric-sql/pglite': 0.5.13
       '@types/pg': 8.23.1
       pg: 8.23.1
 
